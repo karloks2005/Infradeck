@@ -219,7 +219,7 @@ function LoginPage() {
             <span className="mb-2 block text-sm text-[#bcbcbc]">Email</span>
             <input
               type="email"
-              defaultValue="admin@homelab.local"
+              defaultValue="admin@example.com"
               className="w-full rounded-2xl border border-neutral-700 bg-neutral-900/70 px-4 py-3 text-white outline-none ring-0 transition focus:border-emerald-400"
             />
           </label>

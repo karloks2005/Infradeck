@@ -1,14 +1,25 @@
 import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 const AUTH_KEY = 'homie-auth-user'
-const SESSION_KEY = 'homie-session-id'
 const USERS_KEY = 'homie-auth-users'
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+
+function createChatThread() {
+  return {
+    id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `chat-${Date.now()}`,
+    title: 'New chat',
+    preview: 'Start a task with Homie',
+    time: 'now',
+    unread: 0,
+    messages: [],
+  }
+}
 
 async function apiRequest(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...(options.headers || {}),
@@ -21,6 +32,18 @@ async function apiRequest(path, options = {}) {
   }
 
   return response.json()
+}
+
+function parseAgentMessage(text) {
+  const commandMatch = text.match(/\[COMMAND\]:\s*(.+)/)
+  const riskMatch = text.match(/\[RISK\]:\s*(VERY LOW|LOW|MEDIUM|HIGH|VERY HIGH)/)
+  const explanation = text.split('[RUN]')[0].trim() || text
+
+  return {
+    text: explanation,
+    command: commandMatch ? commandMatch[1].trim() : undefined,
+    risk: riskMatch ? riskMatch[1].toLowerCase().replace(' ', '-') : 'low',
+  }
 }
 
 const navigation = [
@@ -107,10 +130,9 @@ const stats = [
 ]
 
 const logEntries = [
-  { id: 'nginx-502', type: 'ERROR', message: 'Nginx 502 after stale upstream config', time: '08:42:02', actor: 'homie', conversationId: 1 },
-  { id: 'ssl-expiry', type: 'WARN', message: 'Certificate renewal threshold near expiration', time: '07:51:16', actor: 'scheduler', conversationId: 2 },
-  { id: 'backup-fail', type: 'ERROR', message: 'Backup job failed on /srv/data', time: '06:20:44', actor: 'homie', conversationId: 3 },
-  { id: 'nginx-success', type: 'SUCCESS', message: 'Nginx reload completed without error', time: '05:48:12', actor: 'homie', conversationId: 1 },
+  { id: 'nginx-502', type: 'COMPLETED', taskTitle: 'Resolve nginx 502 after upstream drift', message: 'Recovered the nginx upstream and confirmed the service was healthy.', time: '08:42:02', actor: 'homie', steps: ['Inspected nginx logs and the active upstream configuration.', 'Validated the target socket and tested the nginx configuration.', 'Reloaded nginx and confirmed the service was listening.'] },
+  { id: 'ssl-renewal', type: 'COMPLETED', taskTitle: 'Validate staging certificate renewal', message: 'Validated the renewal path without changing the live certificate.', time: '07:51:16', actor: 'homie', steps: ['Checked the certificate expiry and renewal configuration.', 'Ran certbot in dry-run mode.', 'Confirmed the deployment hook would reload nginx safely.'] },
+  { id: 'backup-check', type: 'ATTENTION', taskTitle: 'Investigate failed RAID backup', message: 'Checked the backup volume and identified the next recovery checks.', time: '06:20:44', actor: 'homie', steps: ['Checked available space on the backup mount.', 'Inspected block devices and RAID status.', 'Recorded the failed volume check for follow-up.'] },
 ]
 
 const adminSettings = {
@@ -140,7 +162,7 @@ function getStoredUsers() {
   try {
     const raw = window.localStorage.getItem(USERS_KEY)
     if (!raw) {
-      const demoUser = [{ id: 'demo-user', name: 'Demo User', email: 'admin@homelab.local', password: 'password' }]
+      const demoUser = [{ id: 'demo-user', name: 'Demo User', email: 'admin@example.com', password: 'admin123' }]
       window.localStorage.setItem(USERS_KEY, JSON.stringify(demoUser))
       return demoUser
     }
@@ -195,10 +217,10 @@ function getRiskStyles(risk, role) {
   return map[risk] || map.neutral
 }
 
-function AppShell({ children, user, onLogout }) {
+function AppShell({ children, user, onLogout, fitViewport = false }) {
   return (
-    <div className="min-h-screen bg-[#0d1013] text-[#e6e7ea]">
-      <div className="mx-auto flex max-w-[1700px] gap-6 px-4 py-5 lg:px-6">
+    <div className={`${fitViewport ? 'h-screen overflow-hidden' : 'min-h-screen'} bg-[#0d1013] text-[#e6e7ea]`}>
+      <div className={`${fitViewport ? 'h-full min-h-0' : ''} mx-auto flex max-w-[1700px] gap-6 px-4 py-5 lg:px-6`}>
         <aside className="glass-panel hidden w-72 shrink-0 rounded-3xl p-4 lg:block">
           <div className="mb-6 flex items-center gap-3 px-2">
             <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-linear-to-br from-white to-[#cfcfcf] text-sm font-bold text-slate-950">H</div>
@@ -254,7 +276,7 @@ function AppShell({ children, user, onLogout }) {
           </div>
         </aside>
 
-        <main className="flex-1">{children}</main>
+        <main className={`${fitViewport ? 'min-h-0' : ''} flex-1`}>{children}</main>
       </div>
     </div>
   )
@@ -292,8 +314,8 @@ function AuthCard({ title, subtitle, children, footerText, footerLink, footerLin
 
 function LoginPage({ onLogin }) {
   const navigate = useNavigate()
-  const [email, setEmail] = useState('admin@homelab.local')
-  const [password, setPassword] = useState('password')
+  const [email, setEmail] = useState('admin@example.com')
+  const [password, setPassword] = useState('admin123')
   const [error, setError] = useState('')
 
   const handleSubmit = async (event) => {
@@ -311,7 +333,6 @@ function LoginPage({ onLogin }) {
         name: data.user.name,
         email: data.user.email,
         role: data.user.role,
-        sessionId: data.session_id,
       })
       navigate('/')
     } catch (requestError) {
@@ -402,7 +423,6 @@ function RegisterPage({ onRegister }) {
         name: data.user.name,
         email: data.user.email,
         role: data.user.role,
-        sessionId: data.session_id,
       })
       navigate('/')
     } catch (requestError) {
@@ -466,22 +486,114 @@ function RegisterPage({ onRegister }) {
 }
 
 function LandingPage({ chatThreads, activeThreadId, onSelectChat, user, onLogout }) {
-  const activeThread = chatThreads.find((thread) => thread.id === activeThreadId) || chatThreads[0]
+  const [threads, setThreads] = useState(() => (chatThreads.length ? chatThreads : [createChatThread()]))
+  const [messageInput, setMessageInput] = useState('')
+  const [isSending, setIsSending] = useState(false)
+  const [sendError, setSendError] = useState('')
+  const messageScrollerRef = useRef(null)
+  const scrollAnimationRef = useRef(null)
+  const activeThread = threads.find((thread) => thread.id === activeThreadId) || threads[0]
+
+  useEffect(() => {
+    const element = messageScrollerRef.current
+    if (!element) return undefined
+
+    if (scrollAnimationRef.current) {
+      cancelAnimationFrame(scrollAnimationRef.current)
+    }
+
+    const startTop = element.scrollTop
+    const targetTop = element.scrollHeight - element.clientHeight
+    const distance = targetTop - startTop
+    if (distance <= 1) return undefined
+
+    const duration = Math.min(520, Math.max(260, distance * 0.7))
+    const startTime = performance.now()
+    const easeInOutCubic = (progress) => (
+      progress < 0.5
+        ? 4 * progress * progress * progress
+        : 1 - Math.pow(-2 * progress + 2, 3) / 2
+    )
+
+    const animate = (currentTime) => {
+      const progress = Math.min((currentTime - startTime) / duration, 1)
+      element.scrollTop = startTop + distance * easeInOutCubic(progress)
+      if (progress < 1) {
+        scrollAnimationRef.current = requestAnimationFrame(animate)
+      } else {
+        scrollAnimationRef.current = null
+      }
+    }
+
+    scrollAnimationRef.current = requestAnimationFrame(animate)
+    return () => {
+      if (scrollAnimationRef.current) cancelAnimationFrame(scrollAnimationRef.current)
+    }
+  }, [activeThread?.id, activeThread?.messages.length])
+
+  const handleSend = async (event) => {
+    event.preventDefault()
+    const message = messageInput.trim()
+    if (!message || isSending || !activeThread) return
+
+    setMessageInput('')
+    setSendError('')
+    setIsSending(true)
+    setThreads((currentThreads) => currentThreads.map((thread) => (
+      thread.id === activeThread.id
+        ? {
+            ...thread,
+            title: thread.title === 'New chat' ? message.slice(0, 42) : thread.title,
+            preview: message,
+            messages: [...thread.messages, { role: 'user', text: message, risk: 'neutral' }],
+          }
+        : thread
+    )))
+
+    try {
+      const data = await apiRequest('/agent/chat', {
+        method: 'POST',
+        body: JSON.stringify({ conversation_id: activeThread.id, message }),
+      })
+      const agentMessage = parseAgentMessage(data.message)
+      setThreads((currentThreads) => currentThreads.map((thread) => (
+        thread.id === activeThread.id
+          ? { ...thread, messages: [...thread.messages, { role: 'agent', ...agentMessage }] }
+          : thread
+      )))
+    } catch (requestError) {
+      setSendError(requestError.message || 'Agent is unavailable.')
+    } finally {
+      setIsSending(false)
+    }
+  }
 
   return (
-    <AppShell user={user} onLogout={onLogout}>
-      <div className="flex min-h-[calc(100vh-2rem)] flex-col gap-5 lg:flex-row">
-        <aside className="glass-panel rounded-[28px] p-4 lg:w-[330px]">
+    <AppShell user={user} onLogout={onLogout} fitViewport>
+      <div className="flex h-full min-h-0 flex-col gap-5 lg:flex-row">
+        <aside className="glass-panel flex h-[250px] min-h-0 shrink-0 flex-col rounded-[28px] p-4 lg:h-auto lg:w-[330px]">
           <div className="mb-4 flex items-center justify-between px-2">
             <div>
               <div className="text-xs uppercase tracking-[0.2em] text-[#9aa0a6]">Chats</div>
               <h2 className="mt-1 text-xl font-semibold text-white">Sessions</h2>
             </div>
-            <button className="rounded-xl border border-neutral-700 bg-neutral-800/80 px-2.5 py-1.5 text-sm text-[#cfcfcf]">+ New</button>
+            <button
+              type="button"
+              onClick={() => {
+                const newThread = createChatThread()
+                setThreads((currentThreads) => [newThread, ...currentThreads])
+                onSelectChat(newThread.id)
+                setMessageInput('')
+                setSendError('')
+              }}
+              className="rounded-xl border border-neutral-700 bg-neutral-800/80 px-2.5 py-1.5 text-sm text-[#cfcfcf]"
+            >
+              + New
+            </button>
           </div>
 
-          <div className="custom-scroll max-h-[calc(100vh-11rem)] space-y-2 overflow-y-auto pr-1">
-            {chatThreads.map((chat) => (
+          <div className="custom-scroll min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+            {threads.map((chat) => (
               <button
                 key={chat.id}
                 onClick={() => onSelectChat(chat.id)}
@@ -508,11 +620,11 @@ function LandingPage({ chatThreads, activeThreadId, onSelectChat, user, onLogout
           </div>
         </aside>
 
-        <section className="glass-panel flex min-h-[760px] flex-1 flex-col rounded-[28px] p-4 md:p-5">
+        <section className="glass-panel flex min-h-0 flex-1 flex-col rounded-[28px] p-4 md:p-5">
           <div className="flex flex-col gap-4 border-b border-neutral-800 pb-4 md:flex-row md:items-center md:justify-between">
             <div>
               <div className="text-xs uppercase tracking-[0.22em] text-[#9aa0a6]">Active chat</div>
-              <h1 className="mt-1 text-2xl font-semibold text-white md:text-3xl">{activeThread.title}</h1>
+              <h1 className="mt-1 text-2xl font-semibold text-white md:text-3xl">{activeThread?.title || 'New chat'}</h1>
             </div>
             <div className="flex items-center gap-2">
               <div className="inline-flex items-center rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-300">
@@ -523,8 +635,8 @@ function LandingPage({ chatThreads, activeThreadId, onSelectChat, user, onLogout
             </div>
           </div>
 
-          <div className="custom-scroll flex-1 space-y-4 overflow-y-auto py-4 pr-1">
-            {activeThread.messages.map((message, index) => {
+          <div ref={messageScrollerRef} className="custom-scroll min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-1">
+            {activeThread?.messages.map((message, index) => {
               const riskStyles = getRiskStyles(message.risk, message.role)
 
               return (
@@ -560,17 +672,20 @@ function LandingPage({ chatThreads, activeThreadId, onSelectChat, user, onLogout
             })}
           </div>
 
-          <div className="mt-4 rounded-[24px] border border-[#171b1f] bg-[#0d1013]/80 p-3">
+          <form onSubmit={handleSend} className="mt-4 rounded-[24px] border border-[#171b1f] bg-[#0d1013]/80 p-3">
             <div className="flex flex-col gap-3 md:flex-row md:items-center">
-              <button className="rounded-xl border border-[#171b1f] bg-[#111417] px-3 py-2 text-sm text-[#cfcfcf]">Attach</button>
+              <button type="button" className="rounded-xl border border-[#171b1f] bg-[#111417] px-3 py-2 text-sm text-[#cfcfcf]">Attach</button>
               <input
                 type="text"
-                defaultValue="Check the failed upstream and confirm if the service is healthy."
+                value={messageInput}
+                onChange={(event) => setMessageInput(event.target.value)}
+                placeholder="Ask Homie to inspect a service or solve a task..."
                 className="flex-1 rounded-xl border border-[#171b1f] bg-[#070809] px-4 py-3 text-sm text-[#cfcfcf] outline-none focus:border-emerald-400"
               />
-              <button className="rounded-xl bg-linear-to-r from-white to-[#cfcfcf] px-4 py-3 text-sm font-medium text-[#0b0b0b]">Send</button>
+              <button type="submit" disabled={isSending || !messageInput.trim()} className="rounded-xl bg-linear-to-r from-white to-[#cfcfcf] px-4 py-3 text-sm font-medium text-[#0b0b0b] disabled:cursor-not-allowed disabled:opacity-50">{isSending ? 'Working...' : 'Send'}</button>
             </div>
-          </div>
+            {sendError && <div className="mt-2 text-sm text-red-300">{sendError}</div>}
+          </form>
         </section>
       </div>
     </AppShell>
@@ -581,13 +696,7 @@ function DashboardPage({ user, onLogout }) {
   const [summary, setSummary] = useState(null)
 
   useEffect(() => {
-    const sessionId = window.localStorage.getItem(SESSION_KEY)
-    if (!sessionId) return
-
-    apiRequest('/dashboard/summary', {
-      method: 'GET',
-      headers: { 'x-session-id': sessionId },
-    })
+    apiRequest('/dashboard/summary', { method: 'GET' })
       .then((data) => setSummary(data))
       .catch(() => setSummary(null))
   }, [user])
@@ -602,9 +711,9 @@ function DashboardPage({ user, onLogout }) {
     : stats
 
   return (
-    <AppShell user={user} onLogout={onLogout}>
-      <div className="space-y-5">
-        <div className="glass-panel rounded-[28px] p-5 md:p-6">
+    <AppShell user={user} onLogout={onLogout} fitViewport>
+      <div className="custom-scroll flex h-full min-h-0 flex-col gap-5 overflow-y-auto pr-1">
+        <div className="glass-panel shrink-0 rounded-[28px] p-5 md:p-6">
           <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
             <div>
               <div className="text-xs uppercase tracking-[0.22em] text-[#9aa0a6]">Overview</div>
@@ -614,7 +723,7 @@ function DashboardPage({ user, onLogout }) {
           </div>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid shrink-0 gap-4 md:grid-cols-2 xl:grid-cols-4">
           {dashboardStats.map((stat) => (
             <div key={stat.label} className="glass-panel rounded-[24px] p-5">
               <div className={`inline-flex rounded-2xl bg-linear-to-r p-2 ring-1 ${getAccentClasses(stat.accent)}`}>
@@ -629,8 +738,8 @@ function DashboardPage({ user, onLogout }) {
           ))}
         </div>
 
-        <div className="grid gap-5 xl:grid-cols-[1.4fr_0.8fr]">
-          <div className="glass-panel rounded-[28px] p-5">
+        <div className="grid min-h-0 flex-1 grid-rows-2 gap-5 xl:grid-cols-[1.4fr_0.8fr] xl:grid-rows-1">
+          <div className="glass-panel flex h-full min-h-0 flex-col rounded-[28px] p-5">
             <div className="mb-4 flex items-center justify-between">
               <div>
                 <div className="text-xs uppercase tracking-[0.22em] text-[#9aa0a6]">Execution trend</div>
@@ -638,7 +747,7 @@ function DashboardPage({ user, onLogout }) {
               </div>
               <div className="text-sm text-emerald-300">+28.4%</div>
             </div>
-            <div className="flex h-52 items-end gap-3">
+            <div className="flex min-h-0 flex-1 items-end gap-3">
               {[30, 48, 62, 55, 76, 84, 96].map((bar, index) => (
                 <div key={index} className="flex flex-1 flex-col items-center gap-2">
                   <div className="w-full rounded-t-2xl bg-linear-to-t from-[#f5f5f6] to-[#cfcfcf]" style={{ height: `${bar}%` }} />
@@ -648,7 +757,7 @@ function DashboardPage({ user, onLogout }) {
             </div>
           </div>
 
-          <div className="glass-panel rounded-[28px] p-5">
+          <div className="glass-panel h-full min-h-0 rounded-[28px] p-5">
             <div className="mb-4 text-xs uppercase tracking-[0.22em] text-[#9aa0a6]">Tasks</div>
             <div className="space-y-3">
               {[
@@ -675,25 +784,20 @@ function DashboardPage({ user, onLogout }) {
 }
 
 function LogsPage({ onOpenThread, user, onLogout }) {
-  const navigate = useNavigate()
   const [entries, setEntries] = useState(logEntries)
+  const [expandedId, setExpandedId] = useState(null)
 
   useEffect(() => {
-    const sessionId = window.localStorage.getItem(SESSION_KEY)
-    if (!sessionId) return
-
-    apiRequest('/logs', {
-      method: 'GET',
-      headers: { 'x-session-id': sessionId },
-    })
+    apiRequest('/logs', { method: 'GET' })
       .then((data) => {
         const mapped = (data.logs || []).map((entry) => ({
           id: entry.id,
-          type: entry.level,
+          type: entry.level === 'ERROR' || entry.level === 'WARN' ? 'ATTENTION' : 'COMPLETED',
+          taskTitle: entry.task_title || entry.message,
           message: entry.message,
           time: new Date(entry.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
           actor: entry.source || 'system',
-          conversationId: 1,
+          steps: entry.steps || [],
         }))
         setEntries(mapped)
       })
@@ -701,9 +805,9 @@ function LogsPage({ onOpenThread, user, onLogout }) {
   }, [user])
 
   return (
-    <AppShell user={user} onLogout={onLogout}>
-      <div className="glass-panel rounded-[28px] p-5 md:p-6">
-        <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+    <AppShell user={user} onLogout={onLogout} fitViewport>
+      <div className="glass-panel flex h-full min-h-0 flex-col rounded-[28px] p-5 md:p-6">
+        <div className="mb-5 flex shrink-0 flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div>
             <div className="text-xs uppercase tracking-[0.22em] text-[#9aa0a6]">Event stream</div>
             <h1 className="mt-1 text-3xl font-semibold text-white">Logs</h1>
@@ -715,28 +819,43 @@ function LogsPage({ onOpenThread, user, onLogout }) {
           </div>
         </div>
 
-        <div className="space-y-3">
+        <div className="custom-scroll min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
           {entries.map((entry) => (
-            <button
+            <article
               key={`${entry.time}-${entry.message}`}
-              onClick={() => {
-                onOpenThread(entry.conversationId)
-                navigate('/')
-              }}
-              className="flex w-full items-start gap-3 rounded-2xl border border-[#111417] bg-[#0d1013]/70 p-3 text-left transition hover:border-[#1f2326] hover:bg-[#0d1013]"
+              className="rounded-2xl border border-[#111417] bg-[#0d1013]/70 transition hover:border-[#1f2326] hover:bg-[#0d1013]"
             >
-              <div className={`mt-1 h-2.5 w-2.5 rounded-full ${entry.type === 'ERROR' ? 'bg-red-400' : entry.type === 'WARN' ? 'bg-amber-400' : entry.type === 'SUCCESS' || entry.type === 'INFO' ? 'bg-emerald-400' : 'bg-[#cfcfcf]'}`} />
-              <div className="flex-1">
-                <div className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs uppercase tracking-[0.2em] text-[#9aa0a6]">{entry.type}</span>
-                    <span className="text-sm text-white">{entry.message}</span>
+              <button
+                type="button"
+                aria-expanded={expandedId === entry.id}
+                onClick={() => setExpandedId((currentId) => (currentId === entry.id ? null : entry.id))}
+                className="flex w-full items-start gap-3 p-4 text-left"
+              >
+                <div className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${entry.type === 'ATTENTION' ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div className="min-w-0">
+                      <div className="text-base font-medium text-white">{entry.taskTitle}</div>
+                      <div className="mt-1 line-clamp-1 text-sm text-[#9aa0a6]">{entry.message}</div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-3">
+                      <span className={`text-xs uppercase tracking-[0.18em] ${entry.type === 'ATTENTION' ? 'text-amber-300' : 'text-emerald-300'}`}>{entry.type}</span>
+                      <span className="text-xs text-[#7f8589]">{entry.time}</span>
+                      <span className="text-xs text-[#7f8589]">{expandedId === entry.id ? 'Hide' : 'Details'}</span>
+                    </div>
                   </div>
-                  <span className="text-xs text-[#7f8589]">{entry.time}</span>
+                  <div className="mt-2 text-xs uppercase tracking-[0.2em] text-[#7f8589]">Completed by {entry.actor}</div>
                 </div>
-                <div className="mt-2 text-xs uppercase tracking-[0.2em] text-[#7f8589]">Actor: {entry.actor}</div>
-              </div>
-            </button>
+              </button>
+              {expandedId === entry.id && (
+                <div className="border-t border-[#111417] px-4 pb-4 pt-3 pl-11">
+                  <div className="mb-2 text-xs uppercase tracking-[0.2em] text-[#9aa0a6]">What Homie did</div>
+                  <ul className="space-y-2 text-sm leading-6 text-[#cfcfcf]">
+                    {entry.steps.length > 0 ? entry.steps.map((step) => <li key={step} className="flex gap-2"><span className="text-emerald-300">•</span><span>{step}</span></li>) : <li className="text-[#9aa0a6]">No step details were recorded for this task.</li>}
+                  </ul>
+                </div>
+              )}
+            </article>
           ))}
         </div>
       </div>
@@ -812,35 +931,25 @@ function RequireAuth({ user, children }) {
 }
 
 function App() {
-  const [activeThreadId, setActiveThreadId] = useState(1)
+  const [activeThreadId, setActiveThreadId] = useState(null)
   const [user, setUser] = useState(() => getStoredUser())
   const [users, setUsers] = useState(() => getStoredUsers())
 
   useEffect(() => {
     if (user) {
       window.localStorage.setItem(AUTH_KEY, JSON.stringify(user))
-      if (user.sessionId) {
-        window.localStorage.setItem(SESSION_KEY, user.sessionId)
-      }
     } else {
       window.localStorage.removeItem(AUTH_KEY)
-      window.localStorage.removeItem(SESSION_KEY)
     }
   }, [user])
 
   useEffect(() => {
-    const storedSessionId = window.localStorage.getItem(SESSION_KEY)
-    if (!storedSessionId || !user) return
+    if (!user) return
 
     apiRequest('/auth/me', {
       method: 'GET',
-      headers: { 'x-session-id': storedSessionId },
     }).then((data) => {
-      setUser((currentUser) => ({
-        ...(currentUser || {}),
-        ...data.user,
-        sessionId: storedSessionId,
-      }))
+      setUser((currentUser) => ({ ...(currentUser || {}), ...data.user }))
     }).catch(() => {
       setUser(null)
     })
@@ -859,19 +968,12 @@ function App() {
   }
 
   const handleLogout = async () => {
-    const sessionId = window.localStorage.getItem(SESSION_KEY)
-    if (sessionId) {
-      try {
-        await apiRequest('/auth/logout', {
-          method: 'POST',
-          headers: { 'x-session-id': sessionId },
-        })
-      } catch {
-        // Ignore backend logout failures and clear local state.
-      }
+    try {
+      await apiRequest('/auth/logout', { method: 'POST' })
+    } catch {
+      // Clear local state even if the session has already expired.
     }
     setUser(null)
-    window.localStorage.removeItem(SESSION_KEY)
   }
 
   return (
@@ -885,7 +987,7 @@ function App() {
           element={
             <RequireAuth user={user}>
               <LandingPage
-                chatThreads={conversationThreads}
+                chatThreads={[]}
                 activeThreadId={activeThreadId}
                 onSelectChat={setActiveThreadId}
                 user={user}

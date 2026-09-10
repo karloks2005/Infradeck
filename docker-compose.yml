@@ -33,6 +33,44 @@ services:
       timeout: 5s
       retries: 5
 
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    container_name: homelab-backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://homelab:homelab_dev@postgres:5432/homelab
+      REDIS_URL: redis://redis:6379/0
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      AGENT_MODEL: ${AGENT_MODEL:-models/gemini-3.5-flash}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost:8000
+    container_name: homelab-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   redis_data:

@@ -6,9 +6,6 @@ import bcrypt
 from .config import SESSION_TTL_SECONDS
 from .models import AuditLog, User
 
-SESSION_FALLBACK = {}
-
-
 def _serialize_user(user: User):
     return {
         "id": user.id,
@@ -26,39 +23,36 @@ def _session_key(session_id: str) -> str:
 def _store_session(redis_client, session_id: str, payload: dict):
     key = _session_key(session_id)
     value = json.dumps(payload)
-    try:
-        redis_client.set(key, value, ex=SESSION_TTL_SECONDS)
-    except Exception:
-        SESSION_FALLBACK[key] = value
+    redis_client.set(key, value, ex=SESSION_TTL_SECONDS)
 
 
 def _read_session(redis_client, session_id: str):
     key = _session_key(session_id)
-    try:
-        value = redis_client.get(key)
-        if value is not None:
-            return value
-    except Exception:
-        pass
-
-    return SESSION_FALLBACK.get(key)
+    return redis_client.get(key)
 
 
 def _delete_session(redis_client, session_id: str):
     key = _session_key(session_id)
-    try:
-        redis_client.delete(key)
-    except Exception:
-        pass
-    SESSION_FALLBACK.pop(key, None)
+    redis_client.delete(key)
 
 
-def record_audit_log(db, *, user_id: int | None, level: str, message: str, source: str = "system"):
+def record_audit_log(
+    db,
+    *,
+    user_id: int | None,
+    level: str,
+    message: str,
+    source: str = "system",
+    task_title: str | None = None,
+    steps: list[str] | None = None,
+):
     log_entry = AuditLog(
         user_id=user_id,
         level=level.upper(),
         message=message,
         source=source,
+        task_title=task_title,
+        steps=json.dumps(steps or []),
     )
     db.add(log_entry)
     db.commit()
@@ -69,23 +63,58 @@ def record_audit_log(db, *, user_id: int | None, level: str, message: str, sourc
         "level": log_entry.level,
         "message": log_entry.message,
         "source": log_entry.source,
+        "task_title": log_entry.task_title,
+        "steps": steps or [],
         "created_at": log_entry.created_at.isoformat(),
     }
 
 
 def get_recent_logs(db, *, limit: int = 20):
-    logs = db.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit).all()
-    return [
-        {
-            "id": log.id,
-            "user_id": log.user_id,
-            "level": log.level,
-            "message": log.message,
-            "source": log.source,
-            "created_at": log.created_at.isoformat(),
-        }
-        for log in logs
-    ]
+    logs = (
+        db.query(AuditLog)
+        .filter(AuditLog.source != "auth")
+        .order_by(AuditLog.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    result = []
+    for log in logs:
+        try:
+            steps = json.loads(log.steps or "[]")
+        except (TypeError, ValueError):
+            steps = []
+        result.append(
+            {
+                "id": log.id,
+                "user_id": log.user_id,
+                "level": log.level,
+                "message": log.message,
+                "source": log.source,
+                "task_title": log.task_title or log.message,
+                "steps": steps if isinstance(steps, list) else [],
+                "created_at": log.created_at.isoformat(),
+            }
+        )
+    return result
+
+
+def ensure_default_user(db):
+    email = "admin@example.com"
+    user = db.query(User).filter(User.email == email).first()
+    if user:
+        return user
+
+    user = User(
+        name="Admin User",
+        email=email,
+        password_hash=bcrypt.hashpw(b"admin123", bcrypt.gensalt()).decode("utf-8"),
+        role="admin",
+        is_active=True,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
 
 
 def register_user(db, redis_client, *, name: str, email: str, password: str):
@@ -131,7 +160,7 @@ def authenticate_user(db, redis_client, *, email: str, password: str):
     normalized_email = email.strip().lower()
     user = db.query(User).filter(User.email == normalized_email).first()
 
-    if not user:
+    if not user or not user.is_active:
         raise ValueError("Invalid email or password.")
 
     if not bcrypt.checkpw(password.encode("utf-8"), user.password_hash.encode("utf-8")):

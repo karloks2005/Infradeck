@@ -3,10 +3,11 @@ import os
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
+import bcrypt
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from src.backend.auth import authenticate_user, record_audit_log, register_user
+from src.backend.auth import authenticate_user, ensure_default_user, record_audit_log, register_user
 from src.backend.models import AuditLog, Base, User
 
 
@@ -24,6 +25,20 @@ class FakeRedis:
     def delete(self, key):
         self.store.pop(key, None)
         return True
+
+
+def test_ensure_default_user_is_idempotent():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
+    first_user = ensure_default_user(session)
+    second_user = ensure_default_user(session)
+
+    assert first_user.id == second_user.id
+    assert second_user.email == "admin@example.com"
+    assert bcrypt.checkpw(b"admin123", second_user.password_hash.encode("utf-8"))
 
 
 def test_register_user_creates_record_and_hashes_password():

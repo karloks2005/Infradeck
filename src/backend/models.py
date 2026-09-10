@@ -39,6 +39,8 @@ class AuditLog(Base):
     level: Mapped[str] = mapped_column(String(50), default="INFO", nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     source: Mapped[str] = mapped_column(String(100), default="system", nullable=False)
+    task_title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    steps: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

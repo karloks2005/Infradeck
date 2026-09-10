@@ -12,3 +12,10 @@ DATABASE_URL = os.getenv(
 )
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_SECONDS", "86400"))
+AGENT_MODEL = os.getenv("AGENT_MODEL", "models/gemini-3.5-flash")
+SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "homie_session")
+SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true"
+LOGIN_RATE_LIMIT = int(os.getenv("LOGIN_RATE_LIMIT", "5"))
+LOGIN_RATE_WINDOW_SECONDS = int(os.getenv("LOGIN_RATE_WINDOW_SECONDS", "60"))
+REGISTER_RATE_LIMIT = int(os.getenv("REGISTER_RATE_LIMIT", "3"))
+REGISTER_RATE_WINDOW_SECONDS = int(os.getenv("REGISTER_RATE_WINDOW_SECONDS", "3600"))

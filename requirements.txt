@@ -1,0 +1,9 @@
+bcrypt
+email-validator
+fastapi
+google-genai
+psycopg[binary]
+python-dotenv
+redis
+sqlalchemy
+uvicorn[standard]

@@ -44,7 +44,48 @@ cd /media/karlo/data/Documents/programming/homelab-agent
 docker compose up -d
 ```
 
-Use the values already defined in the project `.env` file for the real stack:
+### Run the complete stack with Compose
+
+Build and start the database, Redis, backend API, and frontend together:
+
+```bash
+docker compose up -d --build
+```
+
+Open the frontend at http://localhost:5173. The backend API is available at
+http://localhost:8000 and its health endpoint is http://localhost:8000/health.
+
+For local testing, every backend startup ensures this account exists (including
+after `docker compose up -d --build`):
+
+```text
+Email: admin@example.com
+Password: admin123
+```
+
+Authentication rate limits are enforced through Redis: login allows 5 attempts
+per minute per IP and email, while registration allows 3 attempts per hour per
+IP. Override these defaults with `LOGIN_RATE_LIMIT`,
+`LOGIN_RATE_WINDOW_SECONDS`, `REGISTER_RATE_LIMIT`, and
+`REGISTER_RATE_WINDOW_SECONDS`.
+
+The initialization SQL only runs when the Postgres volume is created. If the
+database was already initialized with the old schema, recreate the local data
+volumes before starting the stack:
+
+```bash
+sudo docker compose down -v
+sudo docker compose up -d --build
+```
+
+To inspect the application logs or stop the stack:
+
+```bash
+docker compose logs -f backend frontend
+docker compose down
+```
+
+When running the backend outside Compose, use the values already defined in the project `.env` file for the real stack:
 
 ```env
 DATABASE_URL=postgresql+psycopg://homelab:homelab_dev@localhost:5432/homelab
