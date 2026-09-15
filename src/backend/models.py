@@ -41,6 +41,15 @@ class AuditLog(Base):
     source: Mapped[str] = mapped_column(String(100), default="system", nullable=False)
     task_title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     steps: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    conversation_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    event_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    command: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    command_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    command_risk: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    approval_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    exit_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    stdout: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    stderr: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

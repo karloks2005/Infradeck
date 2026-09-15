@@ -37,12 +37,15 @@ async function apiRequest(path, options = {}) {
 function parseAgentMessage(text) {
   const commandMatch = text.match(/\[COMMAND\]:\s*(.+)/)
   const riskMatch = text.match(/\[RISK\]:\s*(VERY LOW|LOW|MEDIUM|HIGH|VERY HIGH)/)
+  const reasonMatch = text.match(/\[REASON\]:\s*(.+)/)
   const explanation = text.split('[RUN]')[0].trim() || text
 
   return {
     text: explanation,
     command: commandMatch ? commandMatch[1].trim() : undefined,
     risk: riskMatch ? riskMatch[1].toLowerCase().replace(' ', '-') : 'low',
+    reason: reasonMatch ? reasonMatch[1].trim() : undefined,
+    approvalRequired: text.includes('[APPROVAL REQUIRED]'),
   }
 }
 
@@ -490,9 +493,25 @@ function LandingPage({ chatThreads, activeThreadId, onSelectChat, user, onLogout
   const [messageInput, setMessageInput] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [sendError, setSendError] = useState('')
+  const [commandLogs, setCommandLogs] = useState([])
+  const [isApproving, setIsApproving] = useState(false)
   const messageScrollerRef = useRef(null)
   const scrollAnimationRef = useRef(null)
   const activeThread = threads.find((thread) => thread.id === activeThreadId) || threads[0]
+
+  const refreshCommandLogs = async () => {
+    if (!activeThread) return
+    try {
+      const data = await apiRequest(`/logs?conversation_id=${encodeURIComponent(activeThread.id)}`, { method: 'GET' })
+      setCommandLogs((data.logs || []).filter((entry) => entry.event_type))
+    } catch {
+      setCommandLogs([])
+    }
+  }
+
+  useEffect(() => {
+    refreshCommandLogs()
+  }, [activeThread?.id])
 
   useEffect(() => {
     const element = messageScrollerRef.current
@@ -561,12 +580,37 @@ function LandingPage({ chatThreads, activeThreadId, onSelectChat, user, onLogout
           ? { ...thread, messages: [...thread.messages, { role: 'agent', ...agentMessage }] }
           : thread
       )))
+      await refreshCommandLogs()
     } catch (requestError) {
       setSendError(requestError.message || 'Agent is unavailable.')
     } finally {
       setIsSending(false)
     }
   }
+
+  const handleApprove = async () => {
+    if (!activeThread || isApproving || isSending) return
+    setIsApproving(true)
+    setSendError('')
+    try {
+      const data = await apiRequest('/agent/chat', {
+        method: 'POST',
+        body: JSON.stringify({ conversation_id: activeThread.id, message: '[APPROVE]' }),
+      })
+      const agentMessage = parseAgentMessage(data.message)
+      setThreads((currentThreads) => currentThreads.map((thread) => (
+        thread.id === activeThread.id
+          ? { ...thread, messages: [...thread.messages, { role: 'user', text: 'Approved command execution.', risk: 'neutral' }, { role: 'agent', ...agentMessage }] }
+          : thread
+      )))
+      await refreshCommandLogs()
+    } catch (requestError) {
+      setSendError(requestError.message || 'Approval failed.')
+    } finally {
+      setIsApproving(false)
+    }
+  }
+
 
   return (
     <AppShell user={user} onLogout={onLogout} fitViewport>
@@ -662,14 +706,43 @@ function LandingPage({ chatThreads, activeThreadId, onSelectChat, user, onLogout
                     </div>
                     <div className="text-sm leading-7 md:text-[15px]">{message.text}</div>
                     {message.command && (
-                      <pre className="command-block mt-3 overflow-x-auto rounded-2xl px-3 py-3 text-[11px] leading-6 whitespace-pre-wrap text-emerald-100">
-                        {message.command}
-                      </pre>
+                      <div className="mt-3">
+                        <pre className="command-block overflow-x-auto rounded-2xl px-3 py-3 text-[11px] leading-6 whitespace-pre-wrap text-emerald-100">{message.command}</pre>
+                        {message.reason && <div className="mt-2 text-xs text-[#9aa0a6]">Reason: {message.reason}</div>}
+                        {message.approvalRequired && (
+                          <button
+                            type="button"
+                            onClick={handleApprove}
+                            disabled={isApproving || isSending}
+                            className="mt-3 rounded-xl border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-200 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {isApproving ? 'Approving...' : 'Approve and run'}
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
               )
             })}
+          </div>
+
+          <div className="mt-4 rounded-[24px] border border-[#171b1f] bg-[#0d1013]/80 p-3">
+            <div className="mb-2 text-xs uppercase tracking-[0.2em] text-[#9aa0a6]">Command log</div>
+            <div className="custom-scroll max-h-36 space-y-2 overflow-y-auto">
+              {commandLogs.length === 0 && <div className="text-xs text-[#7f8589]">No command events in this conversation.</div>}
+              {commandLogs.map((entry) => (
+                <div key={entry.id} className="rounded-xl border border-[#171b1f] bg-[#070809]/70 px-3 py-2 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[#cfcfcf]">{entry.event_type.replaceAll('_', ' ')}</span>
+                    <span className={entry.level === 'ERROR' || entry.level === 'WARN' ? 'text-red-300' : 'text-emerald-300'}>{entry.approval_status || 'recorded'}</span>
+                  </div>
+                  {entry.command && <code className="mt-1 block truncate text-emerald-100">{entry.command}</code>}
+                  {entry.command_reason && <div className="mt-1 text-[#7f8589]">{entry.command_reason}</div>}
+                  {entry.exit_code !== null && entry.exit_code !== undefined && <div className="mt-1 text-[#7f8589]">Exit code: {entry.exit_code}</div>}
+                </div>
+              ))}
+            </div>
           </div>
 
           <form onSubmit={handleSend} className="mt-4 rounded-[24px] border border-[#171b1f] bg-[#0d1013]/80 p-3">
@@ -792,12 +865,20 @@ function LogsPage({ onOpenThread, user, onLogout }) {
       .then((data) => {
         const mapped = (data.logs || []).map((entry) => ({
           id: entry.id,
-          type: entry.level === 'ERROR' || entry.level === 'WARN' ? 'ATTENTION' : 'COMPLETED',
+          type: entry.level === 'ERROR' || entry.level === 'WARN' ? 'ATTENTION' : entry.event_type ? 'COMMAND' : 'COMPLETED',
           taskTitle: entry.task_title || entry.message,
           message: entry.message,
           time: new Date(entry.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
           actor: entry.source || 'system',
           steps: entry.steps || [],
+          eventType: entry.event_type,
+          command: entry.command,
+          reason: entry.command_reason,
+          risk: entry.command_risk,
+          approvalStatus: entry.approval_status,
+          exitCode: entry.exit_code,
+          stdout: entry.stdout,
+          stderr: entry.stderr,
         }))
         setEntries(mapped)
       })
@@ -822,7 +903,7 @@ function LogsPage({ onOpenThread, user, onLogout }) {
         <div className="custom-scroll min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
           {entries.map((entry) => (
             <article
-              key={`${entry.time}-${entry.message}`}
+              key={entry.id}
               className="rounded-2xl border border-[#111417] bg-[#0d1013]/70 transition hover:border-[#1f2326] hover:bg-[#0d1013]"
             >
               <button
@@ -831,7 +912,7 @@ function LogsPage({ onOpenThread, user, onLogout }) {
                 onClick={() => setExpandedId((currentId) => (currentId === entry.id ? null : entry.id))}
                 className="flex w-full items-start gap-3 p-4 text-left"
               >
-                <div className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${entry.type === 'ATTENTION' ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+                <div className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${entry.type === 'ATTENTION' ? 'bg-amber-400' : entry.type === 'COMMAND' ? 'bg-cyan-300' : 'bg-emerald-400'}`} />
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                     <div className="min-w-0">
@@ -839,16 +920,29 @@ function LogsPage({ onOpenThread, user, onLogout }) {
                       <div className="mt-1 line-clamp-1 text-sm text-[#9aa0a6]">{entry.message}</div>
                     </div>
                     <div className="flex shrink-0 items-center gap-3">
-                      <span className={`text-xs uppercase tracking-[0.18em] ${entry.type === 'ATTENTION' ? 'text-amber-300' : 'text-emerald-300'}`}>{entry.type}</span>
+                      <span className={`text-xs uppercase tracking-[0.18em] ${entry.type === 'ATTENTION' ? 'text-amber-300' : entry.type === 'COMMAND' ? 'text-cyan-300' : 'text-emerald-300'}`}>{entry.type}</span>
                       <span className="text-xs text-[#7f8589]">{entry.time}</span>
                       <span className="text-xs text-[#7f8589]">{expandedId === entry.id ? 'Hide' : 'Details'}</span>
                     </div>
                   </div>
-                  <div className="mt-2 text-xs uppercase tracking-[0.2em] text-[#7f8589]">Completed by {entry.actor}</div>
+                  <div className="mt-2 text-xs uppercase tracking-[0.2em] text-[#7f8589]">Recorded by {entry.actor}</div>
                 </div>
               </button>
               {expandedId === entry.id && (
                 <div className="border-t border-[#111417] px-4 pb-4 pt-3 pl-11">
+                  {(entry.command || entry.reason || entry.approvalStatus || entry.eventType) && (
+                    <div className="mb-4 space-y-2 rounded-xl border border-cyan-300/15 bg-cyan-300/5 p-3 text-sm">
+                      <div className="text-xs uppercase tracking-[0.2em] text-cyan-200">Command event</div>
+                      {entry.eventType && <div className="text-[#cfcfcf]">Event: <span className="text-white">{entry.eventType.replaceAll('_', ' ')}</span></div>}
+                      {entry.approvalStatus && <div className="text-[#cfcfcf]">Approval: <span className="text-white">{entry.approvalStatus}</span></div>}
+                      {entry.risk && <div className="text-[#cfcfcf]">Risk: <span className="text-white">{entry.risk}</span></div>}
+                      {entry.reason && <div className="text-[#cfcfcf]">Reason: <span className="text-white">{entry.reason}</span></div>}
+                      {entry.command && <pre className="command-block overflow-x-auto rounded-xl px-3 py-2 text-xs leading-5 whitespace-pre-wrap text-emerald-100">{entry.command}</pre>}
+                      {entry.exitCode !== null && entry.exitCode !== undefined && <div className="text-[#cfcfcf]">Exit code: <span className={entry.exitCode === 0 ? 'text-emerald-300' : 'text-red-300'}>{entry.exitCode}</span></div>}
+                      {entry.stdout && <pre className="max-h-40 overflow-auto rounded-xl bg-[#070809] p-2 text-xs whitespace-pre-wrap text-[#cfcfcf]">STDOUT:\n{entry.stdout}</pre>}
+                      {entry.stderr && <pre className="max-h-40 overflow-auto rounded-xl bg-red-950/20 p-2 text-xs whitespace-pre-wrap text-red-200">STDERR:\n{entry.stderr}</pre>}
+                    </div>
+                  )}
                   <div className="mb-2 text-xs uppercase tracking-[0.2em] text-[#9aa0a6]">What Homie did</div>
                   <ul className="space-y-2 text-sm leading-6 text-[#cfcfcf]">
                     {entry.steps.length > 0 ? entry.steps.map((step) => <li key={step} className="flex gap-2"><span className="text-emerald-300">•</span><span>{step}</span></li>) : <li className="text-[#9aa0a6]">No step details were recorded for this task.</li>}

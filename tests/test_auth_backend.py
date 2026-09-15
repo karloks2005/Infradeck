@@ -111,6 +111,30 @@ def test_record_audit_log_persists_database_entries():
         source="dashboard",
     )
 
+    record_audit_log(
+        db=session,
+        user_id=user["user"]["id"],
+        level="INFO",
+        message="Command executed",
+        source="command",
+        conversation_id="conversation-1",
+        event_type="command_executed",
+        command="whoami",
+        command_reason="Identify the process user.",
+        command_risk="VERY LOW",
+        approval_status="not_required",
+        exit_code=0,
+        stdout="homie",
+        stderr="",
+    )
+
     logs = session.query(AuditLog).order_by(AuditLog.created_at.desc()).all()
-    assert len(logs) >= 2
-    assert logs[0].message == "Dashboard opened"
+    assert len(logs) >= 3
+    command_log = logs[0]
+    assert command_log.message == "Command executed"
+    assert command_log.conversation_id == "conversation-1"
+    assert command_log.command == "whoami"
+    assert command_log.command_reason == "Identify the process user."
+    assert command_log.approval_status == "not_required"
+    assert command_log.exit_code == 0
+    assert command_log.stdout == "homie"

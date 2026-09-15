@@ -45,8 +45,6 @@ while True:
         break
     
     firstRun = False
-
-    # Slanje poruke u unutar kreirane chat sesije
     response = chat.send_message(user_input)
     
     log_file.write(f"[USER]" + "-"*30 + f"\n {user_input} \n")

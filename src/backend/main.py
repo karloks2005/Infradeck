@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 import redis
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import text
@@ -62,6 +62,15 @@ def startup_event():
         if engine.dialect.name == "postgresql":
             connection.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS task_title VARCHAR(255)"))
             connection.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS steps TEXT"))
+            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS conversation_id VARCHAR(255)"))
+            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS event_type VARCHAR(50)"))
+            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS command TEXT"))
+            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS command_reason TEXT"))
+            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS command_risk VARCHAR(50)"))
+            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS approval_status VARCHAR(50)"))
+            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS exit_code INTEGER"))
+            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS stdout TEXT"))
+            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS stderr TEXT"))
     db = SessionLocal()
     try:
         ensure_default_user(db)
@@ -201,13 +210,14 @@ def dashboard_summary(
 @app.get("/logs")
 def list_logs(
     session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
+    conversation_id: str | None = Query(default=None),
     db=Depends(get_db),
 ):
     user = get_user_from_session(redis_client, session_id)
     if not user:
         raise HTTPException(status_code=401, detail="Session is invalid or expired.")
 
-    return {"logs": get_recent_logs(db, limit=20)}
+    return {"logs": get_recent_logs(db, limit=100, user_id=user["id"], conversation_id=conversation_id)}
 
 
 @app.post("/logs")
@@ -228,6 +238,15 @@ def create_log(
         source=str(payload.get("source", "dashboard")),
         task_title=str(payload.get("task_title") or payload.get("message", "New task")),
         steps=[str(step) for step in payload.get("steps", []) if str(step).strip()],
+        conversation_id=payload.get("conversation_id"),
+        event_type=payload.get("event_type"),
+        command=payload.get("command"),
+        command_reason=payload.get("command_reason"),
+        command_risk=payload.get("command_risk"),
+        approval_status=payload.get("approval_status"),
+        exit_code=payload.get("exit_code"),
+        stdout=payload.get("stdout"),
+        stderr=payload.get("stderr"),
     )
 
 
@@ -242,7 +261,29 @@ def agent_chat(payload: AgentChatRequest, session_id: Annotated[str | None, Cook
         raise HTTPException(status_code=400, detail="Message is required.")
 
     try:
-        response_text = send_agent_message(user["id"], payload.conversation_id, message)
+        response_text = send_agent_message(
+            user["id"],
+            payload.conversation_id,
+            message,
+            command_logger=lambda event: record_audit_log(
+                db,
+                user_id=user["id"],
+                source="command",
+                task_title=message[:255],
+                steps=event.get("steps", []),
+                conversation_id=payload.conversation_id,
+                event_type=event.get("event_type"),
+                message=event.get("message", "Command event"),
+                level=event.get("level", "INFO"),
+                command=event.get("command"),
+                command_reason=event.get("reason"),
+                command_risk=event.get("risk"),
+                approval_status=event.get("approval_status"),
+                exit_code=event.get("exit_code"),
+                stdout=event.get("stdout"),
+                stderr=event.get("stderr"),
+            ),
+        )
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Agent is unavailable.") from exc
 

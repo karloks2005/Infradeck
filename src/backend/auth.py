@@ -45,6 +45,15 @@ def record_audit_log(
     source: str = "system",
     task_title: str | None = None,
     steps: list[str] | None = None,
+    conversation_id: str | None = None,
+    event_type: str | None = None,
+    command: str | None = None,
+    command_reason: str | None = None,
+    command_risk: str | None = None,
+    approval_status: str | None = None,
+    exit_code: int | None = None,
+    stdout: str | None = None,
+    stderr: str | None = None,
 ):
     log_entry = AuditLog(
         user_id=user_id,
@@ -53,6 +62,15 @@ def record_audit_log(
         source=source,
         task_title=task_title,
         steps=json.dumps(steps or []),
+        conversation_id=conversation_id,
+        event_type=event_type,
+        command=command,
+        command_reason=command_reason,
+        command_risk=command_risk,
+        approval_status=approval_status,
+        exit_code=exit_code,
+        stdout=stdout,
+        stderr=stderr,
     )
     db.add(log_entry)
     db.commit()
@@ -66,13 +84,32 @@ def record_audit_log(
         "task_title": log_entry.task_title,
         "steps": steps or [],
         "created_at": log_entry.created_at.isoformat(),
+        "conversation_id": log_entry.conversation_id,
+        "event_type": log_entry.event_type,
+        "command": log_entry.command,
+        "command_reason": log_entry.command_reason,
+        "command_risk": log_entry.command_risk,
+        "approval_status": log_entry.approval_status,
+        "exit_code": log_entry.exit_code,
+        "stdout": log_entry.stdout,
+        "stderr": log_entry.stderr,
     }
 
 
-def get_recent_logs(db, *, limit: int = 20):
+def get_recent_logs(
+    db,
+    *,
+    limit: int = 20,
+    user_id: int | None = None,
+    conversation_id: str | None = None,
+):
+    query = db.query(AuditLog).filter(AuditLog.source != "auth")
+    if user_id is not None:
+        query = query.filter(AuditLog.user_id == user_id)
+    if conversation_id:
+        query = query.filter(AuditLog.conversation_id == conversation_id)
     logs = (
-        db.query(AuditLog)
-        .filter(AuditLog.source != "auth")
+        query
         .order_by(AuditLog.created_at.desc())
         .limit(limit)
         .all()
@@ -93,6 +130,15 @@ def get_recent_logs(db, *, limit: int = 20):
                 "task_title": log.task_title or log.message,
                 "steps": steps if isinstance(steps, list) else [],
                 "created_at": log.created_at.isoformat(),
+                "conversation_id": log.conversation_id,
+                "event_type": log.event_type,
+                "command": log.command,
+                "command_reason": log.command_reason,
+                "command_risk": log.command_risk,
+                "approval_status": log.approval_status,
+                "exit_code": log.exit_code,
+                "stdout": log.stdout,
+                "stderr": log.stderr,
             }
         )
     return result
