@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -43,15 +43,134 @@ class AuditLog(Base):
     steps: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     conversation_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     event_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    command: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    command_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    command_risk: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    approval_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    exit_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    stdout: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    stderr: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False, default="New chat")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    
+
+
+class Server(Base):
+    __tablename__ = "servers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    hostname: Mapped[str] = mapped_column(String(255), nullable=False)
+    ip_address: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    os_info: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    cpu_cores: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    total_ram_gb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    check_interval_seconds: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
+    collector_token_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True)
+    # Stable host identity reported by self-enrolling collectors, so a reinstall maps back to the same server.
+    machine_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class PendingCollector(Base):
+    """A collector that asked to join and is waiting for a user to Add or Dismiss it."""
+
+    __tablename__ = "pending_collectors"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    # Hash of the secret the collector polls with; only that collector can pick up its token.
+    poll_secret_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    pairing_code: Mapped[str] = mapped_column(String(16), nullable=False)
+    hostname: Mapped[str] = mapped_column(String(255), nullable=False)
+    machine_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    ip_address: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    os_info: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)  # pending | dismissed | approved
+    approved_server_id: Mapped[Optional[int]] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    last_poll_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class EnrollmentKey(Base):
+    __tablename__ = "enrollment_keys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class HostMetric(Base):
+    __tablename__ = "host_metrics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), index=True, nullable=False)
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True, nullable=False)
+    cpu_utilization_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    load_1m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    load_5m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    load_15m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    ram_used_gb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    ram_available_gb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    ram_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    swap_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    disk_usage_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    disk_inodes_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    net_bytes_sent_mb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    net_bytes_recv_mb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    system_uptime_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+
+class ContainerMetric(Base):
+    __tablename__ = "container_metrics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), index=True, nullable=False)
+    container_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    image: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    restart_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cpu_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    memory_used_mb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    memory_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    memory_limit_mb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    net_rx_mb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    net_tx_mb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    block_read_mb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    block_write_mb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pids: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    ports: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    healthcheck_status: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True, nullable=False)
+
+
+class IncidentAlert(Base):
+    __tablename__ = "incident_alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), index=True, nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), default="WARNING", nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True, nullable=False)

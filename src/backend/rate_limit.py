@@ -43,6 +43,12 @@ def enforce_register_limit(redis_client, *, ip_address: str, limit: int, window_
     return key
 
 
+def enforce_ip_limit(redis_client, *, scope: str, ip_address: str, limit: int, window_seconds: int) -> str:
+    key = _key(scope, ip_address)
+    _record_attempt(redis_client, key, limit, window_seconds)
+    return key
+
+
 def reset_limits(redis_client, *keys: str) -> None:
     try:
         redis_client.delete(*keys)

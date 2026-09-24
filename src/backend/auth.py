@@ -47,13 +47,6 @@ def record_audit_log(
     steps: list[str] | None = None,
     conversation_id: str | None = None,
     event_type: str | None = None,
-    command: str | None = None,
-    command_reason: str | None = None,
-    command_risk: str | None = None,
-    approval_status: str | None = None,
-    exit_code: int | None = None,
-    stdout: str | None = None,
-    stderr: str | None = None,
 ):
     log_entry = AuditLog(
         user_id=user_id,
@@ -64,13 +57,6 @@ def record_audit_log(
         steps=json.dumps(steps or []),
         conversation_id=conversation_id,
         event_type=event_type,
-        command=command,
-        command_reason=command_reason,
-        command_risk=command_risk,
-        approval_status=approval_status,
-        exit_code=exit_code,
-        stdout=stdout,
-        stderr=stderr,
     )
     db.add(log_entry)
     db.commit()
@@ -86,13 +72,6 @@ def record_audit_log(
         "created_at": log_entry.created_at.isoformat(),
         "conversation_id": log_entry.conversation_id,
         "event_type": log_entry.event_type,
-        "command": log_entry.command,
-        "command_reason": log_entry.command_reason,
-        "command_risk": log_entry.command_risk,
-        "approval_status": log_entry.approval_status,
-        "exit_code": log_entry.exit_code,
-        "stdout": log_entry.stdout,
-        "stderr": log_entry.stderr,
     }
 
 
@@ -132,35 +111,9 @@ def get_recent_logs(
                 "created_at": log.created_at.isoformat(),
                 "conversation_id": log.conversation_id,
                 "event_type": log.event_type,
-                "command": log.command,
-                "command_reason": log.command_reason,
-                "command_risk": log.command_risk,
-                "approval_status": log.approval_status,
-                "exit_code": log.exit_code,
-                "stdout": log.stdout,
-                "stderr": log.stderr,
             }
         )
     return result
-
-
-def ensure_default_user(db):
-    email = "admin@example.com"
-    user = db.query(User).filter(User.email == email).first()
-    if user:
-        return user
-
-    user = User(
-        name="Admin User",
-        email=email,
-        password_hash=bcrypt.hashpw(b"admin123", bcrypt.gensalt()).decode("utf-8"),
-        role="admin",
-        is_active=True,
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    return user
 
 
 def register_user(db, redis_client, *, name: str, email: str, password: str):
