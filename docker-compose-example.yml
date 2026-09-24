@@ -1,0 +1,138 @@
+# Example production stack for self-hosting, published over HTTPS by an existing Traefik.
+# 1. Copy this file:      cp docker-compose-example.yml docker-compose.server.yml
+# 2. Copy the env file:   cp example.env .env    (then fill in its values)
+# 3. Replace every "CHANGE ME" / <placeholder> value below with your own.
+# 4. Start it:            docker compose -f docker-compose.server.yml up -d --build
+# Tip: put COMPOSE_FILE=docker-compose.server.yml in this server's .env so a plain
+# `docker compose ...` uses this file.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: homelab-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: homelab
+      POSTGRES_USER: homelab
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U homelab -d homelab"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: homelab-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    container_name: homelab-backend
+    image: homelab-backend:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://homelab:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/homelab
+      REDIS_URL: redis://redis:6379/0
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      AGENT_MODEL: ${AGENT_MODEL:-models/gemini-3.5-flash}
+      # Served over HTTPS via Traefik, so the login cookie is HTTPS-only.
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      # Only the first account can register; set to true to let others sign up.
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://<your-domain>}  # CHANGE ME: your dashboard URL
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-86400}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-homie_session}
+      LOGIN_RATE_LIMIT: ${LOGIN_RATE_LIMIT:-5}
+      LOGIN_RATE_WINDOW_SECONDS: ${LOGIN_RATE_WINDOW_SECONDS:-60}
+      REGISTER_RATE_LIMIT: ${REGISTER_RATE_LIMIT:-3}
+      REGISTER_RATE_WINDOW_SECONDS: ${REGISTER_RATE_WINDOW_SECONDS:-3600}
+      ADMIN_ALERT_WEBHOOK_URL: ${ADMIN_ALERT_WEBHOOK_URL:-}
+    # No host port: nginx (frontend) reaches the backend over the Compose network,
+    # and browsers/collectors use https://<domain>/api. Avoids clashing with other
+    # services on the server. Debug with: docker compose exec backend ...
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Monitors the machine running this stack. Other servers use collector-compose.yml.
+  collector:
+    build:
+      context: .
+      dockerfile: docker/collector.Dockerfile
+    image: homelab-collector:latest
+    container_name: homelab-collector
+    restart: unless-stopped
+    environment:
+      HOMELAB_API_URL: http://backend:8000
+      # Nothing to configure: this machine shows up under "New servers detected"
+      # on the dashboard. An optional enrollment key skips that approval.
+      HOMELAB_ENROLL_KEY: ${HOMELAB_ENROLL_KEY:-}
+      HOMELAB_SERVER_NAME: ${HOMELAB_SERVER_NAME:-}
+      HOMELAB_CHECK_INTERVAL_SECONDS: ${HOMELAB_CHECK_INTERVAL_SECONDS:-60}
+      HOMELAB_MACHINE_ID: ${HOMELAB_MACHINE_ID:-}
+    volumes:
+      - /proc:/host/proc:ro
+      - /:/hostfs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - collector_state:/var/lib/homelab-collector
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        VITE_API_BASE_URL: /api
+        VITE_LIVE_GRAPH_REFRESH_INTERVAL_SECONDS: ${LIVE_GRAPH_REFRESH_INTERVAL_SECONDS:-3}
+    container_name: homelab-frontend
+    restart: unless-stopped
+    # Serves the dashboard and proxies /api to the backend; Traefik publishes it
+    # over HTTPS on your domain. The plain-HTTP port is bound to localhost only
+    # (set FRONTEND_BIND=0.0.0.0 to also allow direct LAN/VPN access).
+    ports:
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-5173}:80"
+    networks:
+      - default
+      - traefik
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=<traefik-network>                              # CHANGE ME: Traefik's Docker network
+      - traefik.http.routers.<subdomain>.rule=Host(`<your-domain>`)               # CHANGE ME: your domain
+      - traefik.http.routers.<subdomain>.entrypoints=<https-entrypoint>           # CHANGE ME: Traefik HTTPS entrypoint
+      - traefik.http.routers.<subdomain>.tls.certresolver=<cert-resolver>         # CHANGE ME: Traefik certificate resolver
+      - traefik.http.services.<subdomain>.loadbalancer.server.port=80
+    depends_on:
+      backend:
+        condition: service_healthy
+
+networks:
+  traefik:
+    external: true
+    name: <traefik-network>  # CHANGE ME: Traefik's Docker network (same as traefik.docker.network above)
+
+volumes:
+  postgres_data:
+  redis_data:
+  collector_state:

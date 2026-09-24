@@ -50,6 +50,13 @@ services:
       # Only the first account can register; set to true to let others sign up.
       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-86400}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-homie_session}
+      LOGIN_RATE_LIMIT: ${LOGIN_RATE_LIMIT:-5}
+      LOGIN_RATE_WINDOW_SECONDS: ${LOGIN_RATE_WINDOW_SECONDS:-60}
+      REGISTER_RATE_LIMIT: ${REGISTER_RATE_LIMIT:-3}
+      REGISTER_RATE_WINDOW_SECONDS: ${REGISTER_RATE_WINDOW_SECONDS:-3600}
+      ADMIN_ALERT_WEBHOOK_URL: ${ADMIN_ALERT_WEBHOOK_URL:-}
     # No host port: nginx (frontend) reaches the backend over the Compose network,
     # and browsers/collectors use https://<domain>/api. Avoids clashing with other
     # services on the server. Debug with: docker compose exec backend ...
@@ -78,6 +85,8 @@ services:
       # on the dashboard. An optional enrollment key skips that approval.
       HOMELAB_ENROLL_KEY: ${HOMELAB_ENROLL_KEY:-}
       HOMELAB_SERVER_NAME: ${HOMELAB_SERVER_NAME:-}
+      HOMELAB_CHECK_INTERVAL_SECONDS: ${HOMELAB_CHECK_INTERVAL_SECONDS:-60}
+      HOMELAB_MACHINE_ID: ${HOMELAB_MACHINE_ID:-}
     volumes:
       - /proc:/host/proc:ro
       - /:/hostfs:ro
@@ -93,6 +102,7 @@ services:
       dockerfile: docker/frontend.Dockerfile
       args:
         VITE_API_BASE_URL: /api
+        VITE_LIVE_GRAPH_REFRESH_INTERVAL_SECONDS: ${LIVE_GRAPH_REFRESH_INTERVAL_SECONDS:-3}
     container_name: homelab-frontend
     restart: unless-stopped
     # Serves the dashboard and proxies /api to the backend; Traefik publishes it
