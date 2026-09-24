@@ -1,0 +1,27 @@
+# Collector-only stack, an alternative to the one-line `docker run` shown on the
+# dashboard (Connect a server). Set HOMELAB_API_URL (e.g. in a .env next to
+# this file) and run:
+#   docker compose -f collector-compose.yml up -d --build
+# The server then appears on the dashboard under "New servers detected"; click
+# Add. Credentials are saved in the collector_state volume.
+
+services:
+  collector:
+    build:
+      context: .
+      dockerfile: docker/collector.Dockerfile
+    image: ${HOMELAB_COLLECTOR_IMAGE:-homelab-collector:latest}
+    container_name: homelab-collector
+    restart: unless-stopped
+    environment:
+      HOMELAB_API_URL: ${HOMELAB_API_URL:?Set HOMELAB_API_URL to your backend address}
+      HOMELAB_ENROLL_KEY: ${HOMELAB_ENROLL_KEY:-}
+      HOMELAB_SERVER_NAME: ${HOMELAB_SERVER_NAME:-}
+    volumes:
+      - /proc:/host/proc:ro
+      - /:/hostfs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - collector_state:/var/lib/homelab-collector
+
+volumes:
+  collector_state:

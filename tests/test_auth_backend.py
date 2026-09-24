@@ -7,7 +7,7 @@ import bcrypt
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from src.backend.auth import authenticate_user, ensure_default_user, record_audit_log, register_user
+from src.backend.auth import authenticate_user, record_audit_log, register_user
 from src.backend.models import AuditLog, Base, User
 
 
@@ -25,20 +25,6 @@ class FakeRedis:
     def delete(self, key):
         self.store.pop(key, None)
         return True
-
-
-def test_ensure_default_user_is_idempotent():
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine)
-    session = Session()
-
-    first_user = ensure_default_user(session)
-    second_user = ensure_default_user(session)
-
-    assert first_user.id == second_user.id
-    assert second_user.email == "admin@example.com"
-    assert bcrypt.checkpw(b"admin123", second_user.password_hash.encode("utf-8"))
 
 
 def test_register_user_creates_record_and_hashes_password():
@@ -115,26 +101,49 @@ def test_record_audit_log_persists_database_entries():
         db=session,
         user_id=user["user"]["id"],
         level="INFO",
-        message="Command executed",
-        source="command",
+        message="Server health check completed",
+        source="health_monitor",
         conversation_id="conversation-1",
-        event_type="command_executed",
-        command="whoami",
-        command_reason="Identify the process user.",
-        command_risk="VERY LOW",
-        approval_status="not_required",
-        exit_code=0,
-        stdout="homie",
-        stderr="",
+        event_type="health_check_completed",
+        steps=["Completed predefined check 'server_health' with status ok."],
     )
 
     logs = session.query(AuditLog).order_by(AuditLog.created_at.desc()).all()
     assert len(logs) >= 3
-    command_log = logs[0]
-    assert command_log.message == "Command executed"
-    assert command_log.conversation_id == "conversation-1"
-    assert command_log.command == "whoami"
-    assert command_log.command_reason == "Identify the process user."
-    assert command_log.approval_status == "not_required"
-    assert command_log.exit_code == 0
-    assert command_log.stdout == "homie"
+    health_log = logs[0]
+    assert health_log.message == "Server health check completed"
+    assert health_log.conversation_id == "conversation-1"
+    assert health_log.event_type == "health_check_completed"
+
+
+def test_registration_closed_still_allows_first_account(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+    from src.backend import main
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    monkeypatch.setattr(main, "ALLOW_REGISTRATION", False)
+
+    assert main.auth_config(db=session) == {"registration_enabled": True}
+    session.add(User(name="Owner", email="owner@example.com", password_hash="x"))
+    session.commit()
+    assert main.auth_config(db=session) == {"registration_enabled": False}
+
+    with pytest.raises(HTTPException) as exc:
+        main.auth_register(main.RegisterRequest(name="Stranger", email="s@example.com", password="secret123"), request=None, response=None, db=session)
+    assert exc.value.status_code == 403
+
+
+def test_registration_open_by_default(monkeypatch):
+    from src.backend import main
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    session.add(User(name="Owner", email="owner@example.com", password_hash="x"))
+    session.commit()
+    monkeypatch.setattr(main, "ALLOW_REGISTRATION", True)
+
+    assert main.registration_open(session) is True

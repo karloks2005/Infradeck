@@ -1,5 +1,4 @@
 bcrypt
-bashlex
 email-validator
 fastapi
 google-genai

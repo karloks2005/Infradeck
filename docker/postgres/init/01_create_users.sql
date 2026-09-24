@@ -11,13 +11,3 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
 CREATE INDEX IF NOT EXISTS idx_users_role ON users (role);
-
--- Example seed user for quick testing.
-INSERT INTO users (email, password_hash, name, role)
-VALUES (
-    'admin@example.com',
-    '$2b$12$pb1MBMmCHsJOwpZ4k7aVoOpOJfGDS/TBmR8KwvibUv15z4tgYAm3O',
-    'Admin User',
-    'admin'
-)
-ON CONFLICT (email) DO NOTHING;

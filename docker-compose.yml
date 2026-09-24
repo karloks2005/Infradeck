@@ -1,3 +1,4 @@
+# Development / laptop stack. For the server behind Traefik use docker-compose.server.yml.
 services:
   postgres:
     image: postgres:16-alpine
@@ -6,9 +7,7 @@ services:
     environment:
       POSTGRES_DB: homelab
       POSTGRES_USER: homelab
-      POSTGRES_PASSWORD: homelab_dev
-    ports:
-      - "5432:5432"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init:/docker-entrypoint-initdb.d
@@ -23,8 +22,6 @@ services:
     container_name: homelab-redis
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -38,14 +35,21 @@ services:
       context: .
       dockerfile: docker/backend.Dockerfile
     container_name: homelab-backend
+    image: homelab-backend:latest
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql+psycopg://homelab:homelab_dev@postgres:5432/homelab
+      DATABASE_URL: postgresql+psycopg://homelab:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/homelab
       REDIS_URL: redis://redis:6379/0
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       AGENT_MODEL: ${AGENT_MODEL:-models/gemini-3.5-flash}
+      # Set to true when the dashboard is served over HTTPS.
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+    # Browsers and remote collectors reach the API through the frontend at /api;
+    # the direct port is only published on this machine for debugging.
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -57,20 +61,67 @@ services:
       timeout: 5s
       retries: 5
 
+  # Monitors the machine running this stack. Other servers use collector-compose.yml.
+  collector:
+    build:
+      context: .
+      dockerfile: docker/collector.Dockerfile
+    image: homelab-collector:latest
+    container_name: homelab-collector
+    restart: unless-stopped
+    environment:
+      HOMELAB_API_URL: http://backend:8000
+      # Nothing to configure: this machine shows up under "New servers detected"
+      # on the dashboard. An optional enrollment key skips that approval.
+      HOMELAB_ENROLL_KEY: ${HOMELAB_ENROLL_KEY:-}
+      HOMELAB_SERVER_NAME: ${HOMELAB_SERVER_NAME:-}
+    volumes:
+      - /proc:/host/proc:ro
+      - /:/hostfs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - collector_state:/var/lib/homelab-collector
+    depends_on:
+      backend:
+        condition: service_healthy
+
   frontend:
     build:
       context: .
       dockerfile: docker/frontend.Dockerfile
       args:
-        VITE_API_BASE_URL: http://localhost:8000
+        VITE_API_BASE_URL: /api
     container_name: homelab-frontend
     restart: unless-stopped
+    # Serves the dashboard and proxies /api to the backend. Reach it directly over
+    # LAN/VPN, or put the `https` profile's Caddy in front for a public domain.
     ports:
-      - "5173:80"
+      - "${FRONTEND_BIND:-0.0.0.0}:${FRONTEND_PORT:-5173}:80"
     depends_on:
       backend:
         condition: service_healthy
 
+  # Optional public HTTPS entry point: docker compose --profile https up -d
+  caddy:
+    image: caddy:2-alpine
+    container_name: homelab-caddy
+    profiles: ["https"]
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+
 volumes:
   postgres_data:
   redis_data:
+  collector_state:
+  caddy_data:
+  caddy_config:

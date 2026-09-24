@@ -39,4 +39,3 @@ def load_prompt(filename: str, default: str = "") -> str:
 
 
 SYSTEM_PROMPT = load_prompt("system_prompt.md")
-#GUARDRAIL_JUDGE_PROMPT = load_prompt("guardrail_judge.md", default="")

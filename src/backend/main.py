@@ -28,6 +28,7 @@ from .config import (
     REDIS_URL,
     REGISTER_RATE_LIMIT,
     REGISTER_RATE_WINDOW_SECONDS,
+    ALLOW_REGISTRATION,
     CORS_ORIGINS,
     SESSION_COOKIE_NAME,
     SESSION_COOKIE_SECURE,
@@ -163,8 +164,19 @@ def health():
     }
 
 
+def registration_open(db) -> bool:
+    return ALLOW_REGISTRATION or db.query(User).count() == 0
+
+
+@app.get("/auth/config")
+def auth_config(db=Depends(get_db)):
+    return {"registration_enabled": registration_open(db)}
+
+
 @app.post("/auth/register")
 def auth_register(payload: RegisterRequest, request: Request, response: Response, db=Depends(get_db)):
+    if not registration_open(db):
+        raise HTTPException(status_code=403, detail="Registration is disabled on this server.")
     enforce_register_limit(
         redis_client,
         ip_address=request.client.host if request.client else "unknown",

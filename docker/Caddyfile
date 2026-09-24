@@ -1,0 +1,6 @@
+# Obtains and renews a Let's Encrypt certificate for $DOMAIN automatically.
+# The domain's DNS must point at this server and ports 80/443 must be open.
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy frontend:80
+}
