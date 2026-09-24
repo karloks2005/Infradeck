@@ -225,12 +225,11 @@ __marimo__/
 /frontend/.vite/
 /frontend/.cache/
 
-# Node / package manager logs and locks
+# Node / package manager logs
+# (lockfiles are committed so Docker builds with `npm ci` are reproducible)
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-package-lock.json
-pnpm-lock.yaml
 
 # IDEs and OS
 .vscode/
