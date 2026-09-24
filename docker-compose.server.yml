@@ -50,10 +50,9 @@ services:
       # Only the first account can register; set to true to let others sign up.
       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
-    # Browsers and remote collectors reach the API through the frontend at /api;
-    # the direct port is only published on this machine for debugging.
-    ports:
-      - "127.0.0.1:8000:8000"
+    # No host port: nginx (frontend) reaches the backend over the Compose network,
+    # and browsers/collectors use https://<domain>/api. Avoids clashing with other
+    # services on the server. Debug with: docker compose exec backend ...
     depends_on:
       postgres:
         condition: service_healthy
