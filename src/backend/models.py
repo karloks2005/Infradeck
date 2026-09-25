@@ -188,4 +188,7 @@ class IncidentAlert(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    # Identifies the condition behind the alert (e.g. "server_offline"), so a server has at most one active alert per rule.
+    rule_key: Mapped[Optional[str]] = mapped_column(String(255), index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True, nullable=False)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import hashlib
 import secrets
@@ -15,8 +16,9 @@ from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Requ
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import inspect, text
+from sqlalchemy import case, inspect, text
 
+from .alerts import CONTAINER_RULE_PREFIX, CRITICAL, SERVER_OFFLINE_RULE, SEVERITIES, active_rule_keys, raise_alert, resolve_alerts, sync_alerts
 from .auth import authenticate_user, get_recent_logs, get_user_from_session, logout_user, record_audit_log, register_user
 from .db import SessionLocal, check_database, get_db
 from .models import AppSetting, AuditLog, Base, ChatMessage, ContainerMetric, Conversation, EnrollmentKey, HostMetric, IncidentAlert, PendingCollector, Server, User
@@ -34,6 +36,7 @@ from .config import (
     SESSION_COOKIE_SECURE,
     SESSION_TTL_SECONDS,
 )
+from .rules import DEFAULT_THRESHOLDS, HOST_RULE_PREFIX, container_rules, host_rules, validate_thresholds
 from .rate_limit import enforce_ip_limit, enforce_login_limit, enforce_register_limit, reset_limits
 from ..agent.service import delete_agent_conversation, send_agent_message
 
@@ -81,6 +84,7 @@ class AdminSettingsRequest(BaseModel):
     # Both optional so the admin page can save one setting at a time.
     metrics_retention_days: int | None = None
     agent_chat_enabled: bool | None = None
+    alert_thresholds: dict | None = None
 
 
 class MetricsIngestRequest(BaseModel):
@@ -140,6 +144,13 @@ def startup_event():
                 ("started_at", "VARCHAR(64)"), ("ports", "VARCHAR(512)"),
             ):
                 connection.execute(text(f"ALTER TABLE container_metrics ADD COLUMN IF NOT EXISTS {column} {column_type}"))
+            connection.execute(text("ALTER TABLE incident_alerts ADD COLUMN IF NOT EXISTS rule_key VARCHAR(255)"))
+            connection.execute(text("ALTER TABLE incident_alerts ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP WITH TIME ZONE"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_incident_alerts_rule_key ON incident_alerts (rule_key)"))
+            # Alerts from before the alert engine: offline alerts keep going under their rule, the rest were
+            # duplicated on every check-in with no way to resolve, so close them; the engine re-raises live ones.
+            connection.execute(text("UPDATE incident_alerts SET rule_key = :rule WHERE rule_key IS NULL AND description = :description"), {"rule": SERVER_OFFLINE_RULE, "description": OFFLINE_ALERT_DESCRIPTION})
+            connection.execute(text("UPDATE incident_alerts SET status = 'resolved', resolved_at = NOW() WHERE rule_key IS NULL AND status = 'active'"))
     if "servers" in inspect(engine).get_table_names():
         columns = {column["name"] for column in inspect(engine).get_columns("servers")}
         if "collector_token_hash" not in columns:
@@ -316,6 +327,7 @@ MAX_METRICS_RETENTION_DAYS = 3650
 
 
 AGENT_CHAT_ENABLED_KEY = "agent_chat_enabled"
+ALERT_THRESHOLDS_KEY = "alert_thresholds"
 
 
 def _set_setting(db, key: str, value: str) -> None:
@@ -339,8 +351,18 @@ def is_agent_chat_enabled(db) -> bool:
     return setting is None or setting.value == "true"
 
 
+def get_alert_thresholds(db) -> dict:
+    """Saved thresholds over the defaults, so thresholds added later get their default value."""
+    setting = db.get(AppSetting, ALERT_THRESHOLDS_KEY)
+    try:
+        saved = json.loads(setting.value) if setting else {}
+        return validate_thresholds({k: v for k, v in saved.items() if k in DEFAULT_THRESHOLDS}, DEFAULT_THRESHOLDS)
+    except (ValueError, AttributeError):
+        return dict(DEFAULT_THRESHOLDS)
+
+
 def _admin_settings(db) -> dict:
-    return {"metrics_retention_days": get_metrics_retention_days(db), "agent_chat_enabled": is_agent_chat_enabled(db)}
+    return {"metrics_retention_days": get_metrics_retention_days(db), "agent_chat_enabled": is_agent_chat_enabled(db), "alert_thresholds": get_alert_thresholds(db)}
 
 
 def purge_old_metrics(db, now: datetime | None = None) -> int:
@@ -371,6 +393,16 @@ def update_admin_settings(payload: AdminSettingsRequest, session_id: Annotated[s
     if payload.agent_chat_enabled is not None:
         _set_setting(db, AGENT_CHAT_ENABLED_KEY, "true" if payload.agent_chat_enabled else "false")
         changes.append(f"{'Enabled' if payload.agent_chat_enabled else 'Disabled'} chat with the agent")
+    if payload.alert_thresholds is not None:
+        current = get_alert_thresholds(db)
+        try:
+            thresholds = validate_thresholds(payload.alert_thresholds, current)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        changed = {key: value for key, value in thresholds.items() if current[key] != value}
+        _set_setting(db, ALERT_THRESHOLDS_KEY, json.dumps(thresholds))
+        if changed:
+            changes.append("Changed alert thresholds: " + ", ".join(f"{key}={value}" for key, value in changed.items()))
     db.commit()
     for change in changes:
         record_audit_log(db, user_id=user["id"], level="INFO", message=change, source="admin")
@@ -382,6 +414,9 @@ def agent_config(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_N
     """What the Agent page needs to know about the agent; readable by every signed-in user."""
     _current_user(session_id, db)
     return {"chat_enabled": is_agent_chat_enabled(db)}
+
+
+OVERVIEW_ALERT_LIMIT = 50
 
 
 @app.get("/monitoring/overview")
@@ -404,9 +439,16 @@ def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_C
             "host": ({key: getattr(metric, key) for key in ("time", "cpu_utilization_pct", "load_1m", "load_5m", "load_15m", "ram_used_gb", "ram_available_gb", "ram_pct", "swap_pct", "disk_usage_pct", "disk_inodes_pct", "net_bytes_sent_mb", "net_bytes_recv_mb", "system_uptime_seconds")} if metric else None),
             "containers": [{"container_id": c.container_id, "name": c.name, "image": c.image, "status": c.status, "restart_count": c.restart_count, "cpu_pct": c.cpu_pct, "memory_used_mb": c.memory_used_mb, "memory_pct": c.memory_pct, "healthcheck_status": c.healthcheck_status, "time": c.time.isoformat()} for c in latest.values()],
         })
-    alerts = db.query(IncidentAlert).filter(IncidentAlert.status == "active").order_by(IncidentAlert.created_at.desc()).limit(20).all()
+    active_alerts = db.query(IncidentAlert).filter(IncidentAlert.status == "active")
+    # Most severe first, then newest.
+    severity_rank = case({severity: rank for rank, severity in enumerate(reversed(SEVERITIES))}, value=IncidentAlert.severity, else_=len(SEVERITIES))
+    alerts = active_alerts.order_by(severity_rank, IncidentAlert.created_at.desc()).limit(OVERVIEW_ALERT_LIMIT).all()
+    hostnames = {server.id: server.hostname for server in servers}
     pending = visible_pending_collectors(db) if _is_admin(db, user["id"]) else []
-    return {"servers": result, "pending_collectors": pending, "alerts": [{"id": a.id, "server_id": a.server_id, "severity": a.severity, "title": a.title, "description": a.description, "created_at": a.created_at.isoformat()} for a in alerts]}
+    return {
+        "servers": result, "pending_collectors": pending, "alert_count": active_alerts.count(),
+        "alerts": [{"id": a.id, "server_id": a.server_id, "hostname": hostnames.get(a.server_id), "severity": a.severity, "title": a.title, "description": a.description, "created_at": a.created_at.isoformat()} for a in alerts],
+    }
 
 
 CONTAINER_DETAIL_FIELDS = (
@@ -640,9 +682,7 @@ def mark_offline_servers(db, now: datetime | None = None) -> int:
         last_seen = server.last_seen_at if server.last_seen_at.tzinfo else server.last_seen_at.replace(tzinfo=timezone.utc)
         if now - last_seen < timedelta(seconds=server.check_interval_seconds * OFFLINE_AFTER_MISSED_CHECKS):
             continue
-        already_open = db.query(IncidentAlert).filter(IncidentAlert.server_id == server.id, IncidentAlert.status == "active", IncidentAlert.description == OFFLINE_ALERT_DESCRIPTION).first()
-        if not already_open:
-            db.add(IncidentAlert(server_id=server.id, severity="CRITICAL", title=_offline_title(server), description=OFFLINE_ALERT_DESCRIPTION))
+        if raise_alert(db, server.id, SERVER_OFFLINE_RULE, CRITICAL, _offline_title(server), OFFLINE_ALERT_DESCRIPTION):
             raised += 1
     db.commit()
     return raised
@@ -723,15 +763,20 @@ def ingest_metrics(payload: MetricsIngestRequest, authorization: Annotated[str |
     for field in ("hostname", "ip_address", "os_info", "cpu_cores", "total_ram_gb"):
         if field in payload.server and payload.server[field] is not None:
             setattr(server, field, payload.server[field])
-    db.add(HostMetric(server_id=server.id, **{k: v for k, v in payload.host.items() if k in HostMetric.__table__.columns.keys() and k not in {"id", "server_id", "time"}}))
-    for container in payload.containers:
-        if container.get("container_id") and container.get("status"):
-            allowed = {k: v for k, v in container.items() if k in ContainerMetric.__table__.columns.keys() and k not in {"id", "server_id", "time"}}
-            db.add(ContainerMetric(server_id=server.id, **allowed))
-            if str(container.get("status", "")).lower() in {"restarting", "unhealthy"}:
-                db.add(IncidentAlert(server_id=server.id, severity="CRITICAL", title=f"Container {container.get('name', container['container_id'])} is {container['status']}", description="Automatski detektirano pri zaprimanju metrika."))
-    server.last_seen_at = datetime.now(timezone.utc)
-    db.query(IncidentAlert).filter(IncidentAlert.server_id == server.id, IncidentAlert.status == "active", IncidentAlert.description == OFFLINE_ALERT_DESCRIPTION).update({"status": "resolved"}, synchronize_session=False)
+    now = datetime.now(timezone.utc)
+    db.add(HostMetric(server_id=server.id, time=now, **{k: v for k, v in payload.host.items() if k in HostMetric.__table__.columns.keys() and k not in {"id", "server_id", "time"}}))
+    containers = [c for c in payload.containers if c.get("container_id") and c.get("status")]
+    for container in containers:
+        allowed = {k: v for k, v in container.items() if k in ContainerMetric.__table__.columns.keys() and k not in {"id", "server_id", "time"}}
+        db.add(ContainerMetric(server_id=server.id, time=now, **allowed))
+    db.flush()  # the rules read this check-in back from the history tables
+    thresholds = get_alert_thresholds(db)
+    sync_alerts(db, server.id, HOST_RULE_PREFIX, host_rules(db, server, thresholds, active_rule_keys(db, server.id, HOST_RULE_PREFIX)))
+    # The collector sends no containers when Docker is unreachable; keep container alerts as they are rather than resolving them all.
+    if containers:
+        sync_alerts(db, server.id, CONTAINER_RULE_PREFIX, container_rules(db, server.id, containers, thresholds, now))
+    server.last_seen_at = now
+    resolve_alerts(db, server.id, [SERVER_OFFLINE_RULE])
     db.commit()
     return {"status": "accepted", "interval_seconds": server.check_interval_seconds}
 

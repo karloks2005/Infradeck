@@ -431,6 +431,12 @@ function RegisterPage({ onRegister }) {
 // Izvan ili na vrhu komponente postavi guard za izbjegavanje paralelnih poziva
 let isFetchingOverview = false
 
+const ALERT_STYLES = {
+  CRITICAL: { box: 'border-red-400/25 bg-red-500/5', badge: 'bg-red-500/15 text-red-300', title: 'text-red-200' },
+  WARNING: { box: 'border-amber-400/20 bg-amber-400/5', badge: 'bg-amber-400/15 text-amber-300', title: 'text-amber-200' },
+  INFO: { box: 'border-sky-400/20 bg-sky-400/5', badge: 'bg-sky-400/15 text-sky-300', title: 'text-sky-200' },
+}
+
 function DashboardPage({ user, onLogout }) {
   const [overview, setOverview] = useState({ servers: [], alerts: [] })
   const [error, setError] = useState('')
@@ -536,7 +542,7 @@ const refresh = async () => {
             ['Average memory', latestMetrics.length ? `${average('ram_pct')}%` : '—', 'RAM utilization'],
             ['Average disk', latestMetrics.length ? `${average('disk_usage_pct')}%` : '—', 'Disk utilization'],
             ['Containers running', String(runningContainers), 'Across monitored servers'],
-            ['Active incidents', String(overview.alerts?.length || 0), 'Needs attention'],
+            ['Active incidents', String(overview.alert_count ?? overview.alerts?.length ?? 0), 'Needs attention'],
           ].map(([label, value, detail]) => <div key={label} className="glass-panel rounded-[24px] p-5"><div className="text-sm text-[#9aa0a6]">{label}</div><div className="mt-3 text-3xl font-semibold text-white">{value}</div><div className="mt-2 text-xs text-[#7f8589]">{detail}</div></div>)}
         </section>
 
@@ -562,7 +568,7 @@ const refresh = async () => {
             </article>
           })}</div>}
         </section>
-        <section className="glass-panel rounded-[28px] p-5 md:p-6"><div className="mb-4"><div className="text-xs uppercase tracking-[0.2em] text-[#9aa0a6]">Alerts</div><h2 className="mt-1 text-xl font-semibold text-white">Active incidents</h2></div>{overview.alerts?.length ? <div className="space-y-2">{overview.alerts.map((alert) => <div key={alert.id} className="rounded-xl border border-amber-400/20 bg-amber-400/5 p-3"><div className="font-medium text-amber-200">{alert.title}</div><div className="mt-1 text-sm text-[#bcbcbc]">{alert.description}</div></div>)}</div> : <p className="text-sm text-[#9aa0a6]">No active incidents recorded.</p>}</section>
+        <section className="glass-panel rounded-[28px] p-5 md:p-6"><div className="mb-4"><div className="text-xs uppercase tracking-[0.2em] text-[#9aa0a6]">Alerts</div><h2 className="mt-1 text-xl font-semibold text-white">Active incidents</h2></div>{overview.alerts?.length ? <div className="space-y-2">{overview.alerts.map((alert) => { const style = ALERT_STYLES[alert.severity] || ALERT_STYLES.WARNING; return <div key={alert.id} className={`rounded-xl border p-3 ${style.box}`}><div className="flex items-center gap-2"><span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wider ${style.badge}`}>{alert.severity}</span><div className={`font-medium ${style.title}`}>{alert.title}</div></div><div className="mt-1 text-xs text-[#9aa0a6]">{alert.hostname || `Server ${alert.server_id}`} · since {new Date(alert.created_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</div><div className="mt-1 text-sm text-[#bcbcbc]">{alert.description}</div></div> })}{overview.alert_count > overview.alerts.length ? <p className="text-xs text-[#9aa0a6]">Showing the {overview.alerts.length} most severe of {overview.alert_count} incidents.</p> : null}</div> : <p className="text-sm text-[#9aa0a6]">No active incidents recorded.</p>}</section>
       </div>
     </AppShell>
   )
@@ -1316,14 +1322,97 @@ function AdminAgentTab() {
   )
 }
 
-function AdminAlertsTab() {
-  const thresholds = [
-    ['Disk usage above', 90, '%'],
-    ['Memory usage above', 90, '%'],
-    ['CPU usage above (for 10 min)', 95, '%'],
-    ['Container restarts within 30 min', 3, 'restarts'],
-  ]
+// [label, hint, warning key, critical key (null when the rule only warns), unit, step]
+const thresholdRows = [
+  ['Disk usage', 'Root filesystem', 'disk_warning_pct', 'disk_critical_pct', '%', 1],
+  ['Inode usage', 'Root filesystem', 'inodes_warning_pct', 'inodes_critical_pct', '%', 1],
+  ['Memory usage', null, 'memory_warning_pct', 'memory_critical_pct', '%', 1],
+  ['Swap usage', 'Warning only', 'swap_warning_pct', null, '%', 1],
+  ['Load per CPU core', '5-minute average', 'load_warning_per_core', 'load_critical_per_core', '×', 0.1],
+]
 
+const thresholdInputClass = 'w-20 rounded-xl border border-[#1f2326] bg-[#0d1013] px-2 py-1 text-right text-white outline-none focus:border-white/30 disabled:opacity-50'
+
+function ThresholdInput({ label, value, step, onChange, disabled }) {
+  return <input type="number" aria-label={label} value={value ?? ''} step={step} min={0} disabled={disabled} onChange={(event) => onChange(event.target.value === '' ? '' : Number(event.target.value))} className={thresholdInputClass} />
+}
+
+function IncidentThresholdsSection() {
+  const [saved, setSaved] = useState(null)
+  const [values, setValues] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState(null)
+
+  useEffect(() => {
+    apiRequest('/admin/settings', { method: 'GET' })
+      .then((data) => {
+        setSaved(data.alert_thresholds)
+        setValues(data.alert_thresholds)
+      })
+      .catch((error) => setMessage({ ok: false, text: error.message || 'Could not load the thresholds.' }))
+  }, [])
+
+  const set = (key) => (value) => setValues((current) => ({ ...current, [key]: value }))
+
+  const save = async () => {
+    setSaving(true)
+    setMessage(null)
+    try {
+      const data = await apiRequest('/admin/settings', { method: 'PUT', body: JSON.stringify({ alert_thresholds: values }) })
+      setSaved(data.alert_thresholds)
+      setValues(data.alert_thresholds)
+      setMessage({ ok: true, text: 'Saved. New thresholds apply from each server\'s next check-in.' })
+    } catch (error) {
+      setMessage({ ok: false, text: error.message || 'Could not save the thresholds.' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const loading = values === null
+  const unchanged = loading || JSON.stringify(values) === JSON.stringify(saved)
+  const incomplete = !loading && Object.values(values).some((value) => value === '')
+
+  return (
+    <AdminSection
+      title="Incident thresholds"
+      description="When monitoring opens an incident. Applies to every server."
+      action={
+        <button type="button" onClick={save} disabled={unchanged || incomplete || saving} className="rounded-2xl bg-linear-to-r from-white to-[#cfcfcf] px-4 py-2.5 text-sm font-medium text-[#0b0b0b] disabled:cursor-not-allowed disabled:opacity-40">
+          {saving ? 'Saving…' : 'Save changes'}
+        </button>
+      }
+    >
+      <div className="space-y-2">
+        <div className="flex justify-end gap-2 px-4 text-[10px] uppercase tracking-wider text-[#7f8589]"><span className="w-20 text-right text-amber-300/80">Warning</span><span className="w-20 text-right text-red-300/80">Critical</span><span className="w-4" /></div>
+        {thresholdRows.map(([label, hint, warningKey, criticalKey, unit, step]) => (
+          <div key={label} className="flex items-center justify-between gap-4 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-2.5 text-sm">
+            <span><span className="text-[#bcbcbc]">{label}</span>{hint && <span className="block text-xs text-[#7f8589]">{hint}</span>}</span>
+            <span className="flex items-center gap-2">
+              <ThresholdInput label={`${label} warning`} value={values?.[warningKey]} step={step} onChange={set(warningKey)} disabled={loading} />
+              {criticalKey ? <ThresholdInput label={`${label} critical`} value={values?.[criticalKey]} step={step} onChange={set(criticalKey)} disabled={loading} /> : <span className="w-20 text-right text-[#7f8589]">—</span>}
+              <span className="w-4 text-xs text-[#9aa0a6]">{unit}</span>
+            </span>
+          </div>
+        ))}
+        <label className="flex items-center justify-between gap-4 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-2.5 text-sm">
+          <span><span className="text-[#bcbcbc]">Check-ins in a row</span><span className="block text-xs text-[#7f8589]">How long a host metric must stay over before an incident opens</span></span>
+          <ThresholdInput label="Check-ins in a row" value={values?.sustained_checks} step={1} onChange={set('sustained_checks')} disabled={loading} />
+        </label>
+        <div className="flex items-center justify-between gap-4 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-2.5 text-sm">
+          <span><span className="text-[#bcbcbc]">Container restart loop</span><span className="block text-xs text-[#7f8589]">Critical incident</span></span>
+          <span className="flex items-center gap-2 text-xs text-[#9aa0a6]">
+            <ThresholdInput label="Restarts" value={values?.restart_loop_count} step={1} onChange={set('restart_loop_count')} disabled={loading} />restarts in
+            <ThresholdInput label="Restart window in minutes" value={values?.restart_loop_window_minutes} step={1} onChange={set('restart_loop_window_minutes')} disabled={loading} />min
+          </span>
+        </div>
+      </div>
+      {message && <p className={`mt-3 text-xs ${message.ok ? 'text-emerald-300' : 'text-amber-200'}`}>{message.text}</p>}
+    </AdminSection>
+  )
+}
+
+function AdminAlertsTab() {
   return (
     <div className="grid gap-5 xl:grid-cols-2">
       <AdminSection title="Webhook" description="Receives a JSON POST for every critical incident. Replaces ADMIN_ALERT_WEBHOOK_URL in .env." action={<SaveButton />}>
@@ -1333,19 +1422,7 @@ function AdminAlertsTab() {
         </div>
       </AdminSection>
 
-      <AdminSection title="Incident thresholds" description="When monitoring opens an incident." action={<SaveButton />}>
-        <div className="space-y-2">
-          {thresholds.map(([label, value, unit]) => (
-            <label key={label} className="flex items-center justify-between gap-4 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-2.5 text-sm">
-              <span className="text-[#bcbcbc]">{label}</span>
-              <span className="flex items-center gap-2">
-                <input type="number" defaultValue={value} min={0} className="w-20 rounded-xl border border-[#1f2326] bg-[#0d1013] px-2 py-1 text-right text-white outline-none focus:border-white/30" />
-                <span className="w-16 text-xs text-[#9aa0a6]">{unit}</span>
-              </span>
-            </label>
-          ))}
-        </div>
-      </AdminSection>
+      <IncidentThresholdsSection />
     </div>
   )
 }

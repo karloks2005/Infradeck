@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from src.backend import main
+from src.backend import main, rules
 from src.backend.auth import register_user
 from src.backend.models import AppSetting, Base, ContainerMetric, HostMetric, PendingCollector, Server, User
 
@@ -164,7 +164,7 @@ def test_admin_can_turn_agent_chat_off_and_on(fleet, monkeypatch):
 
     result = main.update_admin_settings(main.AdminSettingsRequest(agent_chat_enabled=False), session_id="s", db=fleet)
 
-    assert result == {"metrics_retention_days": main.DEFAULT_METRICS_RETENTION_DAYS, "agent_chat_enabled": False}
+    assert result == {"metrics_retention_days": main.DEFAULT_METRICS_RETENTION_DAYS, "agent_chat_enabled": False, "alert_thresholds": rules.DEFAULT_THRESHOLDS}
     _login_as(monkeypatch, 2)
     assert main.agent_config(session_id="s", db=fleet) == {"chat_enabled": False}
 
