@@ -1,4 +1,4 @@
-# Vexion
+# Vexion - The Only Dashboard You Will Ever Need
 
 A self-hosted dashboard for monitoring all your homelab machines in one place.
 One machine runs the dashboard; every other machine runs a small collector that
@@ -8,6 +8,8 @@ the machines share a LAN or are spread across sites and VPSes.
 It also includes **VertexAI**, an optional monitoring-only AI assistant (Gemini)
 that can run a fixed set of read-only health checks and never executes commands.
 It's main purpose is to report errors, diagnose errors and propose optimal fixes.
+
+<img width="2853" height="1504" alt="image" src="https://github.com/user-attachments/assets/28c49288-bec8-425b-85ab-cdb3d75e099e" />
 
 ## Features
 
@@ -23,6 +25,9 @@ It's main purpose is to report errors, diagnose errors and propose optimal fixes
 - **Per-server check interval** (15 s to 15 min), set from the dashboard.
 - **Accounts** with Redis-backed sessions and login/registration rate limiting.
 - **Homie chat assistant** (optional) restricted to predefined read-only checks.
+
+<img width="2207" height="1389" alt="image" src="https://github.com/user-attachments/assets/612afa3a-52d8-4f7a-a9e6-f83fe1903f09" />
+
 
 ## Architecture
 
