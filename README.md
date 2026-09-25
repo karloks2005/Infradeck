@@ -27,6 +27,8 @@ It's main purpose is to report errors, diagnose errors and propose optimal fixes
 - **Homie chat assistant** (optional) restricted to predefined read-only checks.
 
 <img width="2207" height="1389" alt="image" src="https://github.com/user-attachments/assets/612afa3a-52d8-4f7a-a9e6-f83fe1903f09" />
+<img width="2207" height="1389" alt="image" src="https://github.com/user-attachments/assets/1a2c1574-afc4-4f78-ab08-649b91b11d1f" />
+
 
 
 ## Architecture
