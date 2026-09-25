@@ -95,7 +95,7 @@ services:
     # Serves the dashboard and proxies /api to the backend. Reach it directly over
     # LAN/VPN, or put the `https` profile's Caddy in front for a public domain.
     ports:
-      - "${FRONTEND_BIND:-0.0.0.0}:${FRONTEND_PORT:-5173}:443"
+      - "${FRONTEND_BIND:-0.0.0.0}:${FRONTEND_PORT:-5173}:80"
     depends_on:
       backend:
         condition: service_healthy
