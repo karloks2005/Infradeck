@@ -84,6 +84,8 @@ services:
     restart: unless-stopped
     environment:
       HOMELAB_API_URL: http://backend:8000
+      # Marks this collector as the machine running the dashboard (the charts at the top).
+      HOMELAB_DASHBOARD_HOST: "true"
       # Nothing to configure: this machine shows up under "New servers detected"
       # on the dashboard. An optional enrollment key skips that approval.
       HOMELAB_ENROLL_KEY: ${HOMELAB_ENROLL_KEY:-}

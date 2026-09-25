@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 from src.backend import main, rules
 from src.backend.alerts import CRITICAL, WARNING
-from src.backend.models import AuditLog, Base, IncidentAlert, Server, User
+from src.backend.models import AuditLog, Base, IncidentAlert, MountMetric, Server, User
 
 TOKEN = "collector-token"
 
@@ -42,9 +42,9 @@ def test_host_alert_needs_sustained_breach(db):
     assert _active(db) == {}
 
     _ingest(db, disk_usage_pct=90)
-    alert = _active(db)["host:disk"]
+    alert = _active(db)["host:disk:/"]
     assert alert.severity == WARNING
-    assert alert.title == "Disk usage on nas is 90%"
+    assert alert.title == "Disk usage on nas:/ is 90%"
 
 
 def test_single_spike_does_not_alert(db):
@@ -58,14 +58,14 @@ def test_open_alert_stays_open_until_value_drops_and_escalates_only_when_sustain
     for _ in range(3):
         _ingest(db, disk_usage_pct=90)
     _ingest(db, disk_usage_pct=97)
-    assert _active(db)["host:disk"].severity == WARNING
+    assert _active(db)["host:disk:/"].severity == WARNING
 
     _ingest(db, disk_usage_pct=97)
     _ingest(db, disk_usage_pct=97)
-    assert _active(db)["host:disk"].severity == CRITICAL
+    assert _active(db)["host:disk:/"].severity == CRITICAL
 
     _ingest(db, disk_usage_pct=88)
-    assert _active(db)["host:disk"].severity == WARNING
+    assert _active(db)["host:disk:/"].severity == WARNING
 
     _ingest(db, disk_usage_pct=50)
     assert _active(db) == {}
@@ -120,3 +120,59 @@ def test_corrupt_saved_thresholds_fall_back_to_defaults(db):
     db.commit()
 
     assert main.get_alert_thresholds(db) == rules.DEFAULT_THRESHOLDS
+
+
+def _mount(mount, used_pct, inodes_pct=10.0, total_gb=2000.0):
+    return {"mount": mount, "fs_type": "ext4", "total_gb": total_gb, "used_gb": total_gb * used_pct / 100, "used_pct": used_pct, "inodes_pct": inodes_pct}
+
+
+def test_each_mount_gets_its_own_disk_alert(db):
+    for _ in range(3):
+        _ingest(db, disk_usage_pct=40, mounts=[_mount("/", 40), _mount("/mnt/data", 96), _mount("/mnt/backup", 88, inodes_pct=99)])
+
+    active = _active(db)
+    assert set(active) == {"host:disk:/mnt/data", "host:disk:/mnt/backup", "host:inodes:/mnt/backup"}
+    assert active["host:disk:/mnt/data"].severity == CRITICAL
+    assert active["host:disk:/mnt/data"].title == "Disk usage on nas:/mnt/data is 96%"
+    assert "(1.9 TB of 2.0 TB used)" in active["host:disk:/mnt/data"].description
+    assert active["host:disk:/mnt/backup"].severity == WARNING
+
+
+def test_unmounted_disk_alert_resolves(db):
+    for _ in range(3):
+        _ingest(db, mounts=[_mount("/", 40), _mount("/mnt/data", 96)])
+    _ingest(db, mounts=[_mount("/", 40)])
+
+    assert _active(db) == {}
+
+
+def test_mount_needs_sustained_breach_of_its_own(db):
+    _ingest(db, mounts=[_mount("/", 40)])
+    _ingest(db, mounts=[_mount("/", 40)])
+    _ingest(db, mounts=[_mount("/", 40), _mount("/mnt/new", 99)])
+
+    assert _active(db) == {}
+
+
+def test_mount_rows_are_stored_and_bad_entries_ignored(db):
+    _ingest(db, mounts=[_mount("/", 40), {"mount": ""}, "junk", {"used_pct": 5}])
+
+    assert [row.mount for row in db.query(MountMetric)] == ["/"]
+
+
+def test_mount_path_with_braces_does_not_break_titles(db):
+    for _ in range(3):
+        _ingest(db, mounts=[_mount("/mnt/{odd}", 99)])
+
+    assert _active(db)["host:disk:/mnt/{odd}"].title == "Disk usage on nas:/mnt/{odd} is 99%"
+
+
+def test_overview_shows_latest_mounts_and_disk_thresholds(db, monkeypatch):
+    monkeypatch.setattr(main, "_current_user", lambda session_id, db: {"id": 1})
+    _ingest(db, mounts=[_mount("/", 10)])
+    _ingest(db, mounts=[_mount("/", 20), _mount("/mnt/data", 30)])
+
+    overview = main.monitoring_overview(session_id="s", db=db)
+
+    assert [(m["mount"], m["used_pct"]) for m in overview["servers"][0]["mounts"]] == [("/", 20), ("/mnt/data", 30)]
+    assert overview["disk_thresholds"]["disk_critical_pct"] == rules.DEFAULT_THRESHOLDS["disk_critical_pct"]

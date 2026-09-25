@@ -431,6 +431,73 @@ function RegisterPage({ onRegister }) {
 // Izvan ili na vrhu komponente postavi guard za izbjegavanje paralelnih poziva
 let isFetchingOverview = false
 
+// Collectors from before per-mount reporting only send the root filesystem's usage.
+function serverMounts(server) {
+  if (server.mounts?.length) return server.mounts
+  const host = server.host
+  return host?.disk_usage_pct != null ? [{ mount: '/', used_pct: host.disk_usage_pct, inodes_pct: host.disk_inodes_pct }] : []
+}
+
+function fullestMount(mounts) {
+  return mounts.reduce((fullest, mount) => (mount.used_pct != null && (!fullest || mount.used_pct > fullest.used_pct) ? mount : fullest), null)
+}
+
+const HOST_HISTORY_MINUTES = 30
+
+// Adds the latest check-in unless it's already there (the dashboard polls faster than collectors report).
+function appendHostSample(samples, sample) {
+  const last = samples.at(-1)
+  if (!sample.time || (last && new Date(sample.time) <= new Date(last.time))) return samples
+  const cutoff = new Date(sample.time).getTime() - HOST_HISTORY_MINUTES * 60 * 1000
+  return [...samples, sample].filter((item) => new Date(item.time).getTime() >= cutoff)
+}
+
+function formatGigabytes(value) {
+  if (value == null) return '?'
+  return value >= 1024 ? `${(value / 1024).toFixed(1)} TB` : `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} GB`
+}
+
+const DISK_LEVEL_STYLES = [
+  { bar: 'bg-emerald-400/70', text: 'text-[#cfcfcf]' },
+  { bar: 'bg-amber-400/80', text: 'text-amber-200' },
+  { bar: 'bg-red-400/80', text: 'text-red-300' },
+]
+
+function thresholdLevel(value, warning, critical) {
+  if (value == null) return 0
+  return value >= critical ? 2 : value >= warning ? 1 : 0
+}
+
+function StorageBars({ mounts, thresholds }) {
+  if (!mounts.length) return null
+  const t = { disk_warning_pct: 85, disk_critical_pct: 95, inodes_warning_pct: 85, inodes_critical_pct: 95, ...thresholds }
+  return (
+    <div className="mt-4">
+      <div className="mb-2 text-xs uppercase tracking-[0.2em] text-[#7f8589]">Storage</div>
+      <div className="space-y-2">
+        {mounts.map((mount) => {
+          const style = DISK_LEVEL_STYLES[thresholdLevel(mount.used_pct, t.disk_warning_pct, t.disk_critical_pct)]
+          const inodeLevel = thresholdLevel(mount.inodes_pct, t.inodes_warning_pct, t.inodes_critical_pct)
+          const used = Math.min(100, Math.max(0, mount.used_pct ?? 0))
+          return (
+            <div key={mount.mount} className="grid grid-cols-[minmax(0,9rem)_1fr_auto] items-center gap-3 text-sm sm:grid-cols-[minmax(0,12rem)_1fr_auto]">
+              <span className="truncate font-mono text-xs text-[#bcbcbc]" title={mount.fs_type ? `${mount.mount} (${mount.fs_type})` : mount.mount}>{mount.mount}</span>
+              <div className="h-2 overflow-hidden rounded-full bg-white/5" role="meter" aria-label={`${mount.mount} usage`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={used}>
+                <div className={`h-full rounded-full ${style.bar}`} style={{ width: `${used}%` }} />
+              </div>
+              <span className="whitespace-nowrap text-right text-xs text-[#9aa0a6]">
+                {mount.total_gb != null && <span className="hidden sm:inline">{formatGigabytes(mount.used_gb)} / {formatGigabytes(mount.total_gb)} · </span>}
+                <span className={`font-medium ${style.text}`}>{mount.used_pct == null ? '—' : `${Math.round(mount.used_pct)}%`}</span>
+                {inodeLevel > 0 && <span className={`ml-2 ${DISK_LEVEL_STYLES[inodeLevel].text}`}>inodes {Math.round(mount.inodes_pct)}%</span>}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 const ALERT_STYLES = {
   CRITICAL: { box: 'border-red-400/25 bg-red-500/5', badge: 'bg-red-500/15 text-red-300', title: 'text-red-200' },
   WARNING: { box: 'border-amber-400/20 bg-amber-400/5', badge: 'bg-amber-400/15 text-amber-300', title: 'text-amber-200' },
@@ -442,7 +509,8 @@ function DashboardPage({ user, onLogout }) {
   const [error, setError] = useState('')
   const [showConnect, setShowConnect] = useState(false)
   const [deletingServerId, setDeletingServerId] = useState(null)
-  const [history, setHistory] = useState([])
+  // Recent samples of the machine running the dashboard: loaded from the backend, then extended live.
+  const [history, setHistory] = useState({ serverId: null, samples: [] })
 
 const refresh = async () => {
   // Ako je zahtjev već u tijeku, preskoči ovaj poziv
@@ -454,19 +522,10 @@ const refresh = async () => {
     setOverview(data)
     setError('')
     
-    const metrics = (data.servers || []).map((server) => server.host).filter(Boolean)
-    if (metrics.length) {
-      const mean = (key) => metrics.reduce((sum, metric) => sum + (metric[key] || 0), 0) / metrics.length
-      
-      setHistory((current) => [
-        ...current, 
-        { 
-          time: new Date(), 
-          cpu: mean('cpu_utilization_pct'), 
-          ram: mean('ram_pct'), 
-          disk: mean('disk_usage_pct') 
-        }
-      ].slice(-40))
+    const host = (data.servers || []).find((server) => server.is_dashboard_host)
+    if (host?.host) {
+      const sample = { time: host.host.time, cpu: host.host.cpu_utilization_pct, ram: host.host.ram_pct, disk: host.host.disk_usage_pct }
+      setHistory((current) => current.serverId === host.id ? { ...current, samples: appendHostSample(current.samples, sample) } : current)
     }
   } catch (requestError) { 
     // Ako backend vrati 401 (neautoriziran/odjavljen korisnik), odjavi ga i prekini petlju
@@ -496,6 +555,19 @@ const refresh = async () => {
     return () => clearInterval(timer)
   }, [user?.id]) // <-- Stabilna instanca, okida se samo pri promjeni ID-a
 
+  const servers = overview.servers || []
+  const dashboardHost = servers.find((server) => server.is_dashboard_host)
+  const dashboardHostId = dashboardHost?.id
+
+  useEffect(() => {
+    if (!dashboardHostId) return
+    let cancelled = false
+    apiRequest(`/monitoring/servers/${dashboardHostId}/history?minutes=${HOST_HISTORY_MINUTES}`, { method: 'GET' })
+      .then((data) => { if (!cancelled) setHistory({ serverId: dashboardHostId, samples: data.samples }) })
+      .catch(() => { if (!cancelled) setHistory({ serverId: dashboardHostId, samples: [] }) })
+    return () => { cancelled = true }
+  }, [dashboardHostId])
+
   const changeInterval = async (server, value) => {
     try {
       await apiRequest(`/monitoring/servers/${server.id}/interval`, { method: 'PATCH', body: JSON.stringify({ check_interval_seconds: Number(value) }) })
@@ -514,10 +586,9 @@ const refresh = async () => {
       setDeletingServerId(null)
     }
   }
-  const servers = overview.servers || []
-  const latestMetrics = servers.map((server) => server.host).filter(Boolean)
-  const average = (key) => latestMetrics.length ? (latestMetrics.reduce((sum, metric) => sum + (metric[key] || 0), 0) / latestMetrics.length).toFixed(1) : '—'
   const online = servers.filter((server) => server.last_seen_at && Date.now() - new Date(server.last_seen_at).getTime() < server.check_interval_seconds * 3000).length
+  const hostSamples = history.serverId === dashboardHostId ? history.samples : []
+  const hostMetric = dashboardHost?.host
   const runningContainers = servers.reduce((sum, server) => sum + server.containers.filter((container) => container.status === 'running').length, 0)
 
   // Regular users get a read-only view; the backend enforces the same rules.
@@ -528,7 +599,7 @@ const refresh = async () => {
       <div className="flex flex-col gap-5">
         <header className="glass-panel rounded-[28px] p-5 md:p-6">
           <div className="flex flex-wrap items-end justify-between gap-4">
-            <div><div className="text-xs uppercase tracking-[0.22em] text-[#9aa0a6]">Infrastructure overview</div><h1 className="mt-1 text-3xl font-semibold text-white">Dashboard</h1><p className="mt-2 text-sm text-[#9aa0a6]">Live host and container health · updated every 15 seconds.</p></div>
+            <div><div className="text-xs uppercase tracking-[0.22em] text-[#9aa0a6]">Infrastructure overview</div><h1 className="mt-1 text-3xl font-semibold text-white">Dashboard</h1><p className="mt-2 text-sm text-[#9aa0a6]">Live host and container health · updated every {LIVE_GRAPH_REFRESH_INTERVAL_SECONDS} seconds.</p></div>
             {isAdmin && <button type="button" onClick={() => setShowConnect((current) => !current)} aria-expanded={showConnect} className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-slate-950">{showConnect ? 'Close' : 'Connect a server'}</button>}
           </div>
           {error && <div className="mt-4 rounded-xl border border-amber-400/30 bg-amber-400/5 p-3 text-sm text-amber-200">{error}</div>}
@@ -538,20 +609,23 @@ const refresh = async () => {
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {[
             ['Servers online', `${online} / ${servers.length}`, 'Based on last check-in'],
-            ['Average CPU', latestMetrics.length ? `${average('cpu_utilization_pct')}%` : '—', 'Across reporting servers'],
-            ['Average memory', latestMetrics.length ? `${average('ram_pct')}%` : '—', 'RAM utilization'],
-            ['Average disk', latestMetrics.length ? `${average('disk_usage_pct')}%` : '—', 'Disk utilization'],
             ['Containers running', String(runningContainers), 'Across monitored servers'],
             ['Active incidents', String(overview.alert_count ?? overview.alerts?.length ?? 0), 'Needs attention'],
           ].map(([label, value, detail]) => <div key={label} className="glass-panel rounded-[24px] p-5"><div className="text-sm text-[#9aa0a6]">{label}</div><div className="mt-3 text-3xl font-semibold text-white">{value}</div><div className="mt-2 text-xs text-[#7f8589]">{detail}</div></div>)}
         </section>
 
-        <section className="grid gap-4 xl:grid-cols-3">
-          {[
-            { key: 'cpu', title: 'CPU utilization', color: '#34d399', latest: average('cpu_utilization_pct') },
-            { key: 'ram', title: 'Memory utilization', color: '#60a5fa', latest: average('ram_pct') },
-            { key: 'disk', title: 'Disk utilization', color: '#c084fc', latest: average('disk_usage_pct') },
-          ].map((chart) => <MetricTrend key={chart.key} title={chart.title} color={chart.color} value={chart.latest} points={history.map((sample) => sample[chart.key])} times={history.map((sample) => sample.time)} />)}
+        <section>
+          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2 px-1">
+            <div className="text-xs uppercase tracking-[0.2em] text-[#9aa0a6]">This machine{dashboardHost && <span className="ml-2 normal-case tracking-normal text-[#cfcfcf]">{dashboardHost.hostname}</span>}</div>
+            <span className="text-xs text-[#7f8589]">Last {HOST_HISTORY_MINUTES} minutes</span>
+          </div>
+          {dashboardHost ? <div className="grid gap-4 xl:grid-cols-3">
+            {[
+              { key: 'cpu', title: 'CPU utilization', color: '#34d399', latest: hostMetric?.cpu_utilization_pct },
+              { key: 'ram', title: 'Memory utilization', color: '#60a5fa', latest: hostMetric?.ram_pct },
+              { key: 'disk', title: 'Disk usage (/)', color: '#c084fc', latest: hostMetric?.disk_usage_pct },
+            ].map((chart) => <MetricTrend key={chart.key} title={chart.title} color={chart.color} value={chart.latest == null ? '—' : Number(chart.latest).toFixed(1)} points={hostSamples.map((sample) => sample[chart.key])} times={hostSamples.map((sample) => sample.time)} />)}
+          </div> : <div className="glass-panel rounded-[24px] p-5 text-sm text-[#9aa0a6]">The machine running the dashboard isn't reporting yet. Its collector starts with the dashboard's compose stack and shows up here once it's added under <span className="text-white">New servers detected</span>.</div>}
         </section>
 
         <section className="glass-panel rounded-[28px] p-5 md:p-6">
@@ -559,10 +633,13 @@ const refresh = async () => {
           {isAdmin && <PendingServers pending={overview.pending_collectors || []} onChanged={refresh} />}
           {!servers.length ? <div className="rounded-2xl border border-dashed border-neutral-700 p-8 text-center"><div className="text-lg font-medium text-white">No servers registered</div><p className="mt-2 text-sm text-[#9aa0a6]">{isAdmin ? <>Click <span className="text-white">Connect a server</span> above and run the command on each machine you want to monitor.</> : 'An admin needs to connect a server before it shows up here.'}</p></div> : <div className="space-y-4">{servers.map((server) => {
             const metric = server.host
+            const mounts = serverMounts(server)
+            const fullest = fullestMount(mounts)
             const fresh = server.last_seen_at && Date.now() - new Date(server.last_seen_at).getTime() < server.check_interval_seconds * 3000
             return <article key={server.id} className="rounded-2xl border border-neutral-800 bg-[#0d1013]/70 p-4 md:p-5">
-              <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><span className={`h-2.5 w-2.5 rounded-full ${fresh ? 'bg-emerald-400' : 'bg-neutral-600'}`} /><h3 className="text-lg font-medium text-white">{server.hostname}</h3></div><div className="mt-1 text-sm text-[#9aa0a6]">{server.os_info || server.ip_address || 'Waiting for first collector check-in'}{server.cpu_cores ? ` · ${server.cpu_cores} cores` : ''}</div></div>{isAdmin ? <div className="flex flex-wrap items-center gap-2"><label className="flex items-center gap-2 text-xs text-[#9aa0a6]">Check interval<select value={server.check_interval_seconds} onChange={(e) => changeInterval(server, e.target.value)} className="rounded-lg border border-neutral-700 bg-[#111417] px-2 py-1.5 text-sm text-white"><option value="15">15 sec</option><option value="30">30 sec</option><option value="60">1 min</option><option value="300">5 min</option><option value="900">15 min</option></select></label><button type="button" onClick={() => deleteServer(server)} disabled={deletingServerId === server.id} className="rounded-lg border border-red-400/30 bg-red-500/5 px-3 py-1.5 text-xs text-red-300 transition hover:bg-red-500/10 disabled:opacity-50">{deletingServerId === server.id ? 'Deleting…' : 'Delete server'}</button></div> : <span className="text-xs text-[#9aa0a6]">Checks every {server.check_interval_seconds < 60 ? `${server.check_interval_seconds} sec` : `${Math.round(server.check_interval_seconds / 60)} min`}</span>}</div>
-              {metric ? <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">{[['CPU', metric.cpu_utilization_pct, '%'], ['RAM', metric.ram_pct, '%'], ['Disk', metric.disk_usage_pct, '%'], ['Load (1m)', metric.load_1m, '']].map(([label, value, unit]) => <div key={label} className="rounded-xl bg-[#171b1f] p-3"><div className="text-xs text-[#9aa0a6]">{label}</div><div className="mt-1 text-xl font-semibold text-white">{value == null ? '—' : `${Number(value).toFixed(1)}${unit}`}</div></div>)}</div> : <div className="mt-4 rounded-xl bg-[#171b1f] p-4 text-sm text-[#9aa0a6]">Collector has not sent a measurement yet.</div>}
+              <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><span className={`h-2.5 w-2.5 rounded-full ${fresh ? 'bg-emerald-400' : 'bg-neutral-600'}`} /><h3 className="text-lg font-medium text-white">{server.hostname}</h3>{server.is_dashboard_host && <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] uppercase tracking-wider text-[#cfcfcf]">This machine</span>}</div><div className="mt-1 text-sm text-[#9aa0a6]">{server.os_info || server.ip_address || 'Waiting for first collector check-in'}{server.cpu_cores ? ` · ${server.cpu_cores} cores` : ''}</div></div>{isAdmin ? <div className="flex flex-wrap items-center gap-2"><label className="flex items-center gap-2 text-xs text-[#9aa0a6]">Check interval<select value={server.check_interval_seconds} onChange={(e) => changeInterval(server, e.target.value)} className="rounded-lg border border-neutral-700 bg-[#111417] px-2 py-1.5 text-sm text-white"><option value="15">15 sec</option><option value="30">30 sec</option><option value="60">1 min</option><option value="300">5 min</option><option value="900">15 min</option></select></label><button type="button" onClick={() => deleteServer(server)} disabled={deletingServerId === server.id} className="rounded-lg border border-red-400/30 bg-red-500/5 px-3 py-1.5 text-xs text-red-300 transition hover:bg-red-500/10 disabled:opacity-50">{deletingServerId === server.id ? 'Deleting…' : 'Delete server'}</button></div> : <span className="text-xs text-[#9aa0a6]">Checks every {server.check_interval_seconds < 60 ? `${server.check_interval_seconds} sec` : `${Math.round(server.check_interval_seconds / 60)} min`}</span>}</div>
+              {metric ? <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">{[['CPU', metric.cpu_utilization_pct, '%'], ['RAM', metric.ram_pct, '%'], [fullest ? `Disk · ${fullest.mount}` : 'Disk', fullest?.used_pct, '%'], ['Load (1m)', metric.load_1m, '']].map(([label, value, unit]) => <div key={label} className="rounded-xl bg-[#171b1f] p-3"><div className="truncate text-xs text-[#9aa0a6]" title={label}>{label}</div><div className="mt-1 text-xl font-semibold text-white">{value == null ? '—' : `${Number(value).toFixed(1)}${unit}`}</div></div>)}</div> : <div className="mt-4 rounded-xl bg-[#171b1f] p-4 text-sm text-[#9aa0a6]">Collector has not sent a measurement yet.</div>}
+              {metric && <StorageBars mounts={mounts} thresholds={overview.disk_thresholds} />}
               <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-xs text-[#7f8589]"><span>Last check: {server.last_seen_at ? new Date(server.last_seen_at).toLocaleString() : 'Never'}</span><span>{server.containers.length} containers</span></div>
               {server.containers.length > 0 && <ContainerTable server={server} />}
             </article>
@@ -848,6 +925,8 @@ const TREND_Y_TICKS = [100, 90, 80, 70, 60, 50, 40, 30, 20, 10, 0]
 const trendY = (percent) => 3 + (100 - Math.max(0, Math.min(100, Number(percent) || 0))) * 0.94
 
 function MetricTrend({ title, color, value, points, times }) {
+  // Used in url(#…), so keep only characters that are safe there (titles like "Disk usage (/)" aren't).
+  const fillId = `fill-${title.replace(/[^a-zA-Z0-9]+/g, '-')}`
   const chartPoints = points.map((point, index) => `${points.length > 1 ? (index / (points.length - 1)) * 320 : 320},${trendY(point)}`).join(' ')
   const areaPoints = points.length ? `0,${trendY(0)} ${chartPoints} 320,${trendY(0)}` : ''
   return (
@@ -858,7 +937,7 @@ function MetricTrend({ title, color, value, points, times }) {
           {TREND_Y_TICKS.filter((tick) => tick % 20 === 0).map((tick) => <span key={tick} className="absolute right-0 -translate-y-1/2 leading-none" style={{ top: `${trendY(tick)}%` }}>{tick}%</span>)}
         </div>
         <div className="min-w-0 flex-1">
-          {points.length > 1 ? <svg viewBox="0 0 320 100" preserveAspectRatio="none" className="h-full w-full" role="img" aria-label={`${title} recent trend`}><defs><linearGradient id={`fill-${title.replaceAll(' ', '-')}`} x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity="0.28"/><stop offset="100%" stopColor={color} stopOpacity="0"/></linearGradient></defs>{TREND_Y_TICKS.map((tick) => <line key={tick} x1="0" x2="320" y1={trendY(tick)} y2={trendY(tick)} stroke="#ffffff" strokeOpacity={tick % 20 === 0 ? 0.12 : 0.05} strokeWidth="1" vectorEffect="non-scaling-stroke" />)}<polygon points={areaPoints} fill={`url(#fill-${title.replaceAll(' ', '-')})`}/><polyline points={chartPoints} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke"/></svg> : <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-neutral-800 text-xs text-[#7f8589]">Trend appears as live samples arrive</div>}
+          {points.length > 1 ? <svg viewBox="0 0 320 100" preserveAspectRatio="none" className="h-full w-full" role="img" aria-label={`${title} recent trend`}><defs><linearGradient id={fillId} x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity="0.28"/><stop offset="100%" stopColor={color} stopOpacity="0"/></linearGradient></defs>{TREND_Y_TICKS.map((tick) => <line key={tick} x1="0" x2="320" y1={trendY(tick)} y2={trendY(tick)} stroke="#ffffff" strokeOpacity={tick % 20 === 0 ? 0.12 : 0.05} strokeWidth="1" vectorEffect="non-scaling-stroke" />)}<polygon points={areaPoints} fill={`url(#${fillId})`}/><polyline points={chartPoints} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke"/></svg> : <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-neutral-800 text-xs text-[#7f8589]">Trend appears as live samples arrive</div>}
         </div>
       </div>
       <div className="mt-2 flex justify-between pl-10 text-[10px] text-[#7f8589]"><span>{times[0] ? new Date(times[0]).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Waiting for data'}</span><span>{times.at(-1) ? new Date(times.at(-1)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}</span></div>

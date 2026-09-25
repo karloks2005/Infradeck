@@ -101,6 +101,8 @@ class Server(Base):
     collector_token_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True)
     # Stable host identity reported by self-enrolling collectors, so a reinstall maps back to the same server.
     machine_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    # The machine running the dashboard itself, as reported by the collector in its compose stack.
+    is_dashboard_host: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
@@ -152,6 +154,22 @@ class HostMetric(Base):
     net_bytes_sent_mb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     net_bytes_recv_mb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     system_uptime_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+
+class MountMetric(Base):
+    """Usage of one filesystem at one check-in; shares its time with that check-in's HostMetric."""
+
+    __tablename__ = "mount_metrics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), index=True, nullable=False)
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True, nullable=False)
+    mount: Mapped[str] = mapped_column(String(255), nullable=False)
+    fs_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    total_gb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    used_gb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    used_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    inodes_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
 
 class ContainerMetric(Base):

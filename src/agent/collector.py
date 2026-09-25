@@ -69,6 +69,69 @@ def _network_totals() -> tuple[int, int]:
     return sent, received
 
 
+# Filesystems worth reporting: anything backed by a block device, plus these pooled/network ones.
+NON_DEVICE_FS_TYPES = {"zfs", "nfs", "nfs4", "cifs", "smb3", "fuse.mergerfs", "fuse.sshfs"}
+SKIPPED_FS_TYPES = {"squashfs", "overlay", "tmpfs", "devtmpfs"}
+SKIPPED_MOUNT_PREFIXES = ("/proc", "/sys", "/dev", "/run", "/snap", "/var/snap", "/var/lib/docker", "/var/lib/containerd", "/var/lib/kubelet")
+
+
+def _decode_mount_path(path: str) -> str:
+    """/proc mounts escapes spaces, tabs, newlines and backslashes as octal."""
+    for escaped, char in (("\\040", " "), ("\\011", "\t"), ("\\012", "\n"), ("\\134", "\\")):
+        path = path.replace(escaped, char)
+    return path
+
+
+def _mount_entries() -> list[tuple[str, str, str]]:
+    """(source, mount point, fs type) as the host sees them."""
+    # PID 1's table is the host's; "self" would be this container's own mounts.
+    for candidate in (HOST_PROC / "1/mounts", HOST_PROC / "self/mounts"):
+        try:
+            lines = candidate.read_text().splitlines()
+        except OSError:
+            continue
+        return [(fields[0], _decode_mount_path(fields[1]), fields[2]) for fields in (line.split() for line in lines) if len(fields) >= 3]
+    return []
+
+
+def collect_mounts() -> list[dict[str, Any]]:
+    """Usage of every real filesystem on the host, one entry per device."""
+    by_device: dict[tuple[str, int], dict[str, Any]] = {}
+    for source, mount, fs_type in _mount_entries():
+        if fs_type in SKIPPED_FS_TYPES or not (source.startswith("/dev/") or fs_type in NON_DEVICE_FS_TYPES):
+            continue
+        if mount != "/" and mount.startswith(SKIPPED_MOUNT_PREFIXES):
+            continue
+        local_path = HOST_ROOT / mount.lstrip("/")
+        # A mount made after the collector started is only an empty directory here; skip it rather
+        # than report the parent filesystem under its name.
+        if mount != "/" and not os.path.ismount(local_path):
+            continue
+        try:
+            stats = os.statvfs(local_path)
+        except OSError:
+            continue
+        total = stats.f_blocks * stats.f_frsize
+        if not total:
+            continue
+        used = total - stats.f_bfree * stats.f_frsize
+        # Space available to non-root users is what fills up, so percentages use it like `df` does.
+        usable = used + stats.f_bavail * stats.f_frsize
+        entry = {
+            "mount": mount[:255],
+            "fs_type": fs_type[:64],
+            "total_gb": round(total / GiB, 2),
+            "used_gb": round(used / GiB, 2),
+            "used_pct": round(100 * used / usable, 2) if usable else 0,
+            "inodes_pct": round(100 * (stats.f_files - stats.f_ffree) / stats.f_files, 2) if stats.f_files else None,
+        }
+        # Bind mounts and btrfs subvolumes show the same device several times; keep its shortest path.
+        key = (source, total)
+        if key not in by_device or len(mount) < len(by_device[key]["mount"]):
+            by_device[key] = entry
+    return sorted(by_device.values(), key=lambda entry: entry["mount"])
+
+
 def collect_host() -> tuple[dict[str, Any], dict[str, Any]]:
     before_total, before_idle = _cpu_times()
     time.sleep(0.15)
@@ -79,9 +142,10 @@ def collect_host() -> tuple[dict[str, Any], dict[str, Any]]:
     disk = os.statvfs(HOST_ROOT)
     inode_total = disk.f_files
     inode_pct = (100 * (inode_total - disk.f_ffree) / inode_total) if inode_total else None
-    disk_total = disk.f_blocks * disk.f_frsize
-    disk_free = disk.f_bavail * disk.f_frsize
-    disk_pct = (100 * (disk_total - disk_free) / disk_total) if disk_total else 0
+    disk_used = (disk.f_blocks - disk.f_bfree) * disk.f_frsize
+    disk_usable = disk_used + disk.f_bavail * disk.f_frsize
+    # Same formula as `df` and the per-mount figures.
+    disk_pct = (100 * disk_used / disk_usable) if disk_usable else 0
     try:
         loads = os.getloadavg()
     except (AttributeError, OSError):
@@ -97,6 +161,7 @@ def collect_host() -> tuple[dict[str, Any], dict[str, Any]]:
         "net_bytes_sent_mb": round(sent / MiB, 3),
         "net_bytes_recv_mb": round(received / MiB, 3),
         "system_uptime_seconds": round(uptime, 1),
+        "mounts": collect_mounts(),
     }
     server = {
         "hostname": _host_hostname(),
@@ -104,6 +169,9 @@ def collect_host() -> tuple[dict[str, Any], dict[str, Any]]:
         "cpu_cores": _host_cpu_cores(),
         "total_ram_gb": round(_memory_total_gb(), 3),
     }
+    # Set only on the collector in the dashboard's own compose stack; the dashboard's top charts follow it.
+    if os.getenv("HOMELAB_DASHBOARD_HOST", "").lower() in {"1", "true", "yes"}:
+        server["dashboard_host"] = True
     return server, host
 
 

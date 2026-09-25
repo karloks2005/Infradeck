@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func
 
 from .alerts import CONTAINER_RULE_PREFIX, CRITICAL, WARNING
-from .models import ContainerMetric, HostMetric
+from .models import ContainerMetric, HostMetric, MountMetric
 
 HOST_RULE_PREFIX = "host:"
 
@@ -66,44 +66,74 @@ def _level(value: float | None, warning: float, critical: float | None) -> int:
     return 1 if value >= warning else 0
 
 
+def _fire_level(values: list, warning: float, critical: float | None, sustained: int, active: bool) -> int:
+    """Alert level for a metric given its recent values, newest first."""
+    levels = [_level(value, warning, critical) for value in values]
+    # Opening an alert, or escalating it to critical, needs every recent check-in to breach;
+    # an open alert stays open while the latest check-in still breaches.
+    sustained_level = min(levels) if len(levels) >= sustained else 0
+    return max(sustained_level, min(levels[0], 1)) if active and levels else sustained_level
+
+
+def _escape(text: str) -> str:
+    return text.replace("{", "{{").replace("}", "}}")
+
+
+def _gb(value: float | None) -> str:
+    if value is None:
+        return "?"
+    return f"{value / 1024:.1f} TB" if value >= 1024 else f"{value:.0f} GB"
+
+
 def host_rules(db, server, thresholds: dict, active_keys: set[str]) -> dict[str, tuple[str, str, str]]:
-    """Evaluate the host rules against the server's most recent check-ins (newest first)."""
+    """Evaluate the host rules against the server's most recent check-ins."""
     sustained = thresholds["sustained_checks"]
     samples = db.query(HostMetric).filter(HostMetric.server_id == server.id).order_by(HostMetric.time.desc(), HostMetric.id.desc()).limit(sustained).all()
     if not samples:
         return {}
+    # Titles are format strings for the latest value, so escape braces in names we put into them.
+    host = _escape(server.hostname)
     cores = server.cpu_cores or None
 
     def load_per_core(sample):
         return sample.load_5m / cores if cores and sample.load_5m is not None else None
 
-    checks = (
-        # (rule, value getter, warning, critical, title, description)
-        ("disk", lambda s: s.disk_usage_pct, thresholds["disk_warning_pct"], thresholds["disk_critical_pct"],
-         "Disk usage on {host} is {value:.0f}%", "The root filesystem is {value:.1f}% full. Free up space before it fills completely."),
-        ("inodes", lambda s: s.disk_inodes_pct, thresholds["inodes_warning_pct"], thresholds["inodes_critical_pct"],
-         "Inode usage on {host} is {value:.0f}%", "{value:.1f}% of inodes on the root filesystem are used. Many small files (caches, logs, mail queues) are the usual cause."),
-        ("memory", lambda s: s.ram_pct, thresholds["memory_warning_pct"], thresholds["memory_critical_pct"],
-         "Memory usage on {host} is {value:.0f}%", "{value:.1f}% of RAM is in use. Check the containers and processes using the most memory."),
-        ("swap", lambda s: s.swap_pct, thresholds["swap_warning_pct"], None,
-         "Swap usage on {host} is {value:.0f}%", "{value:.1f}% of swap has been in use for several check-ins, an early sign of memory pressure."),
-        ("load", load_per_core, thresholds["load_warning_per_core"], thresholds["load_critical_per_core"],
-         "Load on {host} is {value:.1f}× its cores", "The 5-minute load average is {value:.2f} per CPU core across " + f"{cores or '?'} cores. Work is queuing for the CPU."),
-    )
+    # (rule key, values newest first, warning, critical, title, description), with {value} filled in from the latest value.
+    checks = [
+        (f"{HOST_RULE_PREFIX}memory", [s.ram_pct for s in samples], thresholds["memory_warning_pct"], thresholds["memory_critical_pct"],
+         f"Memory usage on {host} is {{value:.0f}}%", "{value:.1f}% of RAM is in use. Check the containers and processes using the most memory."),
+        (f"{HOST_RULE_PREFIX}swap", [s.swap_pct for s in samples], thresholds["swap_warning_pct"], None,
+         f"Swap usage on {host} is {{value:.0f}}%", "{value:.1f}% of swap has been in use for several check-ins, an early sign of memory pressure."),
+        (f"{HOST_RULE_PREFIX}load", [load_per_core(s) for s in samples], thresholds["load_warning_per_core"], thresholds["load_critical_per_core"],
+         f"Load on {host} is {{value:.1f}}× its cores", f"The 5-minute load average is {{value:.2f}} per CPU core across {cores or '?'} cores. Work is queuing for the CPU."),
+    ]
+
+    times = [sample.time for sample in samples]
+    by_mount: dict[str, dict] = {}
+    for row in db.query(MountMetric).filter(MountMetric.server_id == server.id, MountMetric.time.in_(times)):
+        by_mount.setdefault(row.mount, {})[row.time] = row
+    current = {mount: rows[times[0]] for mount, rows in by_mount.items() if times[0] in rows}
+    if current:
+        for raw_mount, row in sorted(current.items()):
+            mount = _escape(raw_mount)
+            history = [by_mount[raw_mount].get(time) for time in times]
+            size = f"{_gb(row.used_gb)} of {_gb(row.total_gb)} used"
+            checks.append((f"{HOST_RULE_PREFIX}disk:{raw_mount}", [r.used_pct if r else None for r in history], thresholds["disk_warning_pct"], thresholds["disk_critical_pct"],
+                           f"Disk usage on {host}:{mount} is {{value:.0f}}%", f"{mount} is {{value:.1f}}% full ({size}). Free up space before it fills completely."))
+            checks.append((f"{HOST_RULE_PREFIX}inodes:{raw_mount}", [r.inodes_pct if r else None for r in history], thresholds["inodes_warning_pct"], thresholds["inodes_critical_pct"],
+                           f"Inode usage on {host}:{mount} is {{value:.0f}}%", f"{{value:.1f}}% of inodes on {mount} are used. Many small files (caches, logs, mail queues) are the usual cause."))
+    else:
+        # Collectors from before per-mount reporting only send the root filesystem.
+        checks.append((f"{HOST_RULE_PREFIX}disk:/", [s.disk_usage_pct for s in samples], thresholds["disk_warning_pct"], thresholds["disk_critical_pct"],
+                       f"Disk usage on {host}:/ is {{value:.0f}}%", "/ is {value:.1f}% full. Free up space before it fills completely."))
+        checks.append((f"{HOST_RULE_PREFIX}inodes:/", [s.disk_inodes_pct for s in samples], thresholds["inodes_warning_pct"], thresholds["inodes_critical_pct"],
+                       f"Inode usage on {host}:/ is {{value:.0f}}%", "{value:.1f}% of inodes on / are used. Many small files (caches, logs, mail queues) are the usual cause."))
+
     firing: dict[str, tuple[str, str, str]] = {}
-    for rule, value_of, warning, critical, title, description in checks:
-        key = f"{HOST_RULE_PREFIX}{rule}"
-        latest_value = value_of(samples[0])
-        levels = [_level(value_of(sample), warning, critical) for sample in samples]
-        # Opening an alert, or escalating it to critical, needs every recent check-in to breach.
-        sustained_level = min(levels) if len(samples) >= sustained else 0
-        level = max(sustained_level, min(levels[0], 1)) if key in active_keys else sustained_level
+    for key, values, warning, critical, title, description in checks:
+        level = _fire_level(values, warning, critical, sustained, key in active_keys)
         if level:
-            firing[key] = (
-                CRITICAL if level == 2 else WARNING,
-                title.format(host=server.hostname, value=latest_value),
-                description.format(value=latest_value),
-            )
+            firing[key] = (CRITICAL if level == 2 else WARNING, title.format(value=values[0]), description.format(value=values[0]))
     return firing
 
 

@@ -21,7 +21,7 @@ from sqlalchemy import case, inspect, text
 from .alerts import CONTAINER_RULE_PREFIX, CRITICAL, SERVER_OFFLINE_RULE, SEVERITIES, active_rule_keys, raise_alert, resolve_alerts, sync_alerts
 from .auth import authenticate_user, get_recent_logs, get_user_from_session, logout_user, record_audit_log, register_user
 from .db import SessionLocal, check_database, get_db
-from .models import AppSetting, AuditLog, Base, ChatMessage, ContainerMetric, Conversation, EnrollmentKey, HostMetric, IncidentAlert, PendingCollector, Server, User
+from .models import AppSetting, AuditLog, Base, ChatMessage, ContainerMetric, Conversation, EnrollmentKey, HostMetric, IncidentAlert, MountMetric, PendingCollector, Server, User
 
 from .db import engine
 from .config import (
@@ -151,6 +151,8 @@ def startup_event():
             # duplicated on every check-in with no way to resolve, so close them; the engine re-raises live ones.
             connection.execute(text("UPDATE incident_alerts SET rule_key = :rule WHERE rule_key IS NULL AND description = :description"), {"rule": SERVER_OFFLINE_RULE, "description": OFFLINE_ALERT_DESCRIPTION})
             connection.execute(text("UPDATE incident_alerts SET status = 'resolved', resolved_at = NOW() WHERE rule_key IS NULL AND status = 'active'"))
+            # Disk and inode alerts became per mount; the old keys were for the root filesystem.
+            connection.execute(text("UPDATE incident_alerts SET rule_key = rule_key || ':/' WHERE rule_key IN ('host:disk', 'host:inodes')"))
     if "servers" in inspect(engine).get_table_names():
         columns = {column["name"] for column in inspect(engine).get_columns("servers")}
         if "collector_token_hash" not in columns:
@@ -159,6 +161,9 @@ def startup_event():
         if "machine_id" not in columns:
             with engine.begin() as connection:
                 connection.execute(text("ALTER TABLE servers ADD COLUMN machine_id VARCHAR(64)"))
+        if "is_dashboard_host" not in columns:
+            with engine.begin() as connection:
+                connection.execute(text("ALTER TABLE servers ADD COLUMN is_dashboard_host BOOLEAN NOT NULL DEFAULT FALSE"))
     db = SessionLocal()
     try:
         ensure_admin_exists(db)
@@ -370,6 +375,7 @@ def purge_old_metrics(db, now: datetime | None = None) -> int:
     cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=get_metrics_retention_days(db))
     deleted = db.query(HostMetric).filter(HostMetric.time < cutoff).delete(synchronize_session=False)
     deleted += db.query(ContainerMetric).filter(ContainerMetric.time < cutoff).delete(synchronize_session=False)
+    deleted += db.query(MountMetric).filter(MountMetric.time < cutoff).delete(synchronize_session=False)
     db.commit()
     return deleted
 
@@ -423,7 +429,8 @@ OVERVIEW_ALERT_LIMIT = 50
 def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     # Servers belong to the install: everyone signed in can view them, only admins manage them.
     user = _current_user(session_id, db)
-    servers = db.query(Server).order_by(Server.created_at.desc()).all()
+    # The dashboard's own machine first, then the newest servers.
+    servers = db.query(Server).order_by(Server.is_dashboard_host.desc(), Server.created_at.desc()).all()
     result = []
     for server in servers:
         metric = db.query(HostMetric).filter(HostMetric.server_id == server.id).order_by(HostMetric.time.desc()).first()
@@ -431,12 +438,14 @@ def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_C
         latest = {}
         for item in containers:
             latest.setdefault(item.container_id, item)
+        mounts = db.query(MountMetric).filter(MountMetric.server_id == server.id, MountMetric.time == metric.time).order_by(MountMetric.mount).all() if metric else []
         result.append({
             "id": server.id, "hostname": server.hostname, "ip_address": server.ip_address, "os_info": server.os_info,
             "cpu_cores": server.cpu_cores, "total_ram_gb": server.total_ram_gb,
-            "check_interval_seconds": server.check_interval_seconds,
+            "check_interval_seconds": server.check_interval_seconds, "is_dashboard_host": server.is_dashboard_host,
             "last_seen_at": server.last_seen_at.isoformat() if server.last_seen_at else None,
             "host": ({key: getattr(metric, key) for key in ("time", "cpu_utilization_pct", "load_1m", "load_5m", "load_15m", "ram_used_gb", "ram_available_gb", "ram_pct", "swap_pct", "disk_usage_pct", "disk_inodes_pct", "net_bytes_sent_mb", "net_bytes_recv_mb", "system_uptime_seconds")} if metric else None),
+            "mounts": [{key: getattr(m, key) for key in ("mount", "fs_type", "total_gb", "used_gb", "used_pct", "inodes_pct")} for m in mounts],
             "containers": [{"container_id": c.container_id, "name": c.name, "image": c.image, "status": c.status, "restart_count": c.restart_count, "cpu_pct": c.cpu_pct, "memory_used_mb": c.memory_used_mb, "memory_pct": c.memory_pct, "healthcheck_status": c.healthcheck_status, "time": c.time.isoformat()} for c in latest.values()],
         })
     active_alerts = db.query(IncidentAlert).filter(IncidentAlert.status == "active")
@@ -444,11 +453,28 @@ def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_C
     severity_rank = case({severity: rank for rank, severity in enumerate(reversed(SEVERITIES))}, value=IncidentAlert.severity, else_=len(SEVERITIES))
     alerts = active_alerts.order_by(severity_rank, IncidentAlert.created_at.desc()).limit(OVERVIEW_ALERT_LIMIT).all()
     hostnames = {server.id: server.hostname for server in servers}
+    thresholds = get_alert_thresholds(db)
     pending = visible_pending_collectors(db) if _is_admin(db, user["id"]) else []
     return {
         "servers": result, "pending_collectors": pending, "alert_count": active_alerts.count(),
+        # Lets the dashboard color disk bars the same way the alert rules judge them.
+        "disk_thresholds": {key: thresholds[key] for key in ("disk_warning_pct", "disk_critical_pct", "inodes_warning_pct", "inodes_critical_pct")},
         "alerts": [{"id": a.id, "server_id": a.server_id, "hostname": hostnames.get(a.server_id), "severity": a.severity, "title": a.title, "description": a.description, "created_at": a.created_at.isoformat()} for a in alerts],
     }
+
+
+HISTORY_MAX_MINUTES = 24 * 60
+
+
+@app.get("/monitoring/servers/{server_id}/history")
+def server_history(server_id: int, minutes: int = 30, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    """CPU, memory and root disk usage of one server over the last ``minutes``, oldest first."""
+    _current_user(session_id, db)
+    if not db.query(Server).filter(Server.id == server_id).first():
+        raise HTTPException(status_code=404, detail="Server not found.")
+    since = datetime.now(timezone.utc) - timedelta(minutes=max(1, min(minutes, HISTORY_MAX_MINUTES)))
+    rows = db.query(HostMetric.time, HostMetric.cpu_utilization_pct, HostMetric.ram_pct, HostMetric.disk_usage_pct).filter(HostMetric.server_id == server_id, HostMetric.time >= since).order_by(HostMetric.time).all()
+    return {"server_id": server_id, "samples": [{"time": row.time.isoformat(), "cpu": row.cpu_utilization_pct, "ram": row.ram_pct, "disk": row.disk_usage_pct} for row in rows]}
 
 
 CONTAINER_DETAIL_FIELDS = (
@@ -729,6 +755,7 @@ def delete_monitored_server(server_id: int, session_id: Annotated[str | None, Co
 
     db.query(HostMetric).filter(HostMetric.server_id == server.id).delete(synchronize_session=False)
     db.query(ContainerMetric).filter(ContainerMetric.server_id == server.id).delete(synchronize_session=False)
+    db.query(MountMetric).filter(MountMetric.server_id == server.id).delete(synchronize_session=False)
     db.query(IncidentAlert).filter(IncidentAlert.server_id == server.id).delete(synchronize_session=False)
     db.query(PendingCollector).filter(PendingCollector.approved_server_id == server.id).delete(synchronize_session=False)
     db.delete(server)
@@ -763,8 +790,17 @@ def ingest_metrics(payload: MetricsIngestRequest, authorization: Annotated[str |
     for field in ("hostname", "ip_address", "os_info", "cpu_cores", "total_ram_gb"):
         if field in payload.server and payload.server[field] is not None:
             setattr(server, field, payload.server[field])
+    # Only one server can be the dashboard's own machine; the latest collector to claim it wins.
+    server.is_dashboard_host = payload.server.get("dashboard_host") is True
+    if server.is_dashboard_host:
+        db.query(Server).filter(Server.id != server.id, Server.is_dashboard_host.is_(True)).update({"is_dashboard_host": False}, synchronize_session=False)
     now = datetime.now(timezone.utc)
     db.add(HostMetric(server_id=server.id, time=now, **{k: v for k, v in payload.host.items() if k in HostMetric.__table__.columns.keys() and k not in {"id", "server_id", "time"}}))
+    mounts = payload.host.get("mounts")
+    for mount in mounts if isinstance(mounts, list) else []:
+        if isinstance(mount, dict) and isinstance(mount.get("mount"), str) and mount["mount"]:
+            allowed = {k: v for k, v in mount.items() if k in MountMetric.__table__.columns.keys() and k not in {"id", "server_id", "time"}}
+            db.add(MountMetric(server_id=server.id, time=now, **allowed))
     containers = [c for c in payload.containers if c.get("container_id") and c.get("status")]
     for container in containers:
         allowed = {k: v for k, v in container.items() if k in ContainerMetric.__table__.columns.keys() and k not in {"id", "server_id", "time"}}
