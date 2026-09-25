@@ -140,10 +140,71 @@ function getRiskStyles(risk, role) {
   return map[risk] || map.neutral
 }
 
+function MobileTopBar({ user, onLogout }) {
+  const [menuOpen, setMenuOpen] = useState(false)
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const close = (event) => { if (event.key === 'Escape') setMenuOpen(false) }
+    window.addEventListener('keydown', close)
+    return () => window.removeEventListener('keydown', close)
+  }, [menuOpen])
+
+  return (
+    <header className="sticky top-0 z-30 border-b border-white/5 bg-[#0d1013]/85 pt-[env(safe-area-inset-top)] backdrop-blur-xl lg:hidden">
+      <div className="flex h-14 items-center justify-between px-4">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-linear-to-br from-white to-[#cfcfcf] text-xs font-bold text-slate-950">H</div>
+          <span className="text-sm font-medium text-[#cfcfcf]">Homie</span>
+        </div>
+        {user && (
+          <div className="relative">
+            <button type="button" onClick={() => setMenuOpen((open) => !open)} aria-expanded={menuOpen} aria-haspopup="menu" aria-label="Account menu" className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm font-medium text-white transition active:bg-white/10">
+              {(user.name || user.email || '?').trim().charAt(0).toUpperCase()}
+            </button>
+            {menuOpen && <>
+              <button type="button" aria-label="Close account menu" onClick={() => setMenuOpen(false)} className="fixed inset-0 z-10 cursor-default" />
+              <div role="menu" className="glass-panel absolute right-0 z-20 mt-2 w-64 rounded-2xl p-3">
+                <div className="px-1 text-sm font-medium text-white">{user.name}</div>
+                <div className="truncate px-1 text-xs text-[#9aa0a6]">{user.email}</div>
+                <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onLogout() }} className="mt-3 flex h-11 w-full items-center justify-center rounded-xl border border-red-400/30 bg-red-500/10 text-sm text-red-300 transition active:bg-red-500/20">Logout</button>
+              </div>
+            </>}
+          </div>
+        )}
+      </div>
+    </header>
+  )
+}
+
+function MobileTabBar({ user }) {
+  const items = navigation.filter((item) => !item.adminOnly || user?.role === 'admin')
+  return (
+    <nav aria-label="Main" className="fixed inset-x-0 bottom-0 z-30 border-t border-white/5 bg-[#0d1013]/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl lg:hidden">
+      <div className="mx-auto grid max-w-md" style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}>
+        {items.map((item) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            end={item.to === '/'}
+            className={({ isActive }) => `flex h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium transition ${isActive ? 'text-white' : 'text-[#7f8589] active:text-[#cfcfcf]'}`}
+          >
+            {({ isActive }) => <>
+              <span className={`flex h-7 w-12 items-center justify-center rounded-full text-base transition ${isActive ? 'bg-white/10' : ''}`}>{item.icon}</span>
+              {item.label}
+            </>}
+          </NavLink>
+        ))}
+      </div>
+    </nav>
+  )
+}
+
 function AppShell({ children, user, onLogout, fitViewport = false }) {
   return (
     <div className={`${fitViewport ? 'min-h-screen xl:h-screen xl:overflow-hidden' : 'min-h-screen'} bg-[#0d1013] text-[#e6e7ea]`}>
-      <div className={`${fitViewport ? 'xl:h-full xl:min-h-0' : ''} mx-auto flex max-w-[1700px] gap-6 px-4 py-5 lg:px-6`}>
+      <MobileTopBar user={user} onLogout={onLogout} />
+      <div className={`${fitViewport ? 'xl:h-full xl:min-h-0' : ''} mx-auto flex max-w-[1700px] gap-6 px-3 pt-4 pb-[calc(5.5rem+env(safe-area-inset-bottom))] sm:px-4 lg:px-6 lg:py-5`}>
         <aside className="glass-panel hidden w-72 shrink-0 rounded-3xl p-4 lg:block">
           <div className="mb-6 flex items-center gap-3 px-2">
             <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-linear-to-br from-white to-[#cfcfcf] text-sm font-bold text-slate-950">H</div>
@@ -202,6 +263,7 @@ function AppShell({ children, user, onLogout, fitViewport = false }) {
 
         <main className={`${fitViewport ? 'xl:min-h-0' : ''} min-w-0 flex-1`}>{children}</main>
       </div>
+      <MobileTabBar user={user} />
     </div>
   )
 }
@@ -306,11 +368,11 @@ function LoginPage({ onLogin }) {
         {error && <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</div>}
 
         <div className="flex items-center justify-between text-sm text-[#9aa0a6]">
-          <label className="inline-flex items-center gap-2">
+          <label className="inline-flex items-center gap-2 py-2">
             <input type="checkbox" defaultChecked className="h-4 w-4 rounded border-neutral-600 bg-neutral-800" />
             Remember me
           </label>
-          <a href="#" className="text-emerald-300">Forgot password?</a>
+          <a href="#" className="py-2 text-emerald-300">Forgot password?</a>
         </div>
 
         <button
@@ -498,6 +560,74 @@ function StorageBars({ mounts, thresholds }) {
   )
 }
 
+function readStoredIds(storageKey) {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(storageKey))
+    return new Set(Array.isArray(stored) ? stored : [])
+  } catch {
+    return new Set()
+  }
+}
+
+// A set of ids kept in localStorage; falls back to in-memory state when storage is unavailable.
+function useStoredIdSet(storageKey) {
+  const [ids, setIds] = useState(() => readStoredIds(storageKey))
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify([...ids]))
+    } catch {
+      // Private windows and blocked storage: keep the state for this visit only.
+    }
+  }, [storageKey, ids])
+  const toggle = (id) => setIds((current) => {
+    const next = new Set(current)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    return next
+  })
+  return [ids, toggle, (list) => setIds(new Set(list))]
+}
+
+function Chevron({ open, className = '' }) {
+  return <span aria-hidden="true" className={`inline-block text-[10px] text-[#7f8589] transition-transform ${open ? 'rotate-90' : ''} ${className}`}>▶</span>
+}
+
+const CONTAINER_SEARCH_MIN = 10
+const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })
+
+function ContainerSection({ server, open, onToggle }) {
+  const [query, setQuery] = useState('')
+  const containers = [...server.containers].sort(byName)
+  const count = (predicate) => containers.filter(predicate).length
+  const running = count((c) => c.status === 'running')
+  const unhealthy = count((c) => c.healthcheck_status === 'unhealthy')
+  const restarting = count((c) => c.status === 'restarting')
+  const stopped = count((c) => c.status === 'exited' || c.status === 'dead')
+  const needle = query.trim().toLowerCase()
+  const shown = needle ? containers.filter((c) => `${c.name} ${c.image || ''}`.toLowerCase().includes(needle)) : containers
+
+  return (
+    <div className="mt-4 rounded-xl border border-neutral-800">
+      <button type="button" onClick={onToggle} aria-expanded={open} className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-xl px-3 py-2.5 text-left text-sm transition hover:bg-white/3">
+        <Chevron open={open} />
+        <span className="text-white">Containers <span className="text-[#7f8589]">({containers.length})</span></span>
+        <span className="text-[#9aa0a6]">{running} running</span>
+        {unhealthy > 0 && <span className="text-red-300">{unhealthy} unhealthy</span>}
+        {restarting > 0 && <span className="text-red-300">{restarting} restarting</span>}
+        {stopped > 0 && <span className="text-amber-300">{stopped} stopped</span>}
+      </button>
+      {open && (
+        <div className="border-t border-neutral-800 px-3 pb-2">
+          {containers.length > CONTAINER_SEARCH_MIN && <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter by name or image" aria-label={`Filter containers on ${server.hostname}`} className="mt-3 w-full rounded-lg border border-neutral-800 bg-[#0d1013] px-3 py-1.5 text-sm text-[#cfcfcf] outline-none focus:border-white/30" />}
+          {shown.length ? <ContainerTable serverId={server.id} containers={shown} /> : <p className="py-3 text-sm text-[#9aa0a6]">No containers match “{query.trim()}”.</p>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const HEALTH_CLASSES = { healthy: 'text-[#7f8589]', unhealthy: 'text-red-300', starting: 'text-amber-300' }
+
 const ALERT_STYLES = {
   CRITICAL: { box: 'border-red-400/25 bg-red-500/5', badge: 'bg-red-500/15 text-red-300', title: 'text-red-200' },
   WARNING: { box: 'border-amber-400/20 bg-amber-400/5', badge: 'bg-amber-400/15 text-amber-300', title: 'text-amber-200' },
@@ -556,6 +686,10 @@ const refresh = async () => {
   }, [user?.id]) // <-- Stabilna instanca, okida se samo pri promjeni ID-a
 
   const servers = overview.servers || []
+  // Remembered per browser: which server cards are collapsed and which container lists are open.
+  const [collapsedServers, toggleServer, setCollapsedServers] = useStoredIdSet('homelab.collapsedServers')
+  const [openContainerLists, toggleContainerList] = useStoredIdSet('homelab.openContainerLists')
+  const allCollapsed = servers.length > 0 && servers.every((server) => collapsedServers.has(server.id))
   const dashboardHost = servers.find((server) => server.is_dashboard_host)
   const dashboardHostId = dashboardHost?.id
 
@@ -606,12 +740,12 @@ const refresh = async () => {
           {isAdmin && showConnect && <ConnectServerPanel />}
         </header>
 
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <section className="grid grid-cols-3 gap-2 sm:gap-4">
           {[
             ['Servers online', `${online} / ${servers.length}`, 'Based on last check-in'],
             ['Containers running', String(runningContainers), 'Across monitored servers'],
             ['Active incidents', String(overview.alert_count ?? overview.alerts?.length ?? 0), 'Needs attention'],
-          ].map(([label, value, detail]) => <div key={label} className="glass-panel rounded-[24px] p-5"><div className="text-sm text-[#9aa0a6]">{label}</div><div className="mt-3 text-3xl font-semibold text-white">{value}</div><div className="mt-2 text-xs text-[#7f8589]">{detail}</div></div>)}
+          ].map(([label, value, detail]) => <div key={label} className="glass-panel rounded-2xl p-3 sm:rounded-[24px] sm:p-5"><div className="text-xs leading-4 text-[#9aa0a6] sm:text-sm">{label}</div><div className="mt-2 text-2xl font-semibold text-white sm:mt-3 sm:text-3xl">{value}</div><div className="mt-2 hidden text-xs text-[#7f8589] sm:block">{detail}</div></div>)}
         </section>
 
         <section>
@@ -629,19 +763,34 @@ const refresh = async () => {
         </section>
 
         <section className="glass-panel rounded-[28px] p-5 md:p-6">
-          <div className="mb-4 flex items-center justify-between"><div><div className="text-xs uppercase tracking-[0.2em] text-[#9aa0a6]">Fleet</div><h2 className="mt-1 text-xl font-semibold text-white">Monitored servers</h2></div><span className="text-sm text-[#9aa0a6]">{servers.length} configured</span></div>
+          <div className="mb-4 flex items-center justify-between"><div><div className="text-xs uppercase tracking-[0.2em] text-[#9aa0a6]">Fleet</div><h2 className="mt-1 text-xl font-semibold text-white">Monitored servers</h2></div><div className="flex items-center gap-3"><span className="text-sm text-[#9aa0a6]">{servers.length} configured</span>{servers.length > 1 && <button type="button" onClick={() => setCollapsedServers(allCollapsed ? [] : servers.map((server) => server.id))} className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-[#cfcfcf] transition hover:bg-white/10">{allCollapsed ? 'Expand all' : 'Collapse all'}</button>}</div></div>
           {isAdmin && <PendingServers pending={overview.pending_collectors || []} onChanged={refresh} />}
-          {!servers.length ? <div className="rounded-2xl border border-dashed border-neutral-700 p-8 text-center"><div className="text-lg font-medium text-white">No servers registered</div><p className="mt-2 text-sm text-[#9aa0a6]">{isAdmin ? <>Click <span className="text-white">Connect a server</span> above and run the command on each machine you want to monitor.</> : 'An admin needs to connect a server before it shows up here.'}</p></div> : <div className="space-y-4">{servers.map((server) => {
+          {!servers.length ? <div className="rounded-2xl border border-dashed border-neutral-700 p-8 text-center"><div className="text-lg font-medium text-white">No servers registered</div><p className="mt-2 text-sm text-[#9aa0a6]">{isAdmin ? <>Click <span className="text-white">Connect a server</span> above and run the command on each machine you want to monitor.</> : 'An admin needs to connect a server before it shows up here.'}</p></div> : <div className="space-y-3">{servers.map((server) => {
             const metric = server.host
             const mounts = serverMounts(server)
             const fullest = fullestMount(mounts)
             const fresh = server.last_seen_at && Date.now() - new Date(server.last_seen_at).getTime() < server.check_interval_seconds * 3000
-            return <article key={server.id} className="rounded-2xl border border-neutral-800 bg-[#0d1013]/70 p-4 md:p-5">
-              <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><span className={`h-2.5 w-2.5 rounded-full ${fresh ? 'bg-emerald-400' : 'bg-neutral-600'}`} /><h3 className="text-lg font-medium text-white">{server.hostname}</h3>{server.is_dashboard_host && <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] uppercase tracking-wider text-[#cfcfcf]">This machine</span>}</div><div className="mt-1 text-sm text-[#9aa0a6]">{server.os_info || server.ip_address || 'Waiting for first collector check-in'}{server.cpu_cores ? ` · ${server.cpu_cores} cores` : ''}</div></div>{isAdmin ? <div className="flex flex-wrap items-center gap-2"><label className="flex items-center gap-2 text-xs text-[#9aa0a6]">Check interval<select value={server.check_interval_seconds} onChange={(e) => changeInterval(server, e.target.value)} className="rounded-lg border border-neutral-700 bg-[#111417] px-2 py-1.5 text-sm text-white"><option value="15">15 sec</option><option value="30">30 sec</option><option value="60">1 min</option><option value="300">5 min</option><option value="900">15 min</option></select></label><button type="button" onClick={() => deleteServer(server)} disabled={deletingServerId === server.id} className="rounded-lg border border-red-400/30 bg-red-500/5 px-3 py-1.5 text-xs text-red-300 transition hover:bg-red-500/10 disabled:opacity-50">{deletingServerId === server.id ? 'Deleting…' : 'Delete server'}</button></div> : <span className="text-xs text-[#9aa0a6]">Checks every {server.check_interval_seconds < 60 ? `${server.check_interval_seconds} sec` : `${Math.round(server.check_interval_seconds / 60)} min`}</span>}</div>
-              {metric ? <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">{[['CPU', metric.cpu_utilization_pct, '%'], ['RAM', metric.ram_pct, '%'], [fullest ? `Disk · ${fullest.mount}` : 'Disk', fullest?.used_pct, '%'], ['Load (1m)', metric.load_1m, '']].map(([label, value, unit]) => <div key={label} className="rounded-xl bg-[#171b1f] p-3"><div className="truncate text-xs text-[#9aa0a6]" title={label}>{label}</div><div className="mt-1 text-xl font-semibold text-white">{value == null ? '—' : `${Number(value).toFixed(1)}${unit}`}</div></div>)}</div> : <div className="mt-4 rounded-xl bg-[#171b1f] p-4 text-sm text-[#9aa0a6]">Collector has not sent a measurement yet.</div>}
-              {metric && <StorageBars mounts={mounts} thresholds={overview.disk_thresholds} />}
-              <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-xs text-[#7f8589]"><span>Last check: {server.last_seen_at ? new Date(server.last_seen_at).toLocaleString() : 'Never'}</span><span>{server.containers.length} containers</span></div>
-              {server.containers.length > 0 && <ContainerTable server={server} />}
+            const collapsed = collapsedServers.has(server.id)
+            const alertBadge = server.active_alert_count > 0 && <span className="rounded-full bg-amber-400/15 px-2 py-0.5 text-[10px] font-semibold tracking-wider text-amber-300">{server.active_alert_count} {server.active_alert_count === 1 ? 'incident' : 'incidents'}</span>
+            return <article key={server.id} className={`rounded-2xl border border-neutral-800 bg-[#0d1013]/70 ${collapsed ? 'px-4 py-3 md:px-5' : 'p-4 md:p-5'}`}>
+              <div className={`flex flex-wrap justify-between gap-3 ${collapsed ? 'items-center' : 'items-start'}`}>
+                <button type="button" onClick={() => toggleServer(server.id)} aria-expanded={!collapsed} className="flex min-w-0 max-w-full items-start gap-2 py-1 text-left">
+                  <Chevron open={!collapsed} className="mt-2" />
+                  <span className="min-w-0">
+                    <span className="flex min-w-0 items-center gap-2"><span aria-label={fresh ? 'Online' : 'Offline'} className={`h-2.5 w-2.5 shrink-0 rounded-full ${fresh ? 'bg-emerald-400' : 'bg-neutral-600'}`} /><span className="truncate text-lg font-medium text-white" title={server.hostname}>{server.hostname}</span></span>
+                    {(server.is_dashboard_host || alertBadge) && <span className="mt-1.5 flex flex-wrap items-center gap-2">{server.is_dashboard_host && <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] uppercase tracking-wider text-[#cfcfcf]">This machine</span>}{alertBadge}</span>}
+                    {!collapsed && <span className="mt-1 block text-sm text-[#9aa0a6]">{server.os_info || server.ip_address || 'Waiting for first collector check-in'}{server.cpu_cores ? ` · ${server.cpu_cores} cores` : ''}</span>}
+                  </span>
+                </button>
+                {collapsed ? (metric ? <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-[#9aa0a6]">{[['CPU', metric.cpu_utilization_pct], ['RAM', metric.ram_pct], [fullest ? `Disk ${fullest.mount}` : 'Disk', fullest?.used_pct]].map(([label, value]) => <span key={label} className="whitespace-nowrap">{label} <span className="font-medium text-white">{value == null ? '—' : `${Math.round(value)}%`}</span></span>)}</div> : <span className="text-sm text-[#7f8589]">No measurement yet</span>)
+                  : isAdmin ? <div className="flex flex-wrap items-center gap-2"><label className="flex items-center gap-2 text-xs text-[#9aa0a6]">Check interval<select value={server.check_interval_seconds} onChange={(e) => changeInterval(server, e.target.value)} className="min-h-10 sm:min-h-0 rounded-lg border border-neutral-700 bg-[#111417] px-2 py-1.5 text-sm text-white"><option value="15">15 sec</option><option value="30">30 sec</option><option value="60">1 min</option><option value="300">5 min</option><option value="900">15 min</option></select></label><button type="button" onClick={() => deleteServer(server)} disabled={deletingServerId === server.id} className="min-h-10 sm:min-h-0 rounded-lg border border-red-400/30 bg-red-500/5 px-3 py-1.5 text-xs text-red-300 transition hover:bg-red-500/10 disabled:opacity-50">{deletingServerId === server.id ? 'Deleting…' : 'Delete server'}</button></div> : <span className="text-xs text-[#9aa0a6]">Checks every {server.check_interval_seconds < 60 ? `${server.check_interval_seconds} sec` : `${Math.round(server.check_interval_seconds / 60)} min`}</span>}
+              </div>
+              {!collapsed && <>
+                {metric ? <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">{[['CPU', metric.cpu_utilization_pct, '%'], ['RAM', metric.ram_pct, '%'], [fullest ? `Disk · ${fullest.mount}` : 'Disk', fullest?.used_pct, '%'], ['Load (1m)', metric.load_1m, '']].map(([label, value, unit]) => <div key={label} className="rounded-xl bg-[#171b1f] p-3"><div className="truncate text-xs text-[#9aa0a6]" title={label}>{label}</div><div className="mt-1 text-xl font-semibold text-white">{value == null ? '—' : `${Number(value).toFixed(1)}${unit}`}</div></div>)}</div> : <div className="mt-4 rounded-xl bg-[#171b1f] p-4 text-sm text-[#9aa0a6]">Collector has not sent a measurement yet.</div>}
+                {metric && <StorageBars mounts={mounts} thresholds={overview.disk_thresholds} />}
+                {server.containers.length > 0 && <ContainerSection server={server} open={openContainerLists.has(server.id)} onToggle={() => toggleContainerList(server.id)} />}
+                <div className="mt-3 text-xs text-[#7f8589]">Last check: {server.last_seen_at ? new Date(server.last_seen_at).toLocaleString() : 'Never'}</div>
+              </>}
             </article>
           })}</div>}
         </section>
@@ -787,9 +936,9 @@ function PendingServers({ pending, onChanged }) {
         <div className="font-medium text-white">{item.hostname}</div>
         <div className="mt-0.5 text-xs text-[#9aa0a6]">{[item.ip_address, item.os_info].filter(Boolean).join(' · ')} · code <span className="font-mono text-[#cfcfcf]">{item.pairing_code}</span></div>
       </div>
-      <div className="flex gap-2">
-        <button type="button" onClick={() => act(item, 'approve')} disabled={busyId === item.id} className="rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-slate-950 disabled:opacity-50">{busyId === item.id ? 'Adding…' : 'Add'}</button>
-        {item.status === 'pending' && <button type="button" onClick={() => act(item, 'dismiss')} disabled={busyId === item.id} className="rounded-lg border border-neutral-700 px-3 py-1.5 text-xs text-[#cfcfcf] disabled:opacity-50">Dismiss</button>}
+      <div className="flex w-full gap-2 sm:w-auto">
+        <button type="button" onClick={() => act(item, 'approve')} disabled={busyId === item.id} className="min-h-10 flex-1 rounded-lg bg-white px-3 py-1.5 text-xs sm:min-h-0 sm:flex-none font-medium text-slate-950 disabled:opacity-50">{busyId === item.id ? 'Adding…' : 'Add'}</button>
+        {item.status === 'pending' && <button type="button" onClick={() => act(item, 'dismiss')} disabled={busyId === item.id} className="min-h-10 flex-1 rounded-lg border border-neutral-700 px-3 py-1.5 text-xs sm:min-h-0 sm:flex-none text-[#cfcfcf] disabled:opacity-50">Dismiss</button>}
       </div>
     </div>
   )
@@ -829,16 +978,46 @@ function formatUptime(startedAt) {
   return days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes}m` : `${minutes}m`
 }
 
-function ContainerTable({ server }) {
+function ContainerStatus({ container }) {
+  return <span className="whitespace-nowrap"><span className={container.status === 'running' ? 'text-emerald-300' : container.status === 'restarting' ? 'text-red-300' : 'text-amber-300'}>{container.status}</span>{container.healthcheck_status && <span className={HEALTH_CLASSES[container.healthcheck_status] || 'text-[#7f8589]'}> · {container.healthcheck_status}</span>}</span>
+}
+
+const formatContainerCpu = (c) => (c.cpu_pct == null ? '—' : `${c.cpu_pct}%`)
+const formatContainerMemory = (c) => (c.memory_used_mb == null ? '—' : c.memory_used_mb >= 1024 ? `${(c.memory_used_mb / 1024).toFixed(1)} GB` : `${Math.round(c.memory_used_mb)} MB`)
+
+function ContainerTable({ serverId, containers }) {
   const [expandedId, setExpandedId] = useState(null)
   const toggle = (containerId) => setExpandedId((current) => (current === containerId ? null : containerId))
 
-  return (
-    <div className="mt-4 overflow-x-auto">
+  return <>
+    {/* Phones: one tappable two-line row per container. */}
+    <ul className="divide-y divide-neutral-800 md:hidden">
+      {containers.map((c) => {
+        const expanded = expandedId === c.container_id
+        return (
+          <li key={c.container_id}>
+            <button type="button" onClick={() => toggle(c.container_id)} aria-expanded={expanded} className="flex w-full flex-col gap-1 py-3 text-left">
+              <span className="flex w-full items-center justify-between gap-3">
+                <span className="flex min-w-0 items-center gap-2"><Chevron open={expanded} /><span className="truncate text-sm text-white">{c.name}</span></span>
+                <span className="text-xs"><ContainerStatus container={c} /></span>
+              </span>
+              <span className="flex gap-4 pl-[18px] text-xs text-[#7f8589]">
+                <span>CPU <span className="text-[#cfcfcf]">{formatContainerCpu(c)}</span></span>
+                <span>Mem <span className="text-[#cfcfcf]">{formatContainerMemory(c)}</span></span>
+                <span>Restarts <span className={c.restart_count ? 'text-amber-300' : 'text-[#cfcfcf]'}>{c.restart_count}</span></span>
+              </span>
+            </button>
+            {expanded && <div className="pb-4"><ContainerDetails serverId={serverId} container={c} /></div>}
+          </li>
+        )
+      })}
+    </ul>
+
+    <div className="hidden overflow-x-auto md:block">
       <table className="w-full text-left text-sm">
         <thead className="text-xs uppercase text-[#7f8589]"><tr><th className="py-2">Container</th><th>Status</th><th>CPU</th><th>Memory</th><th>Restarts</th></tr></thead>
         <tbody>
-          {server.containers.map((c) => {
+          {containers.map((c) => {
             const expanded = expandedId === c.container_id
             return [
               <tr
@@ -849,15 +1028,15 @@ function ContainerTable({ server }) {
                 aria-expanded={expanded}
                 className={`cursor-pointer border-t border-neutral-800 text-[#cfcfcf] transition hover:bg-white/3 focus:outline-none focus-visible:bg-white/5 ${expanded ? 'bg-white/3' : ''}`}
               >
-                <td className="py-2"><span className={`mr-2 inline-block text-[10px] text-[#7f8589] transition-transform ${expanded ? 'rotate-90' : ''}`}>▶</span>{c.name}</td>
-                <td className={c.status === 'running' ? 'text-emerald-300' : 'text-amber-300'}>{c.status}</td>
-                <td>{c.cpu_pct == null ? '—' : `${c.cpu_pct}%`}</td>
-                <td>{c.memory_used_mb == null ? '—' : `${c.memory_used_mb} MB`}</td>
+                <td className="py-2"><Chevron open={expanded} className="mr-2" />{c.name}</td>
+                <td><ContainerStatus container={c} /></td>
+                <td>{formatContainerCpu(c)}</td>
+                <td>{formatContainerMemory(c)}</td>
                 <td>{c.restart_count}</td>
               </tr>,
               expanded && (
                 <tr key={`${c.container_id}-details`}>
-                  <td colSpan={5} className="pb-4"><ContainerDetails serverId={server.id} container={c} /></td>
+                  <td colSpan={5} className="pb-4"><ContainerDetails serverId={serverId} container={c} /></td>
                 </tr>
               ),
             ]
@@ -865,7 +1044,7 @@ function ContainerTable({ server }) {
         </tbody>
       </table>
     </div>
-  )
+  </>
 }
 
 function ContainerDetails({ serverId, container }) {
@@ -1016,7 +1195,7 @@ function IncidentCard({ incident, expanded, onToggle }) {
 
       {expanded && (
         <div className="px-4 pb-4 pl-9">
-          <p className="text-sm leading-6 text-[#bcbcbc]">{incident.details}</p>
+          <p className="text-sm leading-6 break-words text-[#bcbcbc]">{incident.details}</p>
           <div className="mt-4 rounded-2xl border border-cyan-300/15 bg-cyan-300/5 p-4">
             <div className="text-xs uppercase tracking-[0.18em] text-cyan-200">Recommended actions</div>
             {incident.status === 'analyzing' ? (
@@ -1029,7 +1208,7 @@ function IncidentCard({ incident, expanded, onToggle }) {
                 {incident.actions.map((action, index) => (
                   <li key={action} className="flex gap-3">
                     <span className="font-mono text-cyan-300">0{index + 1}</span>
-                    <span>{action}</span>
+                    <span className="min-w-0 break-words">{action}</span>
                   </li>
                 ))}
               </ol>
@@ -1062,7 +1241,7 @@ function AgentPage({ user, onLogout }) {
           </p>
         </header>
 
-        <div className="grid gap-5 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] xl:grid-rows-[minmax(0,1fr)]">
+        <div className="grid grid-cols-1 gap-5 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] xl:grid-rows-[minmax(0,1fr)]">
           <section className="glass-panel flex flex-col rounded-[28px] p-5 md:p-6 xl:min-h-0">
             <div className="mb-4 flex items-end justify-between gap-3">
               <div>
@@ -1167,8 +1346,8 @@ const adminTabs = [
 const formatDateTime = (value) => new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
 
 const inputClass = 'w-full rounded-2xl border border-[#1f2326] bg-[#0d1013]/80 px-4 py-2.5 text-sm text-[#cfcfcf] outline-none transition focus:border-white/30'
-const secondaryButtonClass = 'rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-[#cfcfcf] transition hover:bg-white/10'
-const dangerButtonClass = 'rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-1.5 text-xs text-red-300 transition hover:bg-red-500/15'
+const secondaryButtonClass = 'min-h-10 sm:min-h-0 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-[#cfcfcf] transition hover:bg-white/10'
+const dangerButtonClass = 'min-h-10 sm:min-h-0 rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-1.5 text-xs text-red-300 transition hover:bg-red-500/15'
 
 function AdminSection({ title, description, action, children }) {
   return (
@@ -1204,7 +1383,7 @@ function Toggle({ label, description, defaultOn = false, checked, onChange, disa
         aria-label={label}
         disabled={disabled}
         onClick={() => setOn((value) => !value)}
-        className={`relative h-6 w-11 shrink-0 rounded-full transition disabled:cursor-not-allowed disabled:opacity-50 ${on ? 'bg-emerald-500/70' : 'bg-white/10'}`}
+        className={`relative h-6 w-11 shrink-0 rounded-full transition before:absolute before:-inset-2.5 before:content-[''] disabled:cursor-not-allowed disabled:opacity-50 ${on ? 'bg-emerald-500/70' : 'bg-white/10'}`}
       >
         <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition-all ${on ? 'left-6' : 'left-1'}`} />
       </button>
@@ -1232,7 +1411,26 @@ function AdminUsersTab() {
       </AdminSection>
 
       <AdminSection title="Users" description="Change roles, disable accounts or sign someone out everywhere.">
-        <div className="overflow-x-auto">
+        <ul className="space-y-2 md:hidden">
+          {placeholderAdmin.users.map((account) => (
+            <li key={account.id} className={`rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 p-4 ${account.active ? '' : 'opacity-60'}`}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0"><div className="truncate text-white">{account.name}</div><div className="truncate text-xs text-[#9aa0a6]">{account.email}</div></div>
+                <span className="inline-flex shrink-0 items-center gap-2 text-xs text-[#bcbcbc]"><StatusDot ok={account.active} />{account.active ? 'Active' : 'Disabled'}</span>
+              </div>
+              <div className="mt-1 text-xs text-[#7f8589]">Last login {formatDateTime(account.lastLogin)}</div>
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                <select defaultValue={account.role} aria-label={`Role of ${account.name}`} className="h-10 min-w-0 rounded-xl border border-[#1f2326] bg-[#0d1013] px-3 text-sm text-[#cfcfcf]">
+                  <option value="admin">Admin</option>
+                  <option value="user">User</option>
+                </select>
+                <button type="button" className={`${secondaryButtonClass} h-10`} disabled={!account.sessions}>Sign out ({account.sessions})</button>
+                <button type="button" className={`${account.active ? dangerButtonClass : secondaryButtonClass} h-10`}>{account.active ? 'Disable' : 'Enable'}</button>
+              </div>
+            </li>
+          ))}
+        </ul>
+        <div className="hidden overflow-x-auto md:block">
           <table className="w-full min-w-160 text-left text-sm">
             <thead className="text-xs uppercase tracking-wider text-[#7f8589]">
               <tr><th className="pb-3 font-medium">User</th><th className="pb-3 font-medium">Role</th><th className="pb-3 font-medium">Last login</th><th className="pb-3 font-medium">Status</th><th className="pb-3 text-right font-medium">Actions</th></tr>
@@ -1270,10 +1468,12 @@ function AdminServersTab() {
     <div className="space-y-5">
       <div className="grid gap-5 xl:grid-cols-2">
         <AdminSection title="Enrollment key" description="Servers that connect with this key are approved automatically.">
-          <div className="flex gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row">
             <input readOnly value="hlk_••••••••••••••••3f9a" aria-label="Enrollment key" className={`${inputClass} font-mono`} />
-            <button type="button" className={secondaryButtonClass}>Regenerate</button>
-            <button type="button" className={dangerButtonClass}>Revoke</button>
+            <div className="flex gap-2">
+              <button type="button" className={`${secondaryButtonClass} h-10 flex-1 sm:h-auto sm:flex-none`}>Regenerate</button>
+              <button type="button" className={`${dangerButtonClass} h-10 flex-1 sm:h-auto sm:flex-none`}>Revoke</button>
+            </div>
           </div>
         </AdminSection>
 
@@ -1282,7 +1482,7 @@ function AdminServersTab() {
             {placeholderAdmin.pending.map((request) => (
               <div key={request.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-400/20 bg-amber-400/5 px-4 py-3">
                 <div><div className="text-sm text-white">{request.hostname}</div><div className="text-xs text-[#9aa0a6]">{request.ip} · {formatDateTime(request.requestedAt)}</div></div>
-                <div className="flex gap-2"><button type="button" className={secondaryButtonClass}>Approve</button><button type="button" className={dangerButtonClass}>Dismiss</button></div>
+                <div className="flex w-full gap-2 sm:w-auto"><button type="button" className={`${secondaryButtonClass} h-10 flex-1 sm:h-auto`}>Approve</button><button type="button" className={`${dangerButtonClass} h-10 flex-1 sm:h-auto`}>Dismiss</button></div>
               </div>
             ))}
           </div>
@@ -1290,7 +1490,24 @@ function AdminServersTab() {
       </div>
 
       <AdminSection title="Servers" description="Every monitored machine, its collector and how often it reports.">
-        <div className="overflow-x-auto">
+        <ul className="space-y-2 md:hidden">
+          {placeholderAdmin.servers.map((server) => (
+            <li key={server.id} className="rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <span className="inline-flex min-w-0 items-center gap-2 text-white"><StatusDot ok={server.online} /><span className="truncate">{server.name}</span></span>
+                <span className="shrink-0 font-mono text-xs text-[#9aa0a6]">v{server.collectorVersion}</span>
+              </div>
+              <div className="mt-1 text-xs text-[#7f8589]">Last seen {formatDateTime(server.lastSeen)}</div>
+              <div className="mt-3 flex items-center gap-2">
+                <select defaultValue={server.interval} aria-label={`Check interval of ${server.name}`} className="h-10 flex-1 rounded-xl border border-[#1f2326] bg-[#0d1013] px-3 text-sm text-[#cfcfcf]">
+                  {[15, 30, 60, 120, 300].map((seconds) => <option key={seconds} value={seconds}>Every {seconds} s</option>)}
+                </select>
+                <button type="button" className={`${dangerButtonClass} h-10`}>Remove</button>
+              </div>
+            </li>
+          ))}
+        </ul>
+        <div className="hidden overflow-x-auto md:block">
           <table className="w-full min-w-160 text-left text-sm">
             <thead className="text-xs uppercase tracking-wider text-[#7f8589]">
               <tr><th className="pb-3 font-medium">Server</th><th className="pb-3 font-medium">Last seen</th><th className="pb-3 font-medium">Collector</th><th className="pb-3 font-medium">Interval</th><th className="pb-3 text-right font-medium">Actions</th></tr>
@@ -1410,10 +1627,13 @@ const thresholdRows = [
   ['Load per CPU core', '5-minute average', 'load_warning_per_core', 'load_critical_per_core', '×', 0.1],
 ]
 
-const thresholdInputClass = 'w-20 rounded-xl border border-[#1f2326] bg-[#0d1013] px-2 py-1 text-right text-white outline-none focus:border-white/30 disabled:opacity-50'
+const thresholdInputClass = 'h-10 sm:h-8 w-20 rounded-xl border border-[#1f2326] bg-[#0d1013] px-2 py-1 text-right text-white outline-none focus:border-white/30 disabled:opacity-50'
 
-function ThresholdInput({ label, value, step, onChange, disabled }) {
-  return <input type="number" aria-label={label} value={value ?? ''} step={step} min={0} disabled={disabled} onChange={(event) => onChange(event.target.value === '' ? '' : Number(event.target.value))} className={thresholdInputClass} />
+function ThresholdInput({ label, value, step, onChange, disabled, caption }) {
+  const input = <input type="number" inputMode="decimal" aria-label={label} value={value ?? ''} step={step} min={0} disabled={disabled} onChange={(event) => onChange(event.target.value === '' ? '' : Number(event.target.value))} className={thresholdInputClass} />
+  if (!caption) return input
+  // On phones the Warning/Critical column headings are hidden, so each field carries its own.
+  return <span className="flex flex-col gap-1"><span className={`text-[10px] uppercase tracking-wider sm:hidden ${caption === 'Warning' ? 'text-amber-300/80' : 'text-red-300/80'}`}>{caption}</span>{input}</span>
 }
 
 function IncidentThresholdsSection() {
@@ -1463,24 +1683,24 @@ function IncidentThresholdsSection() {
       }
     >
       <div className="space-y-2">
-        <div className="flex justify-end gap-2 px-4 text-[10px] uppercase tracking-wider text-[#7f8589]"><span className="w-20 text-right text-amber-300/80">Warning</span><span className="w-20 text-right text-red-300/80">Critical</span><span className="w-4" /></div>
+        <div className="hidden justify-end gap-2 px-4 text-[10px] uppercase tracking-wider text-[#7f8589] sm:flex"><span className="w-20 text-right text-amber-300/80">Warning</span><span className="w-20 text-right text-red-300/80">Critical</span><span className="w-4" /></div>
         {thresholdRows.map(([label, hint, warningKey, criticalKey, unit, step]) => (
-          <div key={label} className="flex items-center justify-between gap-4 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-2.5 text-sm">
+          <div key={label} className="flex flex-col gap-3 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:py-2.5">
             <span><span className="text-[#bcbcbc]">{label}</span>{hint && <span className="block text-xs text-[#7f8589]">{hint}</span>}</span>
-            <span className="flex items-center gap-2">
-              <ThresholdInput label={`${label} warning`} value={values?.[warningKey]} step={step} onChange={set(warningKey)} disabled={loading} />
-              {criticalKey ? <ThresholdInput label={`${label} critical`} value={values?.[criticalKey]} step={step} onChange={set(criticalKey)} disabled={loading} /> : <span className="w-20 text-right text-[#7f8589]">—</span>}
-              <span className="w-4 text-xs text-[#9aa0a6]">{unit}</span>
+            <span className="flex items-end gap-2 sm:items-center">
+              <ThresholdInput label={`${label} warning`} caption="Warning" value={values?.[warningKey]} step={step} onChange={set(warningKey)} disabled={loading} />
+              {criticalKey ? <ThresholdInput label={`${label} critical`} caption="Critical" value={values?.[criticalKey]} step={step} onChange={set(criticalKey)} disabled={loading} /> : <span className="hidden w-20 text-right text-[#7f8589] sm:inline">—</span>}
+              <span className="w-4 pb-2 text-xs text-[#9aa0a6] sm:pb-0">{unit}</span>
             </span>
           </div>
         ))}
-        <label className="flex items-center justify-between gap-4 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-2.5 text-sm">
+        <label className="flex flex-col gap-3 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:py-2.5">
           <span><span className="text-[#bcbcbc]">Check-ins in a row</span><span className="block text-xs text-[#7f8589]">How long a host metric must stay over before an incident opens</span></span>
           <ThresholdInput label="Check-ins in a row" value={values?.sustained_checks} step={1} onChange={set('sustained_checks')} disabled={loading} />
         </label>
-        <div className="flex items-center justify-between gap-4 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-2.5 text-sm">
-          <span><span className="text-[#bcbcbc]">Container restart loop</span><span className="block text-xs text-[#7f8589]">Critical incident</span></span>
-          <span className="flex items-center gap-2 text-xs text-[#9aa0a6]">
+        <div className="flex flex-col gap-3 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:py-2.5">
+          <span className="shrink-0"><span className="text-[#bcbcbc]">Container restart loop</span><span className="block text-xs text-[#7f8589]">Critical incident</span></span>
+          <span className="flex flex-wrap items-center gap-2 text-xs text-[#9aa0a6]">
             <ThresholdInput label="Restarts" value={values?.restart_loop_count} step={1} onChange={set('restart_loop_count')} disabled={loading} />restarts in
             <ThresholdInput label="Restart window in minutes" value={values?.restart_loop_window_minutes} step={1} onChange={set('restart_loop_window_minutes')} disabled={loading} />min
           </span>
@@ -1619,7 +1839,7 @@ function AdminPage({ user, onLogout }) {
           <div className="text-xs uppercase tracking-[0.22em] text-[#9aa0a6]">Configuration</div>
           <h1 className="mt-1 text-3xl font-semibold text-white">Admin</h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-[#9aa0a6]">Manage users, servers, the agent and system settings. Showing placeholder data for now; changes are not saved.</p>
-          <div role="tablist" aria-label="Admin sections" className="mt-5 flex flex-wrap gap-2">
+          <div role="tablist" aria-label="Admin sections" className="no-scrollbar -mx-5 mt-5 flex gap-2 overflow-x-auto px-5 md:mx-0 md:flex-wrap md:px-0">
             {adminTabs.map((tab) => (
               <button
                 key={tab.id}
@@ -1627,7 +1847,7 @@ function AdminPage({ user, onLogout }) {
                 role="tab"
                 aria-selected={activeTab === tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`rounded-2xl px-4 py-2 text-sm transition ${activeTab === tab.id ? 'bg-[#171b1f] text-white ring-1 ring-white/10' : 'text-[#bcbcbc] hover:bg-[#111417] hover:text-white'}`}
+                className={`shrink-0 rounded-2xl px-4 py-2.5 text-sm transition ${activeTab === tab.id ? 'bg-[#171b1f] text-white ring-1 ring-white/10' : 'text-[#bcbcbc] hover:bg-[#111417] hover:text-white'}`}
               >
                 {tab.label}
               </button>

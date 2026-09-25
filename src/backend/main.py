@@ -16,7 +16,7 @@ from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Requ
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import case, inspect, text
+from sqlalchemy import case, func, inspect, text
 
 from .alerts import CONTAINER_RULE_PREFIX, CRITICAL, SERVER_OFFLINE_RULE, SEVERITIES, active_rule_keys, raise_alert, resolve_alerts, sync_alerts
 from .auth import authenticate_user, get_recent_logs, get_user_from_session, logout_user, record_audit_log, register_user
@@ -431,18 +431,17 @@ def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_C
     user = _current_user(session_id, db)
     # The dashboard's own machine first, then the newest servers.
     servers = db.query(Server).order_by(Server.is_dashboard_host.desc(), Server.created_at.desc()).all()
+    alert_counts = dict(db.query(IncidentAlert.server_id, func.count()).filter(IncidentAlert.status == "active").group_by(IncidentAlert.server_id).all())
     result = []
     for server in servers:
         metric = db.query(HostMetric).filter(HostMetric.server_id == server.id).order_by(HostMetric.time.desc()).first()
-        containers = db.query(ContainerMetric).filter(ContainerMetric.server_id == server.id).order_by(ContainerMetric.time.desc()).all()
-        latest = {}
-        for item in containers:
-            latest.setdefault(item.container_id, item)
+        latest = {item.container_id: item for item in latest_containers(db, server.id, metric.time if metric else None)}
         mounts = db.query(MountMetric).filter(MountMetric.server_id == server.id, MountMetric.time == metric.time).order_by(MountMetric.mount).all() if metric else []
         result.append({
             "id": server.id, "hostname": server.hostname, "ip_address": server.ip_address, "os_info": server.os_info,
             "cpu_cores": server.cpu_cores, "total_ram_gb": server.total_ram_gb,
             "check_interval_seconds": server.check_interval_seconds, "is_dashboard_host": server.is_dashboard_host,
+            "active_alert_count": alert_counts.get(server.id, 0),
             "last_seen_at": server.last_seen_at.isoformat() if server.last_seen_at else None,
             "host": ({key: getattr(metric, key) for key in ("time", "cpu_utilization_pct", "load_1m", "load_5m", "load_15m", "ram_used_gb", "ram_available_gb", "ram_pct", "swap_pct", "disk_usage_pct", "disk_inodes_pct", "net_bytes_sent_mb", "net_bytes_recv_mb", "system_uptime_seconds")} if metric else None),
             "mounts": [{key: getattr(m, key) for key in ("mount", "fs_type", "total_gb", "used_gb", "used_pct", "inodes_pct")} for m in mounts],
@@ -461,6 +460,16 @@ def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_C
         "disk_thresholds": {key: thresholds[key] for key in ("disk_warning_pct", "disk_critical_pct", "inodes_warning_pct", "inodes_critical_pct")},
         "alerts": [{"id": a.id, "server_id": a.server_id, "hostname": hostnames.get(a.server_id), "severity": a.severity, "title": a.title, "description": a.description, "created_at": a.created_at.isoformat()} for a in alerts],
     }
+
+
+def latest_containers(db, server_id: int, host_time: datetime | None) -> list[ContainerMetric]:
+    """The containers reported in the server's latest check-in, not every container seen within retention.
+
+    A check-in saves its host and container rows with one shared timestamp.
+    """
+    if host_time is None:
+        return []
+    return db.query(ContainerMetric).filter(ContainerMetric.server_id == server_id, ContainerMetric.time == host_time).all()
 
 
 HISTORY_MAX_MINUTES = 24 * 60

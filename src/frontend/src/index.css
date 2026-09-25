@@ -38,6 +38,23 @@ textarea {
   font: inherit;
 }
 
+/* iOS Safari zooms the page when a focused field's text is under 16px. */
+@media (max-width: 639px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* Horizontal pill rows (admin tabs) scroll instead of wrapping on small screens. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 .glass-panel {
   background: rgba(17, 20, 23, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.08);

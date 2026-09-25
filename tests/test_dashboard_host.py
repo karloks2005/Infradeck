@@ -74,3 +74,40 @@ def test_collector_sends_flag_only_when_configured(monkeypatch):
 
     monkeypatch.delenv("HOMELAB_DASHBOARD_HOST")
     assert "dashboard_host" not in collector.collect_host()[0]
+
+
+def _ingest_containers(db, server_id, names):
+    containers = [{"container_id": f"id-{name}", "name": name, "status": "running"} for name in names]
+    main.ingest_metrics(main.MetricsIngestRequest(server_id=server_id, host={"cpu_utilization_pct": 1}, containers=containers), authorization=f"Bearer token-{server_id}", session_id=None, db=db)
+
+
+def _overview_server(db, server_id):
+    return next(s for s in main.monitoring_overview(session_id="s", db=db)["servers"] if s["id"] == server_id)
+
+
+def test_overview_lists_only_containers_from_latest_check_in(db):
+    _ingest_containers(db, 2, ["web", "old"])
+    _ingest_containers(db, 2, ["web", "db"])
+
+    assert sorted(c["name"] for c in _overview_server(db, 2)["containers"]) == ["db", "web"]
+
+
+def test_overview_lists_no_containers_when_latest_check_in_had_none(db):
+    _ingest_containers(db, 2, ["web"])
+    db.query(main.ContainerMetric).update({"time": datetime.now(timezone.utc) - timedelta(minutes=5)})
+    db.commit()
+    _ingest_containers(db, 2, [])
+
+    assert _overview_server(db, 2)["containers"] == []
+
+
+def test_overview_counts_active_alerts_per_server(db):
+    from src.backend import alerts
+    alerts.raise_alert(db, 2, "a", alerts.WARNING, "t", "d")
+    alerts.raise_alert(db, 2, "b", alerts.WARNING, "t", "d")
+    alerts.raise_alert(db, 3, "c", alerts.WARNING, "t", "d")
+    alerts.resolve_alerts(db, 3, ["c"])
+    db.commit()
+
+    assert _overview_server(db, 2)["active_alert_count"] == 2
+    assert _overview_server(db, 3)["active_alert_count"] == 0
