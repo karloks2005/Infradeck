@@ -132,11 +132,13 @@ def register_user(db, redis_client, *, name: str, email: str, password: str):
         raise ValueError("An account with that email already exists.")
 
     password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    # The first account sets up the install, so it becomes the admin.
+    is_first_user = db.query(User).count() == 0
     user = User(
         name=normalized_name,
         email=normalized_email,
         password_hash=password_hash,
-        role="user",
+        role="admin" if is_first_user else "user",
         is_active=True,
     )
     db.add(user)

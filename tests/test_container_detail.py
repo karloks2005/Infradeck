@@ -19,7 +19,7 @@ def _session():
     Base.metadata.create_all(engine)
     session = sessionmaker(bind=engine)()
     session.add_all([
-        User(id=1, name="Owner", email="owner@example.com", password_hash="x"),
+        User(id=1, name="Owner", email="owner@example.com", password_hash="x", role="admin"),
         User(id=2, name="Other", email="other@example.com", password_hash="x"),
     ])
     session.add(Server(id=10, owner_id=1, hostname="nas"))
@@ -42,12 +42,19 @@ def test_container_detail_returns_latest_and_chronological_history(monkeypatch):
     assert [sample["cpu_pct"] for sample in result["history"]] == [0.0, 1.0, 2.0]
 
 
-def test_container_detail_hides_other_users_servers(monkeypatch):
+def test_container_detail_is_visible_to_regular_users(monkeypatch):
     session = _session()
     monkeypatch.setattr(main, "_current_user", lambda session_id, db: {"id": 2})
 
+    assert main.container_detail(10, "abc", limit=60, session_id="s", db=session)["name"] == "web"
+
+
+def test_container_detail_returns_404_for_unknown_server(monkeypatch):
+    session = _session()
+    monkeypatch.setattr(main, "_current_user", lambda session_id, db: {"id": 1})
+
     with pytest.raises(HTTPException) as exc:
-        main.container_detail(10, "abc", limit=60, session_id="s", db=session)
+        main.container_detail(99, "abc", limit=60, session_id="s", db=session)
     assert exc.value.status_code == 404
 
 

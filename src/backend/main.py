@@ -19,7 +19,7 @@ from sqlalchemy import inspect, text
 
 from .auth import authenticate_user, get_recent_logs, get_user_from_session, logout_user, record_audit_log, register_user
 from .db import SessionLocal, check_database, get_db
-from .models import AuditLog, Base, ChatMessage, ContainerMetric, Conversation, EnrollmentKey, HostMetric, IncidentAlert, PendingCollector, Server, User
+from .models import AppSetting, AuditLog, Base, ChatMessage, ContainerMetric, Conversation, EnrollmentKey, HostMetric, IncidentAlert, PendingCollector, Server, User
 
 from .db import engine
 from .config import (
@@ -75,6 +75,12 @@ class CollectorRegisterRequest(BaseModel):
     hostname: str
     machine_id: str | None = None
     os_info: str | None = None
+
+
+class AdminSettingsRequest(BaseModel):
+    # Both optional so the admin page can save one setting at a time.
+    metrics_retention_days: int | None = None
+    agent_chat_enabled: bool | None = None
 
 
 class MetricsIngestRequest(BaseModel):
@@ -142,6 +148,11 @@ def startup_event():
         if "machine_id" not in columns:
             with engine.begin() as connection:
                 connection.execute(text("ALTER TABLE servers ADD COLUMN machine_id VARCHAR(64)"))
+    db = SessionLocal()
+    try:
+        ensure_admin_exists(db)
+    finally:
+        db.close()
     threading.Thread(target=_offline_watch_loop, name="offline-watch", daemon=True).start()
     try:
         redis_client.ping()
@@ -249,7 +260,11 @@ def auth_me(
     user = get_user_from_session(redis_client, session_id)
     if not user:
         raise HTTPException(status_code=401, detail="Session is invalid or expired.")
-    return {"user": user}
+    # Read role and status from the database so admin changes apply without a new login.
+    account = db.query(User).filter(User.id == user["id"]).first()
+    if not account or not account.is_active:
+        raise HTTPException(status_code=401, detail="Session is invalid or expired.")
+    return {"user": {**user, "name": account.name, "email": account.email, "role": account.role}}
 
 
 @app.post("/auth/logout")
@@ -271,10 +286,109 @@ def _current_user(session_id, db):
     return user
 
 
+def _is_admin(db, user_id: int) -> bool:
+    account = db.query(User).filter(User.id == user_id).first()
+    return bool(account and account.is_active and account.role == "admin")
+
+
+def _require_admin(session_id, db):
+    """Like _current_user, but checks the role in the database rather than the session."""
+    user = _current_user(session_id, db)
+    if not _is_admin(db, user["id"]):
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    return user
+
+
+def ensure_admin_exists(db) -> None:
+    """Installs from before roles were enforced have no admin: promote the oldest account."""
+    if db.query(User).filter(User.role == "admin").first():
+        return
+    oldest = db.query(User).order_by(User.id).first()
+    if oldest:
+        oldest.role = "admin"
+        db.commit()
+
+
+METRICS_RETENTION_KEY = "metrics_retention_days"
+DEFAULT_METRICS_RETENTION_DAYS = 30
+MIN_METRICS_RETENTION_DAYS = 1
+MAX_METRICS_RETENTION_DAYS = 3650
+
+
+AGENT_CHAT_ENABLED_KEY = "agent_chat_enabled"
+
+
+def _set_setting(db, key: str, value: str) -> None:
+    setting = db.get(AppSetting, key)
+    if setting:
+        setting.value = value
+    else:
+        db.add(AppSetting(key=key, value=value))
+
+
+def get_metrics_retention_days(db) -> int:
+    setting = db.get(AppSetting, METRICS_RETENTION_KEY)
+    try:
+        return int(setting.value) if setting else DEFAULT_METRICS_RETENTION_DAYS
+    except ValueError:
+        return DEFAULT_METRICS_RETENTION_DAYS
+
+
+def is_agent_chat_enabled(db) -> bool:
+    setting = db.get(AppSetting, AGENT_CHAT_ENABLED_KEY)
+    return setting is None or setting.value == "true"
+
+
+def _admin_settings(db) -> dict:
+    return {"metrics_retention_days": get_metrics_retention_days(db), "agent_chat_enabled": is_agent_chat_enabled(db)}
+
+
+def purge_old_metrics(db, now: datetime | None = None) -> int:
+    """Delete host and container samples older than the retention period."""
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=get_metrics_retention_days(db))
+    deleted = db.query(HostMetric).filter(HostMetric.time < cutoff).delete(synchronize_session=False)
+    deleted += db.query(ContainerMetric).filter(ContainerMetric.time < cutoff).delete(synchronize_session=False)
+    db.commit()
+    return deleted
+
+
+@app.get("/admin/settings")
+def get_admin_settings(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    _require_admin(session_id, db)
+    return _admin_settings(db)
+
+
+@app.put("/admin/settings")
+def update_admin_settings(payload: AdminSettingsRequest, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    user = _require_admin(session_id, db)
+    changes = []
+    days = payload.metrics_retention_days
+    if days is not None:
+        if not MIN_METRICS_RETENTION_DAYS <= days <= MAX_METRICS_RETENTION_DAYS:
+            raise HTTPException(status_code=400, detail=f"Retention must be between {MIN_METRICS_RETENTION_DAYS} and {MAX_METRICS_RETENTION_DAYS} days.")
+        _set_setting(db, METRICS_RETENTION_KEY, str(days))
+        changes.append(f"Changed metrics retention to {days} days")
+    if payload.agent_chat_enabled is not None:
+        _set_setting(db, AGENT_CHAT_ENABLED_KEY, "true" if payload.agent_chat_enabled else "false")
+        changes.append(f"{'Enabled' if payload.agent_chat_enabled else 'Disabled'} chat with the agent")
+    db.commit()
+    for change in changes:
+        record_audit_log(db, user_id=user["id"], level="INFO", message=change, source="admin")
+    return _admin_settings(db)
+
+
+@app.get("/agent/config")
+def agent_config(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    """What the Agent page needs to know about the agent; readable by every signed-in user."""
+    _current_user(session_id, db)
+    return {"chat_enabled": is_agent_chat_enabled(db)}
+
+
 @app.get("/monitoring/overview")
 def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    # Servers belong to the install: everyone signed in can view them, only admins manage them.
     user = _current_user(session_id, db)
-    servers = db.query(Server).filter(Server.owner_id == user["id"]).order_by(Server.created_at.desc()).all()
+    servers = db.query(Server).order_by(Server.created_at.desc()).all()
     result = []
     for server in servers:
         metric = db.query(HostMetric).filter(HostMetric.server_id == server.id).order_by(HostMetric.time.desc()).first()
@@ -290,8 +404,9 @@ def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_C
             "host": ({key: getattr(metric, key) for key in ("time", "cpu_utilization_pct", "load_1m", "load_5m", "load_15m", "ram_used_gb", "ram_available_gb", "ram_pct", "swap_pct", "disk_usage_pct", "disk_inodes_pct", "net_bytes_sent_mb", "net_bytes_recv_mb", "system_uptime_seconds")} if metric else None),
             "containers": [{"container_id": c.container_id, "name": c.name, "image": c.image, "status": c.status, "restart_count": c.restart_count, "cpu_pct": c.cpu_pct, "memory_used_mb": c.memory_used_mb, "memory_pct": c.memory_pct, "healthcheck_status": c.healthcheck_status, "time": c.time.isoformat()} for c in latest.values()],
         })
-    alerts = db.query(IncidentAlert).join(Server).filter(Server.owner_id == user["id"], IncidentAlert.status == "active").order_by(IncidentAlert.created_at.desc()).limit(20).all()
-    return {"servers": result, "pending_collectors": visible_pending_collectors(db), "alerts": [{"id": a.id, "server_id": a.server_id, "severity": a.severity, "title": a.title, "description": a.description, "created_at": a.created_at.isoformat()} for a in alerts]}
+    alerts = db.query(IncidentAlert).filter(IncidentAlert.status == "active").order_by(IncidentAlert.created_at.desc()).limit(20).all()
+    pending = visible_pending_collectors(db) if _is_admin(db, user["id"]) else []
+    return {"servers": result, "pending_collectors": pending, "alerts": [{"id": a.id, "server_id": a.server_id, "severity": a.severity, "title": a.title, "description": a.description, "created_at": a.created_at.isoformat()} for a in alerts]}
 
 
 CONTAINER_DETAIL_FIELDS = (
@@ -302,8 +417,8 @@ CONTAINER_DETAIL_FIELDS = (
 
 @app.get("/monitoring/servers/{server_id}/containers/{container_id}")
 def container_detail(server_id: int, container_id: str, limit: int = 60, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
-    user = _current_user(session_id, db)
-    server = db.query(Server).filter(Server.id == server_id, Server.owner_id == user["id"]).first()
+    _current_user(session_id, db)
+    server = db.query(Server).filter(Server.id == server_id).first()
     if not server:
         raise HTTPException(status_code=404, detail="Server not found.")
     samples = (
@@ -335,7 +450,7 @@ def _hash_secret(value: str) -> str:
 
 @app.get("/monitoring/enrollment-key")
 def get_enrollment_key(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
-    user = _current_user(session_id, db)
+    user = _require_admin(session_id, db)
     key = db.query(EnrollmentKey).filter(EnrollmentKey.owner_id == user["id"]).first()
     return {"exists": key is not None, "created_at": key.created_at.isoformat() if key else None}
 
@@ -343,7 +458,7 @@ def get_enrollment_key(session_id: Annotated[str | None, Cookie(alias=SESSION_CO
 @app.post("/monitoring/enrollment-key")
 def rotate_enrollment_key(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     """Create or replace the account's enrollment key. The plaintext is returned only once."""
-    user = _current_user(session_id, db)
+    user = _require_admin(session_id, db)
     plaintext = f"hlk_{secrets.token_urlsafe(32)}"
     key = db.query(EnrollmentKey).filter(EnrollmentKey.owner_id == user["id"]).first()
     if key:
@@ -358,7 +473,7 @@ def rotate_enrollment_key(session_id: Annotated[str | None, Cookie(alias=SESSION
 
 @app.delete("/monitoring/enrollment-key")
 def revoke_enrollment_key(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
-    user = _current_user(session_id, db)
+    user = _require_admin(session_id, db)
     db.query(EnrollmentKey).filter(EnrollmentKey.owner_id == user["id"]).delete()
     db.commit()
     return {"status": "revoked"}
@@ -374,6 +489,8 @@ def enroll_collector(payload: EnrollRequest, db=Depends(get_db)):
     key = db.query(EnrollmentKey).filter(EnrollmentKey.key_hash == _hash_secret(payload.enroll_key.strip())).first()
     if not key:
         raise HTTPException(status_code=401, detail="Enrollment key is invalid or has been rotated.")
+    if not _is_admin(db, key.owner_id):
+        raise HTTPException(status_code=403, detail="Enrollment key belongs to an account that can no longer add servers.")
     hostname = payload.hostname.strip()[:255]
     machine_id = (payload.machine_id or "").strip()[:64] or None
     if not hostname:
@@ -381,7 +498,7 @@ def enroll_collector(payload: EnrollRequest, db=Depends(get_db)):
 
     server = None
     if machine_id:
-        server = db.query(Server).filter(Server.owner_id == key.owner_id, Server.machine_id == machine_id).first()
+        server = db.query(Server).filter(Server.machine_id == machine_id).first()
     if not server:
         server = Server(owner_id=key.owner_id, hostname=hostname, machine_id=machine_id)
         db.add(server)
@@ -465,11 +582,11 @@ def _pending_for_user(pending_id: int, db) -> PendingCollector:
 
 @app.post("/monitoring/pending-collectors/{pending_id}/approve")
 def approve_pending_collector(pending_id: int, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
-    user = _current_user(session_id, db)
+    user = _require_admin(session_id, db)
     pending = _pending_for_user(pending_id, db)
     server = None
     if pending.machine_id:
-        server = db.query(Server).filter(Server.owner_id == user["id"], Server.machine_id == pending.machine_id).first()
+        server = db.query(Server).filter(Server.machine_id == pending.machine_id).first()
     if not server:
         server = Server(owner_id=user["id"], hostname=pending.hostname, machine_id=pending.machine_id, ip_address=pending.ip_address, os_info=pending.os_info)
         db.add(server)
@@ -482,7 +599,7 @@ def approve_pending_collector(pending_id: int, session_id: Annotated[str | None,
 
 @app.post("/monitoring/pending-collectors/{pending_id}/dismiss")
 def dismiss_pending_collector(pending_id: int, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
-    _current_user(session_id, db)
+    _require_admin(session_id, db)
     pending = _pending_for_user(pending_id, db)
     pending.status = "dismissed"
     db.commit()
@@ -531,13 +648,20 @@ def mark_offline_servers(db, now: datetime | None = None) -> int:
     return raised
 
 
+METRICS_PURGE_INTERVAL_SECONDS = 3600
+
+
 def _offline_watch_loop() -> None:
+    last_metrics_purge: float | None = None
     while True:
         time.sleep(60)
         db = SessionLocal()
         try:
             mark_offline_servers(db)
             purge_stale_pending(db)
+            if last_metrics_purge is None or time.monotonic() - last_metrics_purge >= METRICS_PURGE_INTERVAL_SECONDS:
+                purge_old_metrics(db)
+                last_metrics_purge = time.monotonic()
         except Exception as exc:  # keep the watcher alive through transient DB errors
             print(f"Offline watch failed: {type(exc).__name__}: {exc}", flush=True)
         finally:
@@ -546,7 +670,7 @@ def _offline_watch_loop() -> None:
 
 @app.post("/monitoring/servers")
 def add_monitored_server(payload: ServerRequest, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
-    user = _current_user(session_id, db)
+    user = _require_admin(session_id, db)
     if not payload.hostname.strip() or not 15 <= payload.check_interval_seconds <= 86400:
         raise HTTPException(status_code=400, detail="Hostname is required and interval must be between 15 and 86400 seconds.")
     token = secrets.token_urlsafe(32)
@@ -558,8 +682,8 @@ def add_monitored_server(payload: ServerRequest, session_id: Annotated[str | Non
 
 @app.delete("/monitoring/servers/{server_id}")
 def delete_monitored_server(server_id: int, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
-    user = _current_user(session_id, db)
-    server = db.query(Server).filter(Server.id == server_id, Server.owner_id == user["id"]).first()
+    _require_admin(session_id, db)
+    server = db.query(Server).filter(Server.id == server_id).first()
     if not server:
         raise HTTPException(status_code=404, detail="Server not found.")
 
@@ -574,8 +698,8 @@ def delete_monitored_server(server_id: int, session_id: Annotated[str | None, Co
 
 @app.patch("/monitoring/servers/{server_id}/interval")
 def update_check_interval(server_id: int, payload: dict, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
-    user = _current_user(session_id, db)
-    server = db.query(Server).filter(Server.id == server_id, Server.owner_id == user["id"]).first()
+    _require_admin(session_id, db)
+    server = db.query(Server).filter(Server.id == server_id).first()
     interval = payload.get("check_interval_seconds")
     if not server:
         raise HTTPException(status_code=404, detail="Server not found.")
@@ -595,9 +719,7 @@ def ingest_metrics(payload: MetricsIngestRequest, authorization: Annotated[str |
     if server.collector_token_hash and token_hash and hmac.compare_digest(server.collector_token_hash, token_hash):
         pass
     else:
-        user = _current_user(session_id, db)
-        if server.owner_id != user["id"]:
-            raise HTTPException(status_code=404, detail="Server not found.")
+        _require_admin(session_id, db)
     for field in ("hostname", "ip_address", "os_info", "cpu_cores", "total_ram_gb"):
         if field in payload.server and payload.server[field] is not None:
             setattr(server, field, payload.server[field])
@@ -726,6 +848,8 @@ def agent_chat(payload: AgentChatRequest, session_id: Annotated[str | None, Cook
     user = get_user_from_session(redis_client, session_id)
     if not user:
         raise HTTPException(status_code=401, detail="Session is invalid or expired.")
+    if not is_agent_chat_enabled(db):
+        raise HTTPException(status_code=403, detail="Chat with the agent has been turned off by an admin.")
 
     message = payload.message.strip()
     if not message:

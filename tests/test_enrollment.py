@@ -19,7 +19,7 @@ def db(monkeypatch):
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
     session = sessionmaker(bind=engine)()
-    session.add(User(id=1, name="Owner", email="owner@example.com", password_hash="x"))
+    session.add(User(id=1, name="Owner", email="owner@example.com", password_hash="x", role="admin"))
     session.commit()
     monkeypatch.setattr(main, "_current_user", lambda session_id, db: {"id": 1})
     return session

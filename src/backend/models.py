@@ -31,6 +31,21 @@ class User(Base):
     )
 
 
+class AppSetting(Base):
+    """Admin-editable settings stored as key/value pairs."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 

@@ -46,8 +46,8 @@ function parseAgentMessage(text) {
 
 const navigation = [
   { label: 'Dashboard', to: '/', icon: '▣' },
-  { label: 'Agent reports', to: '/reports', icon: '◷' },
-  { label: 'Admin', to: '/admin', icon: '⚙' },
+  { label: 'Agent', to: '/agent', icon: '◷' },
+  { label: 'Admin', to: '/admin', icon: '⚙', adminOnly: true },
 ]
 
 const conversationThreads = []
@@ -142,8 +142,8 @@ function getRiskStyles(risk, role) {
 
 function AppShell({ children, user, onLogout, fitViewport = false }) {
   return (
-    <div className={`${fitViewport ? 'h-screen overflow-hidden' : 'min-h-screen'} bg-[#0d1013] text-[#e6e7ea]`}>
-      <div className={`${fitViewport ? 'h-full min-h-0' : ''} mx-auto flex max-w-[1700px] gap-6 px-4 py-5 lg:px-6`}>
+    <div className={`${fitViewport ? 'min-h-screen xl:h-screen xl:overflow-hidden' : 'min-h-screen'} bg-[#0d1013] text-[#e6e7ea]`}>
+      <div className={`${fitViewport ? 'xl:h-full xl:min-h-0' : ''} mx-auto flex max-w-[1700px] gap-6 px-4 py-5 lg:px-6`}>
         <aside className="glass-panel hidden w-72 shrink-0 rounded-3xl p-4 lg:block">
           <div className="mb-6 flex items-center gap-3 px-2">
             <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-linear-to-br from-white to-[#cfcfcf] text-sm font-bold text-slate-950">H</div>
@@ -154,7 +154,7 @@ function AppShell({ children, user, onLogout, fitViewport = false }) {
           </div>
 
           <nav className="space-y-2">
-            {navigation.map((item) => (
+            {navigation.filter((item) => !item.adminOnly || user?.role === 'admin').map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
@@ -200,7 +200,7 @@ function AppShell({ children, user, onLogout, fitViewport = false }) {
           </div>
         </aside>
 
-        <main className={`${fitViewport ? 'min-h-0' : ''} flex-1`}>{children}</main>
+        <main className={`${fitViewport ? 'xl:min-h-0' : ''} min-w-0 flex-1`}>{children}</main>
       </div>
     </div>
   )
@@ -514,16 +514,19 @@ const refresh = async () => {
   const online = servers.filter((server) => server.last_seen_at && Date.now() - new Date(server.last_seen_at).getTime() < server.check_interval_seconds * 3000).length
   const runningContainers = servers.reduce((sum, server) => sum + server.containers.filter((container) => container.status === 'running').length, 0)
 
+  // Regular users get a read-only view; the backend enforces the same rules.
+  const isAdmin = user?.role === 'admin'
+
   return (
     <AppShell user={user} onLogout={onLogout}>
-      <div className="custom-scroll flex min-h-0 flex-col gap-5 overflow-y-auto pr-1">
+      <div className="flex flex-col gap-5">
         <header className="glass-panel rounded-[28px] p-5 md:p-6">
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div><div className="text-xs uppercase tracking-[0.22em] text-[#9aa0a6]">Infrastructure overview</div><h1 className="mt-1 text-3xl font-semibold text-white">Dashboard</h1><p className="mt-2 text-sm text-[#9aa0a6]">Live host and container health · updated every 15 seconds.</p></div>
-            <button type="button" onClick={() => setShowConnect((current) => !current)} aria-expanded={showConnect} className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-slate-950">{showConnect ? 'Close' : 'Connect a server'}</button>
+            {isAdmin && <button type="button" onClick={() => setShowConnect((current) => !current)} aria-expanded={showConnect} className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-slate-950">{showConnect ? 'Close' : 'Connect a server'}</button>}
           </div>
           {error && <div className="mt-4 rounded-xl border border-amber-400/30 bg-amber-400/5 p-3 text-sm text-amber-200">{error}</div>}
-          {showConnect && <ConnectServerPanel />}
+          {isAdmin && showConnect && <ConnectServerPanel />}
         </header>
 
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -547,12 +550,12 @@ const refresh = async () => {
 
         <section className="glass-panel rounded-[28px] p-5 md:p-6">
           <div className="mb-4 flex items-center justify-between"><div><div className="text-xs uppercase tracking-[0.2em] text-[#9aa0a6]">Fleet</div><h2 className="mt-1 text-xl font-semibold text-white">Monitored servers</h2></div><span className="text-sm text-[#9aa0a6]">{servers.length} configured</span></div>
-          <PendingServers pending={overview.pending_collectors || []} onChanged={refresh} />
-          {!servers.length ? <div className="rounded-2xl border border-dashed border-neutral-700 p-8 text-center"><div className="text-lg font-medium text-white">No servers registered</div><p className="mt-2 text-sm text-[#9aa0a6]">Click <span className="text-white">Connect a server</span> above and run the command on each machine you want to monitor.</p></div> : <div className="space-y-4">{servers.map((server) => {
+          {isAdmin && <PendingServers pending={overview.pending_collectors || []} onChanged={refresh} />}
+          {!servers.length ? <div className="rounded-2xl border border-dashed border-neutral-700 p-8 text-center"><div className="text-lg font-medium text-white">No servers registered</div><p className="mt-2 text-sm text-[#9aa0a6]">{isAdmin ? <>Click <span className="text-white">Connect a server</span> above and run the command on each machine you want to monitor.</> : 'An admin needs to connect a server before it shows up here.'}</p></div> : <div className="space-y-4">{servers.map((server) => {
             const metric = server.host
             const fresh = server.last_seen_at && Date.now() - new Date(server.last_seen_at).getTime() < server.check_interval_seconds * 3000
             return <article key={server.id} className="rounded-2xl border border-neutral-800 bg-[#0d1013]/70 p-4 md:p-5">
-              <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><span className={`h-2.5 w-2.5 rounded-full ${fresh ? 'bg-emerald-400' : 'bg-neutral-600'}`} /><h3 className="text-lg font-medium text-white">{server.hostname}</h3></div><div className="mt-1 text-sm text-[#9aa0a6]">{server.os_info || server.ip_address || 'Waiting for first collector check-in'}{server.cpu_cores ? ` · ${server.cpu_cores} cores` : ''}</div></div><div className="flex flex-wrap items-center gap-2"><label className="flex items-center gap-2 text-xs text-[#9aa0a6]">Check interval<select value={server.check_interval_seconds} onChange={(e) => changeInterval(server, e.target.value)} className="rounded-lg border border-neutral-700 bg-[#111417] px-2 py-1.5 text-sm text-white"><option value="15">15 sec</option><option value="30">30 sec</option><option value="60">1 min</option><option value="300">5 min</option><option value="900">15 min</option></select></label><button type="button" onClick={() => deleteServer(server)} disabled={deletingServerId === server.id} className="rounded-lg border border-red-400/30 bg-red-500/5 px-3 py-1.5 text-xs text-red-300 transition hover:bg-red-500/10 disabled:opacity-50">{deletingServerId === server.id ? 'Deleting…' : 'Delete server'}</button></div></div>
+              <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><span className={`h-2.5 w-2.5 rounded-full ${fresh ? 'bg-emerald-400' : 'bg-neutral-600'}`} /><h3 className="text-lg font-medium text-white">{server.hostname}</h3></div><div className="mt-1 text-sm text-[#9aa0a6]">{server.os_info || server.ip_address || 'Waiting for first collector check-in'}{server.cpu_cores ? ` · ${server.cpu_cores} cores` : ''}</div></div>{isAdmin ? <div className="flex flex-wrap items-center gap-2"><label className="flex items-center gap-2 text-xs text-[#9aa0a6]">Check interval<select value={server.check_interval_seconds} onChange={(e) => changeInterval(server, e.target.value)} className="rounded-lg border border-neutral-700 bg-[#111417] px-2 py-1.5 text-sm text-white"><option value="15">15 sec</option><option value="30">30 sec</option><option value="60">1 min</option><option value="300">5 min</option><option value="900">15 min</option></select></label><button type="button" onClick={() => deleteServer(server)} disabled={deletingServerId === server.id} className="rounded-lg border border-red-400/30 bg-red-500/5 px-3 py-1.5 text-xs text-red-300 transition hover:bg-red-500/10 disabled:opacity-50">{deletingServerId === server.id ? 'Deleting…' : 'Delete server'}</button></div> : <span className="text-xs text-[#9aa0a6]">Checks every {server.check_interval_seconds < 60 ? `${server.check_interval_seconds} sec` : `${Math.round(server.check_interval_seconds / 60)} min`}</span>}</div>
               {metric ? <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">{[['CPU', metric.cpu_utilization_pct, '%'], ['RAM', metric.ram_pct, '%'], ['Disk', metric.disk_usage_pct, '%'], ['Load (1m)', metric.load_1m, '']].map(([label, value, unit]) => <div key={label} className="rounded-xl bg-[#171b1f] p-3"><div className="text-xs text-[#9aa0a6]">{label}</div><div className="mt-1 text-xl font-semibold text-white">{value == null ? '—' : `${Number(value).toFixed(1)}${unit}`}</div></div>)}</div> : <div className="mt-4 rounded-xl bg-[#171b1f] p-4 text-sm text-[#9aa0a6]">Collector has not sent a measurement yet.</div>}
               <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-xs text-[#7f8589]"><span>Last check: {server.last_seen_at ? new Date(server.last_seen_at).toLocaleString() : 'Never'}</span><span>{server.containers.length} containers</span></div>
               {server.containers.length > 0 && <ContainerTable server={server} />}
@@ -857,152 +860,626 @@ function MetricTrend({ title, color, value, points, times }) {
   )
 }
 
-function getRecommendation(alert) {
-  const context = `${alert.title} ${alert.description}`.toLowerCase()
-  if (context.includes('unhealthy')) return ['Inspect the container healthcheck output and recent application logs.', 'Check whether a recent deployment or configuration change caused the failure.', 'After resolving the cause, verify the healthcheck returns to healthy.']
-  if (context.includes('restart')) return ['Inspect the container logs and Docker exit status for the restart cause.', 'Check host memory and disk pressure, then review recent deployments.', 'Confirm the service stays running and its restart count stops increasing.']
-  if (context.includes('cpu')) return ['Identify the process or container driving CPU usage.', 'Compare the increase with recent traffic and deployments.', 'Recheck CPU after mitigation and confirm the alert clears.']
-  if (context.includes('memory') || context.includes('ram')) return ['Find the process or container consuming memory.', 'Check for a recent workload increase or memory leak.', 'Confirm available memory recovers after mitigation.']
-  return ['Review the affected server and container metrics around this incident.', 'Inspect relevant service logs and recent changes.', 'Apply a fix, then confirm the next health checks are clear.']
-}
+// Placeholder data until the agent diagnoses incidents on the backend.
+const placeholderIncidents = [
+  {
+    id: 'inc-1',
+    severity: 'CRITICAL',
+    server: 'homelab-01',
+    detectedAt: '2026-09-25T01:42:00',
+    status: 'diagnosed',
+    summary: 'GitLab container keeps restarting',
+    details: 'The gitlab container restarted 6 times in the last 30 minutes. Each restart follows an out-of-memory kill while Puma workers are starting, so the service never becomes healthy.',
+    actions: [
+      'Raise the container memory limit to at least 6 GB, or lower puma[\'worker_processes\'] in gitlab.rb.',
+      'Run docker logs gitlab --since 30m and confirm the OOM kill in dmesg.',
+      'After restarting, confirm the healthcheck turns healthy and the restart count stops increasing.',
+    ],
+  },
+  {
+    id: 'inc-2',
+    severity: 'WARNING',
+    server: 'homelab-01',
+    detectedAt: '2026-09-25T00:15:00',
+    status: 'diagnosed',
+    summary: 'Root disk is 94% full',
+    details: 'Disk usage on / grew from 81% to 94% over the last 3 days. Most of the growth is in /var/lib/docker, from unused images and build cache.',
+    actions: [
+      'Run docker system df to see how much space images, containers and build cache use.',
+      'Remove unused images and build cache with docker image prune -a and docker builder prune.',
+      'Set up log rotation for container logs so they cannot fill the disk again.',
+    ],
+  },
+  {
+    id: 'inc-3',
+    severity: 'WARNING',
+    server: 'media-server',
+    detectedAt: '2026-09-24T22:03:00',
+    status: 'analyzing',
+    summary: 'High CPU usage on jellyfin',
+    details: 'The jellyfin container has used over 350% CPU for 20 minutes, which matches software video transcoding.',
+    actions: [],
+  },
+]
 
-function AgentReportsPage({ user, onLogout }) {
-  const [overview, setOverview] = useState({ servers: [], alerts: [] })
-  const [error, setError] = useState('')
+const placeholderChat = [
+  { id: 'm1', role: 'agent', text: 'Hi! I review new incidents automatically and suggest how to fix them. Ask me about any report on the left, or about your servers.' },
+  { id: 'm2', role: 'user', text: 'Why does GitLab keep restarting?' },
+  { id: 'm3', role: 'agent', text: 'It runs out of memory while its Puma workers start, so the kernel kills it and Docker restarts it. Raising the memory limit or running fewer workers should fix it. The full steps are in the report.' },
+]
 
-  useEffect(() => {
-    let active = true
-
-    const refresh = () => {
-      apiRequest('/monitoring/overview', { method: 'GET' })
-        .then((data) => { 
-          if (active) { 
-            setOverview(data)
-            setError('') 
-          } 
-        })
-        .catch((requestError) => { 
-          if (active) setError(requestError.message || 'Could not load incident reports.') 
-        })
-    }
-
-    refresh()
-    const timer = setInterval(refresh, 15000)
-
-    return () => { 
-      active = false
-      clearInterval(timer) 
-    }
-  }, [user?.id]) // <-- PROMIJENJENO: user?.id umjesto cijelog 'user' objekta
-
-  const serverNames = Object.fromEntries((overview.servers || []).map((server) => [server.id, server.hostname]))
-  const reports = overview.alerts || []
+function IncidentCard({ incident, expanded, onToggle }) {
+  const critical = incident.severity === 'CRITICAL'
 
   return (
-    <AppShell user={user} onLogout={onLogout}>
-      <div className="custom-scroll flex min-h-0 flex-col gap-5 overflow-y-auto pr-1">
+    <article className={`message-card rounded-[20px] transition ${expanded ? 'border-white/15' : 'hover:border-white/15'}`}>
+      <button type="button" onClick={onToggle} aria-expanded={expanded} className="flex w-full items-start gap-3 p-4 text-left">
+        <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${critical ? 'bg-red-400' : 'bg-amber-400'}`} />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[#9aa0a6]">
+            <time dateTime={incident.detectedAt}>{new Date(incident.detectedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</time>
+            <span>·</span>
+            <span>{incident.server}</span>
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${critical ? 'bg-red-400/10 text-red-300' : 'bg-amber-400/10 text-amber-200'}`}>
+              {incident.severity}
+            </span>
+          </div>
+          <h3 className="mt-1.5 font-medium text-white">{incident.summary}</h3>
+        </div>
+        <span className={`mt-1 text-[#9aa0a6] transition-transform ${expanded ? 'rotate-180' : ''}`} aria-hidden="true">⌄</span>
+      </button>
+
+      {expanded && (
+        <div className="px-4 pb-4 pl-9">
+          <p className="text-sm leading-6 text-[#bcbcbc]">{incident.details}</p>
+          <div className="mt-4 rounded-2xl border border-cyan-300/15 bg-cyan-300/5 p-4">
+            <div className="text-xs uppercase tracking-[0.18em] text-cyan-200">Recommended actions</div>
+            {incident.status === 'analyzing' ? (
+              <p className="mt-3 flex items-center gap-2 text-sm text-[#9aa0a6]">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-cyan-300" />
+                The agent is still diagnosing this incident.
+              </p>
+            ) : (
+              <ol className="mt-3 space-y-2 text-sm leading-6 text-[#d1d5db]">
+                {incident.actions.map((action, index) => (
+                  <li key={action} className="flex gap-3">
+                    <span className="font-mono text-cyan-300">0{index + 1}</span>
+                    <span>{action}</span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
+        </div>
+      )}
+    </article>
+  )
+}
+
+function AgentPage({ user, onLogout }) {
+  const [expandedId, setExpandedId] = useState(placeholderIncidents[0]?.id)
+  const [chatEnabled, setChatEnabled] = useState(true)
+
+  useEffect(() => {
+    apiRequest('/agent/config', { method: 'GET' })
+      .then((data) => setChatEnabled(data.chat_enabled))
+      .catch(() => {})
+  }, [])
+
+  return (
+    <AppShell user={user} onLogout={onLogout} fitViewport>
+      <div className="flex flex-col gap-5 xl:h-full">
         <header className="glass-panel rounded-[28px] p-5 md:p-6">
-          <div className="text-xs uppercase tracking-[0.22em] text-[#9aa0a6]">Incident center</div>
-          <h1 className="mt-1 text-3xl font-semibold text-white">Agent reports</h1>
+          <div className="text-xs uppercase tracking-[0.22em] text-[#9aa0a6]">Diagnostics</div>
+          <h1 className="mt-1 text-3xl font-semibold text-white">Agent</h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-[#9aa0a6]">
-            Incident reports and suggested next steps. Recommendations are currently generated in the UI from incident details; no server-side AI analysis is connected.
+            The agent reviews each incident, diagnoses the cause and recommends how to fix it. Showing placeholder data for now.
           </p>
         </header>
-        {error && <div className="rounded-xl border border-amber-400/30 bg-amber-400/5 p-3 text-sm text-amber-200">{error}</div>}
-        {reports.length ? (
-          <div className="space-y-4">
-            {reports.map((report) => (
-              <article key={report.id} className="glass-panel rounded-[24px] p-5 md:p-6">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider ${report.severity === 'CRITICAL' ? 'bg-red-400/10 text-red-300' : 'bg-amber-400/10 text-amber-200'}`}>
-                        {report.severity}
-                      </span>
-                      <span className="text-xs text-[#9aa0a6]">{serverNames[report.server_id] || `Server ${report.server_id}`}</span>
-                    </div>
-                    <h2 className="mt-3 text-lg font-semibold text-white">{report.title}</h2>
+
+        <div className="grid gap-5 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] xl:grid-rows-[minmax(0,1fr)]">
+          <section className="glass-panel flex flex-col rounded-[28px] p-5 md:p-6 xl:min-h-0">
+            <div className="mb-4 flex items-end justify-between gap-3">
+              <div>
+                <div className="text-xs uppercase tracking-[0.2em] text-[#9aa0a6]">Incident reports</div>
+                <h2 className="mt-1 text-xl font-semibold text-white">Recent problems</h2>
+              </div>
+              <span className="text-xs text-[#9aa0a6]">{placeholderIncidents.length} reports</span>
+            </div>
+            <div className="custom-scroll -mr-2 space-y-3 pr-2 xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
+              {placeholderIncidents.map((incident) => (
+                <IncidentCard
+                  key={incident.id}
+                  incident={incident}
+                  expanded={expandedId === incident.id}
+                  onToggle={() => setExpandedId((current) => (current === incident.id ? null : incident.id))}
+                />
+              ))}
+            </div>
+          </section>
+
+          <section className="glass-panel flex h-150 flex-col rounded-[28px] p-5 md:p-6 xl:h-auto xl:min-h-0">
+            <div className="mb-4 flex items-end justify-between gap-3">
+              <div>
+                <div className="text-xs uppercase tracking-[0.2em] text-[#9aa0a6]">Chat</div>
+                <h2 className="mt-1 text-xl font-semibold text-white">Ask the agent</h2>
+              </div>
+              {chatEnabled
+                ? <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[10px] uppercase tracking-[0.2em] text-[#9aa0a6]">Preview</span>
+                : <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2.5 py-1 text-[10px] uppercase tracking-[0.2em] text-amber-200">Off</span>}
+            </div>
+            {!chatEnabled && (
+              <div className="mb-4 rounded-2xl border border-amber-400/20 bg-amber-400/5 px-4 py-3 text-sm text-amber-200">
+                Chat with the agent has been turned off by an admin. Incident reports still work.
+              </div>
+            )}
+            <div className="custom-scroll -mr-2 min-h-0 flex-1 space-y-3 overflow-y-auto pr-2">
+              {placeholderChat.map((message) => (
+                <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 ${message.role === 'user' ? 'bg-white/10 text-white' : 'message-card text-[#d1d5db]'}`}>
+                    {message.text}
                   </div>
-                  <time className="text-xs text-[#7f8589]">{new Date(report.created_at).toLocaleString()}</time>
                 </div>
-                <p className="mt-2 text-sm text-[#bcbcbc]">{report.description}</p>
-                <div className="mt-5 rounded-2xl border border-cyan-300/15 bg-cyan-300/5 p-4">
-                  <div className="text-xs uppercase tracking-[0.18em] text-cyan-200">Suggested next steps</div>
-                  <ol className="mt-3 space-y-2 text-sm leading-6 text-[#d1d5db]">
-                    {getRecommendation(report).map((step, index) => (
-                      <li key={step} className="flex gap-3">
-                        <span className="font-mono text-cyan-300">0{index + 1}</span>
-                        <span>{step}</span>
-                      </li>
-                    ))}
-                  </ol>
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <div className="glass-panel rounded-[24px] p-10 text-center">
-            <div className="text-lg font-medium text-white">No active incidents</div>
-            <p className="mt-2 text-sm text-[#9aa0a6]">When monitoring detects an incident, it will appear here with suggested troubleshooting steps.</p>
-          </div>
-        )}
+              ))}
+            </div>
+            <form className="mt-4 flex gap-2" onSubmit={(event) => event.preventDefault()}>
+              <input
+                disabled
+                placeholder={chatEnabled ? 'Chat is not connected yet' : 'Chat is turned off'}
+                className="min-w-0 flex-1 rounded-2xl border border-[#1f2326] bg-[#0d1013]/80 px-4 py-3 text-sm text-[#cfcfcf] outline-none placeholder:text-[#6b7075] disabled:cursor-not-allowed"
+              />
+              <button type="submit" disabled className="rounded-2xl bg-linear-to-r from-white to-[#cfcfcf] px-4 py-3 text-sm font-medium text-[#0b0b0b] disabled:cursor-not-allowed disabled:opacity-40">
+                Send
+              </button>
+            </form>
+          </section>
+        </div>
       </div>
     </AppShell>
   )
 }
 
-function AdminPage({ user, onLogout }) {
+// Placeholder data for the admin page until its backend endpoints exist.
+const placeholderAdmin = {
+  users: [
+    { id: 1, name: 'Admin', email: 'admin@example.com', role: 'admin', lastLogin: '2026-09-25T01:58:00', active: true, sessions: 2 },
+    { id: 2, name: 'Ana', email: 'ana@example.com', role: 'user', lastLogin: '2026-09-23T18:12:00', active: true, sessions: 1 },
+    { id: 3, name: 'Old account', email: 'old@example.com', role: 'user', lastLogin: '2026-06-02T09:40:00', active: false, sessions: 0 },
+  ],
+  servers: [
+    { id: 1, name: 'homelab-01', online: true, lastSeen: '2026-09-25T02:10:00', interval: 60, collectorVersion: '0.4.0' },
+    { id: 2, name: 'media-server', online: true, lastSeen: '2026-09-25T02:09:30', interval: 60, collectorVersion: '0.4.0' },
+    { id: 3, name: 'backup-nas', online: false, lastSeen: '2026-09-24T14:22:00', interval: 300, collectorVersion: '0.3.2' },
+  ],
+  pending: [{ id: 7, hostname: 'raspberrypi', ip: '192.168.1.44', requestedAt: '2026-09-25T01:30:00' }],
+  services: [
+    { name: 'Backend API', status: 'ok', detail: 'Responding' },
+    { name: 'PostgreSQL', status: 'ok', detail: '412 MB' },
+    { name: 'Redis', status: 'ok', detail: '3 active sessions' },
+  ],
+  storage: [
+    ['Host metrics', '1,204,332 rows'],
+    ['Container metrics', '8,930,118 rows'],
+    ['Incidents', '214 rows'],
+    ['Audit log', '3,871 rows'],
+  ],
+  audit: [
+    { id: 1, time: '2026-09-25T01:58:00', actor: 'Admin', event: 'Signed in' },
+    { id: 2, time: '2026-09-25T01:31:00', actor: 'system', event: 'New server requested to join: raspberrypi' },
+    { id: 3, time: '2026-09-24T20:05:00', actor: 'Admin', event: 'Changed check interval of backup-nas to 300 s' },
+    { id: 4, time: '2026-09-24T19:47:00', actor: 'Admin', event: 'Approved server media-server' },
+  ],
+}
+
+const adminTabs = [
+  { id: 'users', label: 'Users' },
+  { id: 'servers', label: 'Servers' },
+  { id: 'agent', label: 'Agent' },
+  { id: 'alerts', label: 'Alerts' },
+  { id: 'system', label: 'System' },
+]
+
+const formatDateTime = (value) => new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+
+const inputClass = 'w-full rounded-2xl border border-[#1f2326] bg-[#0d1013]/80 px-4 py-2.5 text-sm text-[#cfcfcf] outline-none transition focus:border-white/30'
+const secondaryButtonClass = 'rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-[#cfcfcf] transition hover:bg-white/10'
+const dangerButtonClass = 'rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-1.5 text-xs text-red-300 transition hover:bg-red-500/15'
+
+function AdminSection({ title, description, action, children }) {
   return (
-    <AppShell user={user} onLogout={onLogout}>
-      <div className="grid gap-5 xl:grid-cols-[1.4fr_0.8fr]">
-        <div className="glass-panel rounded-[28px] p-5 md:p-6">
-          <div className="mb-4">
-            <div className="text-xs uppercase tracking-[0.22em] text-[#9aa0a6]">Configuration</div>
-            <h1 className="mt-1 text-3xl font-semibold text-white">Admin controls</h1>
-          </div>
-
-          <div className="space-y-5">
-            <div>
-              <label className="mb-2 block text-sm text-[#bcbcbc]">System prompt</label>
-              <textarea
-                rows={12}
-                defaultValue={adminSettings.systemPrompt}
-                className="w-full rounded-2xl border border-[#171b1f] bg-[#0d1013]/80 px-4 py-3 text-sm text-[#cfcfcf] outline-none transition focus:border-emerald-400"
-              />
-            </div>
-
-            <div>
-              <label className="mb-2 block text-sm text-[#bcbcbc]">Monitoring boundaries</label>
-              <div className="space-y-3">
-                {adminSettings.safetyRules.map((rule) => (
-                  <label key={rule} className="flex items-center gap-3 rounded-2xl border border-[#111417] bg-[#0d1013]/60 px-3 py-2 text-sm text-slate-200">
-                    <input type="checkbox" defaultChecked className="h-4 w-4 rounded border-[#1f2326] bg-[#111417]" />
-                    {rule}
-                  </label>
-                ))}
-              </div>
-            </div>
-          </div>
+    <section className="glass-panel rounded-[28px] p-5 md:p-6">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-white">{title}</h2>
+          {description && <p className="mt-1 max-w-2xl text-sm text-[#9aa0a6]">{description}</p>}
         </div>
+        {action}
+      </div>
+      {children}
+    </section>
+  )
+}
 
-        <div className="glass-panel rounded-[28px] p-5 md:p-6">
-          <div className="mb-4 text-xs uppercase tracking-[0.22em] text-[#9aa0a6]">Safety preview</div>
-          <div className="space-y-4">
-            {[
-              { label: 'Shell execution', value: 'Disabled', status: 'Enforced' },
-              { label: 'Available checks', value: 'Closed allow-list', status: 'Enforced' },
-              { label: 'Execution mode', value: 'Monitoring-only', status: 'Active' },
-            ].map((item) => (
-              <div key={item.label} className="rounded-2xl border border-[#111417] bg-[#0d1013]/70 p-3">
-                <div className="text-sm text-[#bcbcbc]">{item.label}</div>
-                <div className="mt-2 text-base font-medium text-white">{item.value}</div>
-                <div className="mt-2 inline-flex rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2.5 py-1 text-[10px] uppercase tracking-[0.2em] text-emerald-300">{item.status}</div>
+function Toggle({ label, description, defaultOn = false, checked, onChange, disabled = false }) {
+  const [localOn, setLocalOn] = useState(defaultOn)
+  const controlled = checked !== undefined
+  const on = controlled ? checked : localOn
+  const setOn = controlled ? (update) => onChange(update(on)) : setLocalOn
+
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-3">
+      <div>
+        <div className="text-sm text-white">{label}</div>
+        {description && <div className="mt-0.5 text-xs text-[#9aa0a6]">{description}</div>}
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={label}
+        disabled={disabled}
+        onClick={() => setOn((value) => !value)}
+        className={`relative h-6 w-11 shrink-0 rounded-full transition disabled:cursor-not-allowed disabled:opacity-50 ${on ? 'bg-emerald-500/70' : 'bg-white/10'}`}
+      >
+        <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition-all ${on ? 'left-6' : 'left-1'}`} />
+      </button>
+    </div>
+  )
+}
+
+function StatusDot({ ok }) {
+  return <span className={`inline-block h-2 w-2 rounded-full ${ok ? 'bg-emerald-400' : 'bg-red-400'}`} />
+}
+
+function SaveButton() {
+  return (
+    <button type="button" disabled title="Not connected yet" className="rounded-2xl bg-linear-to-r from-white to-[#cfcfcf] px-4 py-2.5 text-sm font-medium text-[#0b0b0b] disabled:cursor-not-allowed disabled:opacity-40">
+      Save changes
+    </button>
+  )
+}
+
+function AdminUsersTab() {
+  return (
+    <div className="space-y-5">
+      <AdminSection title="Registration" description="Controls whether new people can create an account.">
+        <Toggle label="Allow registration" description="When off, only the first account can be created. Replaces ALLOW_REGISTRATION in .env." />
+      </AdminSection>
+
+      <AdminSection title="Users" description="Change roles, disable accounts or sign someone out everywhere.">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-160 text-left text-sm">
+            <thead className="text-xs uppercase tracking-wider text-[#7f8589]">
+              <tr><th className="pb-3 font-medium">User</th><th className="pb-3 font-medium">Role</th><th className="pb-3 font-medium">Last login</th><th className="pb-3 font-medium">Status</th><th className="pb-3 text-right font-medium">Actions</th></tr>
+            </thead>
+            <tbody className="divide-y divide-white/5">
+              {placeholderAdmin.users.map((account) => (
+                <tr key={account.id} className={account.active ? '' : 'opacity-60'}>
+                  <td className="py-3"><div className="text-white">{account.name}</div><div className="text-xs text-[#9aa0a6]">{account.email}</div></td>
+                  <td className="py-3">
+                    <select defaultValue={account.role} aria-label={`Role of ${account.name}`} className="rounded-xl border border-[#1f2326] bg-[#0d1013] px-2 py-1 text-xs text-[#cfcfcf]">
+                      <option value="admin">Admin</option>
+                      <option value="user">User</option>
+                    </select>
+                  </td>
+                  <td className="py-3 text-[#bcbcbc]">{formatDateTime(account.lastLogin)}</td>
+                  <td className="py-3"><span className="inline-flex items-center gap-2 text-[#bcbcbc]"><StatusDot ok={account.active} />{account.active ? 'Active' : 'Disabled'}</span></td>
+                  <td className="py-3">
+                    <div className="flex justify-end gap-2">
+                      <button type="button" className={secondaryButtonClass} disabled={!account.sessions}>Sign out ({account.sessions})</button>
+                      <button type="button" className={account.active ? dangerButtonClass : secondaryButtonClass}>{account.active ? 'Disable' : 'Enable'}</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </AdminSection>
+    </div>
+  )
+}
+
+function AdminServersTab() {
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-5 xl:grid-cols-2">
+        <AdminSection title="Enrollment key" description="Servers that connect with this key are approved automatically.">
+          <div className="flex gap-2">
+            <input readOnly value="hlk_••••••••••••••••3f9a" aria-label="Enrollment key" className={`${inputClass} font-mono`} />
+            <button type="button" className={secondaryButtonClass}>Regenerate</button>
+            <button type="button" className={dangerButtonClass}>Revoke</button>
+          </div>
+        </AdminSection>
+
+        <AdminSection title="Waiting for approval" description="Collectors that asked to join without a key.">
+          <div className="space-y-2">
+            {placeholderAdmin.pending.map((request) => (
+              <div key={request.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-400/20 bg-amber-400/5 px-4 py-3">
+                <div><div className="text-sm text-white">{request.hostname}</div><div className="text-xs text-[#9aa0a6]">{request.ip} · {formatDateTime(request.requestedAt)}</div></div>
+                <div className="flex gap-2"><button type="button" className={secondaryButtonClass}>Approve</button><button type="button" className={dangerButtonClass}>Dismiss</button></div>
               </div>
             ))}
-
-            <button className="mt-2 w-full rounded-2xl bg-linear-to-r from-white to-[#cfcfcf] px-4 py-3 font-medium text-[#0b0b0b]">Save changes</button>
           </div>
+        </AdminSection>
+      </div>
+
+      <AdminSection title="Servers" description="Every monitored machine, its collector and how often it reports.">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-160 text-left text-sm">
+            <thead className="text-xs uppercase tracking-wider text-[#7f8589]">
+              <tr><th className="pb-3 font-medium">Server</th><th className="pb-3 font-medium">Last seen</th><th className="pb-3 font-medium">Collector</th><th className="pb-3 font-medium">Interval</th><th className="pb-3 text-right font-medium">Actions</th></tr>
+            </thead>
+            <tbody className="divide-y divide-white/5">
+              {placeholderAdmin.servers.map((server) => (
+                <tr key={server.id}>
+                  <td className="py-3"><span className="inline-flex items-center gap-2 text-white"><StatusDot ok={server.online} />{server.name}</span></td>
+                  <td className="py-3 text-[#bcbcbc]">{formatDateTime(server.lastSeen)}</td>
+                  <td className="py-3 font-mono text-xs text-[#bcbcbc]">v{server.collectorVersion}</td>
+                  <td className="py-3">
+                    <select defaultValue={server.interval} aria-label={`Check interval of ${server.name}`} className="rounded-xl border border-[#1f2326] bg-[#0d1013] px-2 py-1 text-xs text-[#cfcfcf]">
+                      {[15, 30, 60, 120, 300].map((seconds) => <option key={seconds} value={seconds}>{seconds} s</option>)}
+                    </select>
+                  </td>
+                  <td className="py-3"><div className="flex justify-end"><button type="button" className={dangerButtonClass}>Remove</button></div></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
+      </AdminSection>
+    </div>
+  )
+}
+
+function AgentChatSetting() {
+  const [enabled, setEnabled] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState(null)
+
+  useEffect(() => {
+    apiRequest('/admin/settings', { method: 'GET' })
+      .then((data) => setEnabled(data.agent_chat_enabled))
+      .catch((error) => setMessage({ ok: false, text: error.message || 'Could not load the setting.' }))
+  }, [])
+
+  // Saves straight away, like a light switch.
+  const change = async (next) => {
+    setSaving(true)
+    setMessage(null)
+    try {
+      const data = await apiRequest('/admin/settings', { method: 'PUT', body: JSON.stringify({ agent_chat_enabled: next }) })
+      setEnabled(data.agent_chat_enabled)
+      setMessage({ ok: true, text: data.agent_chat_enabled ? 'Chat is on for everyone.' : 'Chat is off. Nobody can send messages to the agent.' })
+    } catch (error) {
+      setMessage({ ok: false, text: error.message || 'Could not save the setting.' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <AdminSection title="Chat" description="Lets users talk to the agent on the Agent page. Automatic incident diagnosis is not affected.">
+      <Toggle label="Allow chat with the agent" description="Applies to every user, including admins." checked={enabled ?? false} onChange={change} disabled={enabled === null || saving} />
+      {message && <p className={`mt-3 text-xs ${message.ok ? 'text-emerald-300' : 'text-amber-200'}`}>{message.text}</p>}
+    </AdminSection>
+  )
+}
+
+function AdminAgentTab() {
+  return (
+    <div className="space-y-5">
+      <AgentChatSetting />
+      <div className="grid gap-5 xl:grid-cols-2">
+        <AdminSection title="Model" description="Which Gemini model the agent uses.">
+          <div className="space-y-3">
+            <select defaultValue="models/gemini-3.5-flash" aria-label="Agent model" className={inputClass}>
+              <option value="models/gemini-3.5-flash">gemini-3.5-flash</option>
+              <option value="models/gemini-3.5-pro">gemini-3.5-pro</option>
+            </select>
+            <div className="flex items-center justify-between rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-3 text-sm">
+              <span className="text-[#bcbcbc]">API key</span>
+              <span className="inline-flex items-center gap-2 text-white"><StatusDot ok />Set in .env</span>
+            </div>
+          </div>
+        </AdminSection>
+
+        <AdminSection title="Automatic diagnosis" description="Send new incidents to the agent for review without asking.">
+          <div className="space-y-3">
+            <Toggle label="Diagnose new incidents automatically" defaultOn />
+            <label className="block">
+              <span className="mb-2 block text-sm text-[#bcbcbc]">Minimum severity</span>
+              <select defaultValue="WARNING" className={inputClass}>
+                <option value="CRITICAL">Critical only</option>
+                <option value="WARNING">Warning and critical</option>
+              </select>
+            </label>
+          </div>
+        </AdminSection>
+      </div>
+
+      <AdminSection title="System prompt" description="Instructions the agent follows in every diagnosis and chat." action={<SaveButton />}>
+        <textarea rows={8} defaultValue={adminSettings.systemPrompt} aria-label="System prompt" className={`${inputClass} resize-y leading-6`} />
+      </AdminSection>
+
+      <AdminSection title="Safety rules" description="Built into the agent and always on. They can't be changed from the dashboard.">
+        <div className="grid gap-2 md:grid-cols-2">
+          {adminSettings.safetyRules.map((rule) => (
+            <div key={rule} className="flex items-center justify-between gap-3 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-3 text-sm text-slate-200">
+              {rule}
+              <span className="rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-emerald-300">Enforced</span>
+            </div>
+          ))}
+        </div>
+      </AdminSection>
+    </div>
+  )
+}
+
+function AdminAlertsTab() {
+  const thresholds = [
+    ['Disk usage above', 90, '%'],
+    ['Memory usage above', 90, '%'],
+    ['CPU usage above (for 10 min)', 95, '%'],
+    ['Container restarts within 30 min', 3, 'restarts'],
+  ]
+
+  return (
+    <div className="grid gap-5 xl:grid-cols-2">
+      <AdminSection title="Webhook" description="Receives a JSON POST for every critical incident. Replaces ADMIN_ALERT_WEBHOOK_URL in .env." action={<SaveButton />}>
+        <div className="space-y-3">
+          <input type="url" placeholder="https://your-alert-endpoint.example/hook" aria-label="Webhook URL" className={inputClass} />
+          <button type="button" className={secondaryButtonClass}>Send test alert</button>
+        </div>
+      </AdminSection>
+
+      <AdminSection title="Incident thresholds" description="When monitoring opens an incident." action={<SaveButton />}>
+        <div className="space-y-2">
+          {thresholds.map(([label, value, unit]) => (
+            <label key={label} className="flex items-center justify-between gap-4 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-2.5 text-sm">
+              <span className="text-[#bcbcbc]">{label}</span>
+              <span className="flex items-center gap-2">
+                <input type="number" defaultValue={value} min={0} className="w-20 rounded-xl border border-[#1f2326] bg-[#0d1013] px-2 py-1 text-right text-white outline-none focus:border-white/30" />
+                <span className="w-16 text-xs text-[#9aa0a6]">{unit}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </AdminSection>
+    </div>
+  )
+}
+
+const retentionOptions = [7, 30, 90, 365]
+
+function DataRetentionSection() {
+  const [savedDays, setSavedDays] = useState(null)
+  const [days, setDays] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState(null)
+
+  useEffect(() => {
+    apiRequest('/admin/settings', { method: 'GET' })
+      .then((data) => {
+        setSavedDays(data.metrics_retention_days)
+        setDays(data.metrics_retention_days)
+      })
+      .catch((error) => setMessage({ ok: false, text: error.message || 'Could not load the setting.' }))
+  }, [])
+
+  const save = async () => {
+    setSaving(true)
+    setMessage(null)
+    try {
+      const data = await apiRequest('/admin/settings', { method: 'PUT', body: JSON.stringify({ metrics_retention_days: days }) })
+      setSavedDays(data.metrics_retention_days)
+      setMessage({ ok: true, text: 'Saved. Older metrics are removed within the hour.' })
+    } catch (error) {
+      setMessage({ ok: false, text: error.message || 'Could not save the setting.' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const options = days && !retentionOptions.includes(days) ? [...retentionOptions, days].sort((a, b) => a - b) : retentionOptions
+  const unchanged = days === null || days === savedDays
+
+  return (
+    <AdminSection
+      title="Data retention"
+      description="Older metrics are deleted automatically to keep the database small."
+      action={
+        <button type="button" onClick={save} disabled={unchanged || saving} className="rounded-2xl bg-linear-to-r from-white to-[#cfcfcf] px-4 py-2.5 text-sm font-medium text-[#0b0b0b] disabled:cursor-not-allowed disabled:opacity-40">
+          {saving ? 'Saving…' : 'Save changes'}
+        </button>
+      }
+    >
+      <select value={days ?? ''} disabled={days === null} onChange={(event) => setDays(Number(event.target.value))} aria-label="Keep metrics for" className={inputClass}>
+        {days === null && <option value="">Loading…</option>}
+        {options.map((value) => <option key={value} value={value}>Keep metrics for {value === 365 ? '1 year' : `${value} days`}</option>)}
+      </select>
+      {message && <p className={`mt-3 text-xs ${message.ok ? 'text-emerald-300' : 'text-amber-200'}`}>{message.text}</p>}
+    </AdminSection>
+  )
+}
+
+function AdminSystemTab() {
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-5 xl:grid-cols-3">
+        <AdminSection title="Services">
+          <div className="space-y-2">
+            {placeholderAdmin.services.map((service) => (
+              <div key={service.name} className="flex items-center justify-between rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-3 text-sm">
+                <span className="inline-flex items-center gap-2 text-white"><StatusDot ok={service.status === 'ok'} />{service.name}</span>
+                <span className="text-xs text-[#9aa0a6]">{service.detail}</span>
+              </div>
+            ))}
+          </div>
+        </AdminSection>
+
+        <DataRetentionSection />
+
+        <AdminSection title="Database">
+          <div className="space-y-2">
+            {placeholderAdmin.storage.map(([label, value]) => (
+              <div key={label} className="flex items-center justify-between text-sm"><span className="text-[#9aa0a6]">{label}</span><span className="text-white">{value}</span></div>
+            ))}
+          </div>
+        </AdminSection>
+      </div>
+
+      <AdminSection title="Audit log" description="Who did what, and when.">
+        <ul className="divide-y divide-white/5">
+          {placeholderAdmin.audit.map((entry) => (
+            <li key={entry.id} className="flex flex-wrap items-baseline gap-x-4 gap-y-1 py-2.5 text-sm">
+              <time className="w-40 shrink-0 text-xs text-[#7f8589]">{formatDateTime(entry.time)}</time>
+              <span className="w-20 shrink-0 text-[#9aa0a6]">{entry.actor}</span>
+              <span className="text-[#d1d5db]">{entry.event}</span>
+            </li>
+          ))}
+        </ul>
+      </AdminSection>
+    </div>
+  )
+}
+
+const adminTabContent = {
+  users: AdminUsersTab,
+  servers: AdminServersTab,
+  agent: AdminAgentTab,
+  alerts: AdminAlertsTab,
+  system: AdminSystemTab,
+}
+
+function AdminPage({ user, onLogout }) {
+  const [activeTab, setActiveTab] = useState('users')
+  const TabContent = adminTabContent[activeTab]
+
+  return (
+    <AppShell user={user} onLogout={onLogout}>
+      <div className="flex flex-col gap-5">
+        <header className="glass-panel rounded-[28px] p-5 md:p-6">
+          <div className="text-xs uppercase tracking-[0.22em] text-[#9aa0a6]">Configuration</div>
+          <h1 className="mt-1 text-3xl font-semibold text-white">Admin</h1>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-[#9aa0a6]">Manage users, servers, the agent and system settings. Showing placeholder data for now; changes are not saved.</p>
+          <div role="tablist" aria-label="Admin sections" className="mt-5 flex flex-wrap gap-2">
+            {adminTabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`rounded-2xl px-4 py-2 text-sm transition ${activeTab === tab.id ? 'bg-[#171b1f] text-white ring-1 ring-white/10' : 'text-[#bcbcbc] hover:bg-[#111417] hover:text-white'}`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </header>
+
+        <TabContent />
       </div>
     </AppShell>
   )
@@ -1079,19 +1556,20 @@ function App() {
         />
         <Route path="/dashboard" element={<RequireAuth user={user}><Navigate to="/" replace /></RequireAuth>} />
         <Route
-          path="/reports"
+          path="/agent"
           element={
             <RequireAuth user={user}>
-              <AgentReportsPage user={user} onLogout={handleLogout} />
+              <AgentPage user={user} onLogout={handleLogout} />
             </RequireAuth>
           }
         />
-        <Route path="/logs" element={<RequireAuth user={user}><Navigate to="/reports" replace /></RequireAuth>} />
+        <Route path="/reports" element={<RequireAuth user={user}><Navigate to="/agent" replace /></RequireAuth>} />
+        <Route path="/logs" element={<RequireAuth user={user}><Navigate to="/agent" replace /></RequireAuth>} />
         <Route
           path="/admin"
           element={
             <RequireAuth user={user}>
-              <AdminPage user={user} onLogout={handleLogout} />
+              {user?.role === 'admin' ? <AdminPage user={user} onLogout={handleLogout} /> : <Navigate to="/" replace />}
             </RequireAuth>
           }
         />
