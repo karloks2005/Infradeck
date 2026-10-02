@@ -704,11 +704,12 @@ function SystemSection({ server, open, onToggle }) {
           <div className="mb-2 text-xs uppercase tracking-[0.2em] text-[#7f8589]">Recent events · 7 days</div>
           {events.length ? <ul className="space-y-1.5 text-sm">{events.map((event, index) => (
             <li key={`${event.time}-${event.kind}-${index}`} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
-              <span className="w-24 shrink-0 text-xs text-[#7f8589]" title={new Date(event.time).toLocaleString()}>{formatAgo(event.time)}</span>
+              <span className="w-24 shrink-0 text-xs text-[#7f8589]" title={event.count > 1 ? `Last seen ${new Date(event.time).toLocaleString()}` : new Date(event.time).toLocaleString()}>{formatAgo(event.time)}</span>
               <span className={`w-24 shrink-0 text-xs font-medium ${SYSTEM_EVENT_CLASSES[event.kind] || 'text-[#cfcfcf]'}`}>{SYSTEM_EVENT_LABELS[event.kind] || event.kind}</span>
-              <span className="min-w-0 flex-1 basis-60 break-words text-[#bcbcbc]">{event.detail}</span>
+              <span className="min-w-0 flex-1 basis-60 break-words text-[#bcbcbc]">{event.detail}{event.count > 1 && <span className="ml-2 whitespace-nowrap rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-medium text-[#cfcfcf]" title={`Seen ${event.count} times · first ${formatAgo(event.first_time)}, last ${formatAgo(event.time)}`}>×{event.count}</span>}</span>
             </li>
           ))}</ul> : <p className="text-sm text-[#9aa0a6]">No reboots, OOM kills or kernel faults in the last 7 days.</p>}
+          {events.some((event) => event.count > 1) && <p className="mt-2 text-xs text-[#7f8589]">Repeated kernel messages are shown once with a count; the time is when each was last seen.</p>}
           {host.last_shutdown == null && <p className="mt-3 text-xs text-[#7f8589]">“Unknown” means the collector couldn't read that value on this host, not that anything is wrong. Last shutdown, OOM process names and kernel errors need the optional system helper (see SECURITY.md).</p>}
         </div>
       )}

@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timedelta, timezone
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
@@ -148,3 +149,66 @@ def test_collector_reports_unknown_when_files_are_missing(tmp_path, monkeypatch)
 
     state = collector.collect_system()
     assert (state["boot_id"], state["kernel_tainted"], state["oom_kill_total"], state["reboot_required"]) == (None, None, None, None)
+
+
+# --- the System row's event list ---------------------------------------------------------------
+
+def _event(db, kind, detail, minutes_ago):
+    db.add(SystemEvent(server_id=5, time=datetime.now(timezone.utc) - timedelta(minutes=minutes_ago), kind=kind, detail=detail))
+    db.commit()
+
+
+def _shown(db, monkeypatch):
+    monkeypatch.setattr(main, "_current_user", lambda session_id, db: {"id": 1})
+    return main.monitoring_overview(session_id="s", db=db)["servers"][0]["system_events"]
+
+
+def test_repeated_kernel_errors_collapse_into_one_row_with_a_count(db, monkeypatch):
+    for minutes_ago in (3000, 2000, 100):
+        _event(db, "kernel_error", "ACPI BIOS Error (bug): Could not resolve symbol", minutes_ago)
+    _event(db, "kernel_error", "i915: Unclaimed access detected", 50)
+
+    rows = {row["detail"]: row for row in _shown(db, monkeypatch)}
+
+    assert len(rows) == 2
+    acpi = rows["ACPI BIOS Error (bug): Could not resolve symbol"]
+    assert acpi["count"] == 3
+    # The row's time is the latest occurrence; the first one is kept for the tooltip.
+    assert datetime.fromisoformat(acpi["time"]) > datetime.fromisoformat(acpi["first_time"])
+    assert rows["i915: Unclaimed access detected"]["count"] == 1
+
+
+def test_reboots_and_oom_kills_are_never_collapsed(db, monkeypatch):
+    for minutes_ago in (500, 100):
+        _event(db, "reboot", "The host rebooted after a clean shutdown", minutes_ago)
+        _event(db, "oom_kill", "The kernel OOM killer stopped java (pid 1)", minutes_ago + 1)
+
+    rows = _shown(db, monkeypatch)
+
+    assert sorted((row["kind"], row["count"]) for row in rows) == [("oom_kill", 1), ("oom_kill", 1), ("reboot", 1), ("reboot", 1)]
+
+
+def test_noisy_kernel_errors_cannot_crowd_out_real_events(db, monkeypatch):
+    _event(db, "oom_kill", "The kernel OOM killer stopped java (pid 1)", 60 * 24 * 6)
+    for number in range(40):
+        _event(db, "kernel_error", f"driver message {number}", number + 1)
+
+    rows = _shown(db, monkeypatch)
+
+    assert [row["kind"] for row in rows].count("oom_kill") == 1
+    assert [row["kind"] for row in rows].count("kernel_error") == main.SYSTEM_EVENTS_SHOWN
+
+
+def test_events_are_listed_newest_first_across_kinds(db, monkeypatch):
+    _event(db, "reboot", "The host rebooted", 300)
+    _event(db, "kernel_error", "late message", 10)
+    _event(db, "oom_kill", "The kernel OOM killer stopped x (pid 2)", 100)
+
+    assert [row["kind"] for row in _shown(db, monkeypatch)] == ["kernel_error", "oom_kill", "reboot"]
+
+
+def test_events_older_than_seven_days_are_not_shown(db, monkeypatch):
+    _event(db, "reboot", "The host rebooted", 60 * 24 * 8)
+    _event(db, "kernel_error", "old message", 60 * 24 * 8)
+
+    assert _shown(db, monkeypatch) == []

@@ -4,7 +4,7 @@ Vexion ships with an automated test suite. This page explains how to run it, wha
 covers (and what it doesn't), and what every single test is for, so you can decide
 whether a failure matters before you upgrade or change your setup.
 
-- **297 test cases** from 174 test functions (some functions run once per input).
+- **302 test cases** from 179 test functions (some functions run once per input).
 - **About 15 seconds** to run. No Docker, PostgreSQL, Redis, network or root access needed.
 - **Safe to run next to a live install.** The tests use a throwaway in-memory database
   and fakes; they never touch your running containers or your data. (Two collector
@@ -35,7 +35,7 @@ pytest
 A healthy run ends with a line like:
 
 ```text
-297 passed, 3 warnings in 14.1s
+302 passed, 3 warnings in 14.1s
 ```
 
 The warnings are harmless notices from the libraries (FastAPI deprecating the
@@ -132,7 +132,7 @@ docker compose logs --tail 20 collector        # "Sent host metrics and N contai
 | [`test_health_checks.py`](#test_health_checkspy) | 4 | The assistant's fixed health checks and the critical-only webhook. |
 | [`test_pending_collectors.py`](#test_pending_collectorspy) | 28 | Adding servers: approval, join tokens, strict mode, re-pairing safety. |
 | [`test_rules.py`](#test_rulespy) | 20 | Alert thresholds: sustained breaches, per-mount disks, settings validation. |
-| [`test_system_checks.py`](#test_system_checkspy) | 12 | Reboot, OOM, kernel-fault, clock and pending-reboot detection. |
+| [`test_system_checks.py`](#test_system_checkspy) | 17 | Reboot, OOM, kernel-fault, clock and pending-reboot detection, and the System row's event list. |
 | [`test_system_helper.py`](#test_system_helperpy) | 35 | The optional system helper: kernel-log parsing, `wtmp`, crash detection, hostile input. |
 
 ## Every test, explained
@@ -382,6 +382,11 @@ kernel exposes (no helper needed).
 | `test_reboot_required_raises_info_alert` | A pending-reboot flag raises an informational incident and clears when gone. |
 | `test_collector_reads_kernel_state_from_proc` | The collector reads boot ID, OOM counter, kernel flags and the reboot-required file from the right places. |
 | `test_collector_reports_unknown_when_files_are_missing` | Missing files give *unknown*, never a false "OK". |
+| `test_repeated_kernel_errors_collapse_into_one_row_with_a_count` | The same kernel message seen on several boots is shown once with a count (the row's time is the latest occurrence; the first is kept for the tooltip), while different messages stay separate. |
+| `test_reboots_and_oom_kills_are_never_collapsed` | Reboots and OOM kills stay one row per occurrence, so the timeline is never merged. |
+| `test_noisy_kernel_errors_cannot_crowd_out_real_events` | Even with dozens of different kernel messages, an older OOM kill is still listed and kernel messages are capped at 10 rows. |
+| `test_events_are_listed_newest_first_across_kinds` | Reboots, OOM kills and kernel messages are interleaved newest first. |
+| `test_events_older_than_seven_days_are_not_shown` | Events older than 7 days are left out of the System row. |
 
 ### test_system_helper.py
 

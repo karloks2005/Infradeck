@@ -538,6 +538,34 @@ OVERVIEW_ALERT_LIMIT = 50
 SYSTEM_EVENTS_SHOWN = 10
 
 
+def recent_system_events(db, since: datetime) -> dict[int, list[dict]]:
+    """Each server's recent events, newest first, for the dashboard's System row.
+
+    Kernel errors repeat on every boot, so identical messages are collapsed into one row with a count
+    (and the first and last time seen) and capped separately; otherwise they would push reboots and
+    OOM kills out of the list. Every other kind stays one row per occurrence.
+    """
+    result: dict[int, list[dict]] = {}
+    for event in db.query(SystemEvent).filter(SystemEvent.time >= since, SystemEvent.kind != "kernel_error").order_by(SystemEvent.time.desc()):
+        rows = result.setdefault(event.server_id, [])
+        if len(rows) < SYSTEM_EVENTS_SHOWN:
+            rows.append({"time": event.time.isoformat(), "first_time": event.time.isoformat(), "kind": event.kind, "detail": event.detail, "count": 1})
+    shown: dict[int, int] = {}
+    grouped = (
+        db.query(SystemEvent.server_id, SystemEvent.detail, func.count(), func.min(SystemEvent.time), func.max(SystemEvent.time))
+        .filter(SystemEvent.time >= since, SystemEvent.kind == "kernel_error")
+        .group_by(SystemEvent.server_id, SystemEvent.detail)
+        .order_by(func.max(SystemEvent.time).desc())
+    )
+    for server_id, detail, count, first, last in grouped:
+        if shown.get(server_id, 0) < SYSTEM_EVENTS_SHOWN:
+            shown[server_id] = shown.get(server_id, 0) + 1
+            result.setdefault(server_id, []).append({"time": last.isoformat(), "first_time": first.isoformat(), "kind": "kernel_error", "detail": detail, "count": count})
+    for rows in result.values():
+        rows.sort(key=lambda row: row["time"], reverse=True)
+    return result
+
+
 @app.get("/monitoring/overview")
 def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     # Servers belong to the install: everyone signed in can view them, only admins manage them.
@@ -546,10 +574,7 @@ def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_C
     servers = db.query(Server).order_by(Server.is_dashboard_host.desc(), Server.created_at.desc()).all()
     alert_counts = dict(db.query(IncidentAlert.server_id, func.count()).filter(IncidentAlert.status == "active").group_by(IncidentAlert.server_id).all())
     since = datetime.now(timezone.utc) - timedelta(days=7)
-    events: dict[int, list[SystemEvent]] = {}
-    for event in db.query(SystemEvent).filter(SystemEvent.time >= since).order_by(SystemEvent.time.desc()):
-        if len(events.setdefault(event.server_id, [])) < SYSTEM_EVENTS_SHOWN:
-            events[event.server_id].append(event)
+    events = recent_system_events(db, since)
     result = []
     for server in servers:
         metric = db.query(HostMetric).filter(HostMetric.server_id == server.id).order_by(HostMetric.time.desc()).first()
@@ -562,7 +587,7 @@ def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_C
             "active_alert_count": alert_counts.get(server.id, 0),
             "last_seen_at": server.last_seen_at.isoformat() if server.last_seen_at else None,
             "host": ({key: getattr(metric, key) for key in ("time", "cpu_utilization_pct", "load_1m", "load_5m", "load_15m", "ram_used_gb", "ram_available_gb", "ram_pct", "swap_pct", "disk_usage_pct", "disk_inodes_pct", "net_bytes_sent_mb", "net_bytes_recv_mb", "system_uptime_seconds", "oom_kill_total", "kernel_tainted", "ntp_synced", "reboot_required", "last_shutdown")} if metric else None),
-            "system_events": [{"time": e.time.isoformat(), "kind": e.kind, "detail": e.detail} for e in events.get(server.id, [])],
+            "system_events": events.get(server.id, []),
             "mounts": [{key: getattr(m, key) for key in ("mount", "fs_type", "total_gb", "used_gb", "used_pct", "inodes_pct")} for m in mounts],
             "containers": [{"container_id": c.container_id, "name": c.name, "image": c.image, "status": c.status, "restart_count": c.restart_count, "cpu_pct": c.cpu_pct, "memory_used_mb": c.memory_used_mb, "memory_pct": c.memory_pct, "healthcheck_status": c.healthcheck_status, "time": c.time.isoformat()} for c in latest.values()],
         })
