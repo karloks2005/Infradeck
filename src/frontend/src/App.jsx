@@ -299,21 +299,23 @@ function AuthCard({ title, subtitle, children, footerText, footerLink, footerLin
 }
 
 // null while loading; the backend decides (ALLOW_REGISTRATION, or no accounts exist yet).
+const MIN_PASSWORD_LENGTH = 16
+
 function useRegistrationEnabled() {
-  const [enabled, setEnabled] = useState(null)
+  const [config, setConfig] = useState({ enabled: null, bootstrapRequired: false })
   useEffect(() => {
     let active = true
     apiRequest('/auth/config', { method: 'GET' })
-      .then((data) => { if (active) setEnabled(Boolean(data.registration_enabled)) })
-      .catch(() => { if (active) setEnabled(true) })
+      .then((data) => { if (active) setConfig({ enabled: Boolean(data.registration_enabled), bootstrapRequired: Boolean(data.bootstrap_required) }) })
+      .catch(() => { if (active) setConfig({ enabled: true, bootstrapRequired: false }) })
     return () => { active = false }
   }, [])
-  return enabled
+  return config
 }
 
 function LoginPage({ onLogin }) {
   const navigate = useNavigate()
-  const registrationEnabled = useRegistrationEnabled()
+  const { enabled: registrationEnabled } = useRegistrationEnabled()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -388,8 +390,8 @@ function LoginPage({ onLogin }) {
 
 function RegisterPage({ onRegister }) {
   const navigate = useNavigate()
-  const registrationEnabled = useRegistrationEnabled()
-  const [form, setForm] = useState({ name: '', email: '', password: '' })
+  const { enabled: registrationEnabled, bootstrapRequired } = useRegistrationEnabled()
+  const [form, setForm] = useState({ name: '', email: '', password: '', bootstrapToken: '' })
   const [error, setError] = useState('')
 
   const handleChange = (event) => {
@@ -404,8 +406,8 @@ function RegisterPage({ onRegister }) {
     const trimmedName = form.name.trim()
     const trimmedEmail = form.email.trim()
 
-    if (!trimmedName || !trimmedEmail || form.password.length < 6) {
-      setError('Please provide a name, email, and a password with at least 6 characters.')
+    if (!trimmedName || !trimmedEmail || form.password.length < MIN_PASSWORD_LENGTH) {
+      setError(`Please provide a name, an email, and a password of at least ${MIN_PASSWORD_LENGTH} characters.`)
       return
     }
 
@@ -416,6 +418,7 @@ function RegisterPage({ onRegister }) {
           name: trimmedName,
           email: trimmedEmail,
           password: form.password,
+          bootstrap_token: bootstrapRequired ? form.bootstrapToken.trim() : undefined,
         }),
       })
 
@@ -471,10 +474,30 @@ function RegisterPage({ onRegister }) {
             value={form.password}
             onChange={handleChange}
             className="w-full rounded-2xl border border-neutral-700 bg-neutral-900/70 px-4 py-3 text-white outline-none transition focus:border-emerald-400"
-            placeholder="At least 6 characters"
+            placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
+            minLength={MIN_PASSWORD_LENGTH}
+            autoComplete="new-password"
             required
           />
+          <span className="mt-2 block text-xs text-[#7f8589]">A few random words make a good passphrase, for example “correct horse battery staple”. Up to 72 bytes.</span>
         </label>
+
+        {bootstrapRequired && (
+          <label className="block">
+            <span className="mb-2 block text-sm text-[#bcbcbc]">Setup token</span>
+            <input
+              type="password"
+              name="bootstrapToken"
+              value={form.bootstrapToken}
+              onChange={handleChange}
+              autoComplete="off"
+              className="w-full rounded-2xl border border-neutral-700 bg-neutral-900/70 px-4 py-3 font-mono text-sm text-white outline-none transition focus:border-emerald-400"
+              placeholder="hlb_…"
+              required
+            />
+            <span className="mt-2 block text-xs text-[#7f8589]">This install has no accounts yet, so the first one needs its setup token. Find it in the backend log: <code>docker compose logs backend | grep "setup token"</code>, or use the value of <code>ADMIN_BOOTSTRAP_TOKEN</code> if you set one. The first account becomes the admin.</span>
+          </label>
+        )}
 
         {error && <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</div>}
 
@@ -530,7 +553,7 @@ function thresholdLevel(value, warning, critical) {
   return value >= critical ? 2 : value >= warning ? 1 : 0
 }
 
-function StorageBars({ mounts, thresholds }) {
+function StorageBars({ mounts, thresholds, mountThresholds }) {
   if (!mounts.length) return null
   const t = { disk_warning_pct: 85, disk_critical_pct: 95, inodes_warning_pct: 85, inodes_critical_pct: 95, ...thresholds }
   return (
@@ -538,7 +561,8 @@ function StorageBars({ mounts, thresholds }) {
       <div className="mb-2 text-xs uppercase tracking-[0.2em] text-[#7f8589]">Storage</div>
       <div className="space-y-2">
         {mounts.map((mount) => {
-          const style = DISK_LEVEL_STYLES[thresholdLevel(mount.used_pct, t.disk_warning_pct, t.disk_critical_pct)]
+          const own = mountThresholds?.[mount.mount]
+          const style = DISK_LEVEL_STYLES[thresholdLevel(mount.used_pct, own?.disk_warning_pct ?? t.disk_warning_pct, own?.disk_critical_pct ?? t.disk_critical_pct)]
           const inodeLevel = thresholdLevel(mount.inodes_pct, t.inodes_warning_pct, t.inodes_critical_pct)
           const used = Math.min(100, Math.max(0, mount.used_pct ?? 0))
           return (
@@ -588,6 +612,18 @@ function useStoredIdSet(storageKey) {
   return [ids, toggle, (list) => setIds(new Set(list))]
 }
 
+// Like useStoredIdSet but forgotten on reload, so these sections always start collapsed.
+function useIdSet() {
+  const [ids, setIds] = useState(() => new Set())
+  const toggle = (id) => setIds((current) => {
+    const next = new Set(current)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    return next
+  })
+  return [ids, toggle]
+}
+
 function Chevron({ open, className = '' }) {
   return <span aria-hidden="true" className={`inline-block text-[10px] text-[#7f8589] transition-transform ${open ? 'rotate-90' : ''} ${className}`}>▶</span>
 }
@@ -620,6 +656,60 @@ function ContainerSection({ server, open, onToggle }) {
         <div className="border-t border-neutral-800 px-3 pb-2">
           {containers.length > CONTAINER_SEARCH_MIN && <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter by name or image" aria-label={`Filter containers on ${server.hostname}`} className="mt-3 w-full rounded-lg border border-neutral-800 bg-[#0d1013] px-3 py-1.5 text-sm text-[#cfcfcf] outline-none focus:border-white/30" />}
           {shown.length ? <ContainerTable serverId={server.id} containers={shown} /> : <p className="py-3 text-sm text-[#9aa0a6]">No containers match “{query.trim()}”.</p>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const TAINT_FAULT_BITS = [4, 5, 7, 9, 14]
+const SYSTEM_EVENT_LABELS = { reboot: 'Reboot', oom_kill: 'OOM kill', kernel_fault: 'Kernel fault', kernel_error: 'Kernel error' }
+const SYSTEM_EVENT_CLASSES = { reboot: 'text-sky-300', oom_kill: 'text-amber-300', kernel_fault: 'text-red-300', kernel_error: 'text-amber-300' }
+const CHIP_CLASSES = { ok: 'text-emerald-300', warn: 'text-amber-300', info: 'text-sky-300', unknown: 'text-[#7f8589]' }
+
+function formatAgo(value) {
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000))
+  if (seconds < 90) return 'just now'
+  if (seconds < 5400) return `${Math.round(seconds / 60)}m ago`
+  if (seconds < 172800) return `${Math.round(seconds / 3600)}h ago`
+  return `${Math.round(seconds / 86400)}d ago`
+}
+
+function systemChips(host, events) {
+  const oomRecently = events.some((event) => event.kind === 'oom_kill' && Date.now() - new Date(event.time).getTime() < 24 * 3600 * 1000)
+  const faulty = host.kernel_tainted != null && TAINT_FAULT_BITS.some((bit) => (host.kernel_tainted >> bit) & 1)
+  return [
+    ['Booted', host.system_uptime_seconds == null ? 'unknown' : formatAgo(Date.now() - host.system_uptime_seconds * 1000), host.system_uptime_seconds == null ? 'unknown' : events.some((event) => event.kind === 'reboot' && Date.now() - new Date(event.time).getTime() < 3600 * 1000) ? 'info' : 'ok'],
+    ['Last shutdown', host.last_shutdown == null || host.last_shutdown === 'unknown' ? 'unknown' : host.last_shutdown, host.last_shutdown === 'clean' ? 'ok' : host.last_shutdown === 'unclean' ? 'warn' : 'unknown'],
+    ['Clock', host.ntp_synced == null ? 'unknown' : host.ntp_synced ? 'synced' : 'not synced', host.ntp_synced == null ? 'unknown' : host.ntp_synced ? 'ok' : 'warn'],
+    ['OOM kills (24h)', host.oom_kill_total == null ? 'unknown' : oomRecently ? 'yes' : 'none', host.oom_kill_total == null ? 'unknown' : oomRecently ? 'warn' : 'ok'],
+    ['Kernel', host.kernel_tainted == null ? 'unknown' : faulty ? 'faults reported' : 'clean', host.kernel_tainted == null ? 'unknown' : faulty ? 'warn' : 'ok'],
+    ['Updates', host.reboot_required == null ? 'unknown' : host.reboot_required ? 'reboot needed' : 'applied', host.reboot_required == null ? 'unknown' : host.reboot_required ? 'info' : 'ok'],
+  ]
+}
+
+function SystemSection({ server, open, onToggle }) {
+  const host = server.host
+  const events = server.system_events || []
+  const chips = systemChips(host, events)
+  return (
+    <div className="mt-4 rounded-xl border border-neutral-800">
+      <button type="button" onClick={onToggle} aria-expanded={open} className="flex w-full flex-wrap items-center gap-x-4 gap-y-1 rounded-xl px-3 py-2.5 text-left text-sm transition hover:bg-white/3">
+        <Chevron open={open} />
+        <span className="text-white">System</span>
+        {chips.map(([label, value, tone]) => <span key={label} className="whitespace-nowrap text-xs text-[#7f8589]">{label} <span className={`font-medium ${CHIP_CLASSES[tone]}`}>{value}</span></span>)}
+      </button>
+      {open && (
+        <div className="border-t border-neutral-800 px-3 py-3">
+          <div className="mb-2 text-xs uppercase tracking-[0.2em] text-[#7f8589]">Recent events · 7 days</div>
+          {events.length ? <ul className="space-y-1.5 text-sm">{events.map((event, index) => (
+            <li key={`${event.time}-${event.kind}-${index}`} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+              <span className="w-24 shrink-0 text-xs text-[#7f8589]" title={new Date(event.time).toLocaleString()}>{formatAgo(event.time)}</span>
+              <span className={`w-24 shrink-0 text-xs font-medium ${SYSTEM_EVENT_CLASSES[event.kind] || 'text-[#cfcfcf]'}`}>{SYSTEM_EVENT_LABELS[event.kind] || event.kind}</span>
+              <span className="min-w-0 flex-1 basis-60 break-words text-[#bcbcbc]">{event.detail}</span>
+            </li>
+          ))}</ul> : <p className="text-sm text-[#9aa0a6]">No reboots, OOM kills or kernel faults in the last 7 days.</p>}
+          {host.last_shutdown == null && <p className="mt-3 text-xs text-[#7f8589]">“Unknown” means the collector couldn't read that value on this host, not that anything is wrong. Last shutdown, OOM process names and kernel errors need the optional system helper (see SECURITY.md).</p>}
         </div>
       )}
     </div>
@@ -688,7 +778,8 @@ const refresh = async () => {
   const servers = overview.servers || []
   // Remembered per browser: which server cards are collapsed and which container lists are open.
   const [collapsedServers, toggleServer, setCollapsedServers] = useStoredIdSet('homelab.collapsedServers')
-  const [openContainerLists, toggleContainerList] = useStoredIdSet('homelab.openContainerLists')
+  const [openContainerLists, toggleContainerList] = useIdSet()
+  const [openSystemLists, toggleSystemList] = useIdSet()
   const allCollapsed = servers.length > 0 && servers.every((server) => collapsedServers.has(server.id))
   const dashboardHost = servers.find((server) => server.is_dashboard_host)
   const dashboardHostId = dashboardHost?.id
@@ -787,7 +878,8 @@ const refresh = async () => {
               </div>
               {!collapsed && <>
                 {metric ? <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">{[['CPU', metric.cpu_utilization_pct, '%'], ['RAM', metric.ram_pct, '%'], [fullest ? `Disk · ${fullest.mount}` : 'Disk', fullest?.used_pct, '%'], ['Load (1m)', metric.load_1m, '']].map(([label, value, unit]) => <div key={label} className="rounded-xl bg-[#171b1f] p-3"><div className="truncate text-xs text-[#9aa0a6]" title={label}>{label}</div><div className="mt-1 text-xl font-semibold text-white">{value == null ? '—' : `${Number(value).toFixed(1)}${unit}`}</div></div>)}</div> : <div className="mt-4 rounded-xl bg-[#171b1f] p-4 text-sm text-[#9aa0a6]">Collector has not sent a measurement yet.</div>}
-                {metric && <StorageBars mounts={mounts} thresholds={overview.disk_thresholds} />}
+                {metric && <StorageBars mounts={mounts} thresholds={overview.disk_thresholds} mountThresholds={overview.mount_thresholds} />}
+                {metric && <SystemSection server={server} open={openSystemLists.has(server.id)} onToggle={() => toggleSystemList(server.id)} />}
                 {server.containers.length > 0 && <ContainerSection server={server} open={openContainerLists.has(server.id)} onToggle={() => toggleContainerList(server.id)} />}
                 <div className="mt-3 text-xs text-[#7f8589]">Last check: {server.last_seen_at ? new Date(server.last_seen_at).toLocaleString() : 'Never'}</div>
               </>}
@@ -879,32 +971,105 @@ function EnrollmentKeySettings() {
   )
 }
 
+function buildJoinCommand({ url, token, collectorImage, proxyImage }) {
+  return `docker compose -p homelab-collector -f - up -d <<'EOF'
+services:
+  collector:
+    image: ${collectorImage}
+    container_name: homelab-collector
+    restart: unless-stopped
+    environment:
+      HOMELAB_API_URL: ${url}
+      HOMELAB_JOIN_TOKEN: ${token}
+      HOMELAB_DOCKER_HOST: /run/docker-proxy/docker.sock
+    volumes:
+      - /proc:/host/proc:ro
+      - /:/hostfs:ro
+      - collector_state:/var/lib/homelab-collector
+      - docker_proxy_socket:/run/docker-proxy:ro
+    cap_drop: [ALL]
+    read_only: true
+    security_opt: [no-new-privileges:true]
+  docker-proxy:
+    image: ${proxyImage}
+    container_name: homelab-docker-proxy
+    restart: unless-stopped
+    user: "0:0"
+    network_mode: none
+    cap_drop: [ALL]
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - docker_proxy_socket:/run/docker-proxy
+volumes:
+  collector_state:
+  docker_proxy_socket:
+EOF`
+}
+
 function ConnectServerPanel() {
-  // API_BASE is usually relative ('/api'); collectors need the absolute address this dashboard is reached at.
-  const [apiUrl, setApiUrl] = useState(() => new URL(API_BASE, window.location.origin).href.replace(/\/$/, ''))
-  const url = apiUrl.trim().replace(/\/$/, '') || API_BASE
+  const [info, setInfo] = useState(null)
+  const [apiUrl, setApiUrl] = useState('')
+  const [token, setToken] = useState(null)
+  const [expiresAt, setExpiresAt] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    apiRequest('/monitoring/install-info', { method: 'GET' })
+      .then((data) => {
+        setInfo(data)
+        // API_BASE is usually relative ('/api'); a collector needs an absolute address. The VPN address wins when one is configured.
+        setApiUrl(data.collector_url || new URL(API_BASE, window.location.origin).href.replace(/\/$/, ''))
+      })
+      .catch((requestError) => setError(requestError.message || 'Could not load the install settings.'))
+  }, [])
+
+  const generate = async () => {
+    setBusy(true); setError('')
+    try {
+      const data = await apiRequest('/monitoring/join-tokens', { method: 'POST' })
+      setToken(data.join_token)
+      setExpiresAt(Date.now() + data.expires_in_seconds * 1000)
+    } catch (requestError) { setError(requestError.message || 'Could not create a join token.') }
+    finally { setBusy(false) }
+  }
+
+  const url = apiUrl.trim().replace(/\/$/, '')
   const isLocalhost = /\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(url)
-  const dockerRun = `docker run -d --name homelab-collector --restart unless-stopped \\
-  -e HOMELAB_API_URL=${url} \\
-  -v /proc:/host/proc:ro -v /:/hostfs:ro \\
-  -v /var/run/docker.sock:/var/run/docker.sock:ro \\
-  -v homelab-collector:/var/lib/homelab-collector \\
-  python:3.12-alpine sh -c 'wget -qO /tmp/collector.py "$HOMELAB_API_URL/collector.py" && exec python -u /tmp/collector.py'`
+  const ready = info?.collector_image && info?.proxy_image
+  const minutes = expiresAt ? Math.max(1, Math.round((expiresAt - Date.now()) / 60000)) : null
+  const command = token && ready ? buildJoinCommand({ url, token, collectorImage: info.collector_image, proxyImage: info.proxy_image }) : null
 
   return (
     <div className="mt-4 rounded-2xl border border-cyan-300/20 bg-cyan-300/5 p-4">
       <div className="font-medium text-cyan-100">Connect a server</div>
-      <p className="mt-1 text-sm text-[#bcbcbc]">Run this once on the machine you want to monitor. Within a few seconds it shows up below under <span className="text-white">New servers detected</span>. Click <span className="text-white">Add</span> and it starts reporting. No keys, config files or restarts.</p>
+      <p className="mt-1 text-sm text-[#bcbcbc]">Generate a command, run it once on the machine you want to monitor, then click <span className="text-white">Add</span> when it appears below under <span className="text-white">New servers detected</span>. The command carries a single-use token that expires, so only you can add servers.</p>
 
-      <label className="mt-4 block text-xs text-[#9aa0a6]">Dashboard address the new machine will use
-        <input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} className="mt-1 w-full rounded-xl border border-neutral-700 bg-[#0d1013] px-3 py-2 text-sm text-white" aria-describedby="api-url-hint" />
+      <label className="mt-4 block text-xs text-[#9aa0a6]">Address the new machine will use to reach the dashboard
+        <input value={apiUrl} onChange={(e) => { setApiUrl(e.target.value); setToken(null) }} className="mt-1 w-full rounded-xl border border-neutral-700 bg-[#0d1013] px-3 py-2 text-sm text-white" aria-describedby="api-url-hint" />
       </label>
-      {isLocalhost
-        ? <p id="api-url-hint" className="mt-1 text-[11px] text-amber-200">Other machines can't reach <code>localhost</code>. Replace it with this machine's LAN IP, Tailscale address or domain (e.g. <code>http://192.168.1.10:5173/api</code>).</p>
-        : <p id="api-url-hint" className="mt-1 text-[11px] text-[#7f8589]">Prefilled with the address you opened this dashboard at.</p>}
+      {info?.collector_url
+        ? <p id="api-url-hint" className="mt-1 text-[11px] text-[#7f8589]">Your configured collector (VPN) address.</p>
+        : info?.strict
+          ? <p id="api-url-hint" className="mt-1 text-[11px] text-amber-200">Collectors can't use the public address. Set <code>COLLECTOR_PUBLIC_URL</code> to the collector listener on your VPN (for example <code>http://10.8.0.1:8081/api</code>).</p>
+          : isLocalhost
+            ? <p id="api-url-hint" className="mt-1 text-[11px] text-amber-200">Other machines can't reach <code>localhost</code>. Use this machine's LAN IP, VPN address or domain (e.g. <code>http://192.168.1.10:5173/api</code>).</p>
+            : <p id="api-url-hint" className="mt-1 text-[11px] text-[#7f8589]">Prefilled with the address you opened this dashboard at. Over plain HTTP, use it only on a trusted LAN or VPN.</p>}
 
-      <CopyableCommand label="Run on the new machine" text={dockerRun} />
-      <p className="mt-2 text-[11px] text-[#7f8589]">The machine running this dashboard is detected automatically. The collector downloads itself from this dashboard on every start, so it stays up to date. Over plain HTTP, use it only on a trusted LAN or VPN.</p>
+      {info && !ready && <div className="mt-4 rounded-xl border border-amber-400/30 bg-amber-400/5 p-3 text-sm text-amber-200">No collector images are configured, so there is nothing safe to install from. Set <code>COLLECTOR_IMAGE</code> and <code>DOCKER_PROXY_IMAGE</code> in <code>.env</code> to your published, digest-pinned images (see SECURITY.md). The dashboard never serves collector code itself.</div>}
+
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <button type="button" onClick={generate} disabled={busy || !ready || !url} className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-slate-950 disabled:cursor-not-allowed disabled:opacity-40">{busy ? 'Generating…' : token ? 'Generate a new command' : 'Generate command'}</button>
+        {token && <span className="text-xs text-[#9aa0a6]">Single use · expires in about {minutes} min. A new command makes this one's token stop working once it is used.</span>}
+      </div>
+      {error && <div className="mt-3 rounded-xl border border-amber-400/30 bg-amber-400/5 p-3 text-sm text-amber-200">{error}</div>}
+
+      {command && <>
+        <CopyableCommand label="Run on the new machine (needs Docker with the compose plugin)" text={command} />
+        <p className="mt-2 text-[11px] text-[#7f8589]">Installs the collector with no Docker socket and no capabilities; a separate read-only proxy is the only container that touches the socket. The machine running this dashboard is detected automatically.</p>
+      </>}
 
       <details className="mt-4 rounded-xl border border-neutral-800 p-3">
         <summary className="cursor-pointer text-xs text-[#9aa0a6]">Advanced: skip approval with an enrollment key</summary>
@@ -922,9 +1087,11 @@ function PendingServers({ pending, onChanged }) {
   if (!pending.length) return null
 
   const act = async (item, action) => {
+    // Approving a machine that matches an existing server replaces that server's credentials and signs out its collector.
+    if (action === 'approve' && item.replaces && !window.confirm(`This machine matches the existing server "${item.replaces.hostname}". Adding it replaces that server's credentials and signs its current collector out. Only continue if you are re-installing that machine.`)) return
     setBusyId(item.id); setError('')
     try {
-      await apiRequest(`/monitoring/pending-collectors/${item.id}/${action}`, { method: 'POST' })
+      await apiRequest(`/monitoring/pending-collectors/${item.id}/${action}`, { method: 'POST', body: JSON.stringify({ replace: Boolean(item.replaces) }) })
       await onChanged()
     } catch (requestError) { setError(requestError.message || 'Could not update the server.') }
     finally { setBusyId(null) }
@@ -933,7 +1100,8 @@ function PendingServers({ pending, onChanged }) {
   const row = (item) => (
     <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-neutral-800 bg-[#0d1013]/70 p-3">
       <div>
-        <div className="font-medium text-white">{item.hostname}</div>
+        <div className="flex flex-wrap items-center gap-2"><span className="font-medium text-white">{item.hostname}</span>{item.verified ? <span className="rounded-full bg-emerald-400/15 px-2 py-0.5 text-[10px] font-semibold tracking-wider text-emerald-300">JOIN TOKEN</span> : <span className="rounded-full bg-amber-400/15 px-2 py-0.5 text-[10px] font-semibold tracking-wider text-amber-300">NO TOKEN</span>}</div>
+        {item.replaces && <div className="mt-1 text-xs text-amber-200">Replaces the existing server “{item.replaces.hostname}”: its current collector will be signed out.</div>}
         <div className="mt-0.5 text-xs text-[#9aa0a6]">{[item.ip_address, item.os_info].filter(Boolean).join(' · ')} · code <span className="font-mono text-[#cfcfcf]">{item.pairing_code}</span></div>
       </div>
       <div className="flex w-full gap-2 sm:w-auto">
@@ -1620,7 +1788,7 @@ function AdminAgentTab() {
 
 // [label, hint, warning key, critical key (null when the rule only warns), unit, step]
 const thresholdRows = [
-  ['Disk usage', 'Root filesystem', 'disk_warning_pct', 'disk_critical_pct', '%', 1],
+  ['Disk usage', 'Default for every mount', 'disk_warning_pct', 'disk_critical_pct', '%', 1],
   ['Inode usage', 'Root filesystem', 'inodes_warning_pct', 'inodes_critical_pct', '%', 1],
   ['Memory usage', null, 'memory_warning_pct', 'memory_critical_pct', '%', 1],
   ['Swap usage', 'Warning only', 'swap_warning_pct', null, '%', 1],
@@ -1639,27 +1807,38 @@ function ThresholdInput({ label, value, step, onChange, disabled, caption }) {
 function IncidentThresholdsSection() {
   const [saved, setSaved] = useState(null)
   const [values, setValues] = useState(null)
+  const [savedMounts, setSavedMounts] = useState([])
+  const [mountRows, setMountRows] = useState([])
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState(null)
+
+  // The API keys overrides by mount; the form edits them as rows so a path can be typed freely.
+  const toRows = (mountThresholds) => Object.entries(mountThresholds || {}).map(([mount, limits]) => ({ mount, warning: limits.disk_warning_pct, critical: limits.disk_critical_pct }))
+  const toMountThresholds = (rows) => Object.fromEntries(rows.map((row) => [row.mount.trim(), { disk_warning_pct: row.warning, disk_critical_pct: row.critical }]))
 
   useEffect(() => {
     apiRequest('/admin/settings', { method: 'GET' })
       .then((data) => {
         setSaved(data.alert_thresholds)
         setValues(data.alert_thresholds)
+        setSavedMounts(toRows(data.mount_thresholds))
+        setMountRows(toRows(data.mount_thresholds))
       })
       .catch((error) => setMessage({ ok: false, text: error.message || 'Could not load the thresholds.' }))
   }, [])
 
   const set = (key) => (value) => setValues((current) => ({ ...current, [key]: value }))
+  const setMountRow = (index, field) => (value) => setMountRows((rows) => rows.map((row, i) => (i === index ? { ...row, [field]: value } : row)))
 
   const save = async () => {
     setSaving(true)
     setMessage(null)
     try {
-      const data = await apiRequest('/admin/settings', { method: 'PUT', body: JSON.stringify({ alert_thresholds: values }) })
+      const data = await apiRequest('/admin/settings', { method: 'PUT', body: JSON.stringify({ alert_thresholds: values, mount_thresholds: toMountThresholds(mountRows) }) })
       setSaved(data.alert_thresholds)
       setValues(data.alert_thresholds)
+      setSavedMounts(toRows(data.mount_thresholds))
+      setMountRows(toRows(data.mount_thresholds))
       setMessage({ ok: true, text: 'Saved. New thresholds apply from each server\'s next check-in.' })
     } catch (error) {
       setMessage({ ok: false, text: error.message || 'Could not save the thresholds.' })
@@ -1669,8 +1848,9 @@ function IncidentThresholdsSection() {
   }
 
   const loading = values === null
-  const unchanged = loading || JSON.stringify(values) === JSON.stringify(saved)
-  const incomplete = !loading && Object.values(values).some((value) => value === '')
+  const unchanged = loading || (JSON.stringify(values) === JSON.stringify(saved) && JSON.stringify(mountRows) === JSON.stringify(savedMounts))
+  const mountPaths = mountRows.map((row) => row.mount.trim())
+  const incomplete = !loading && (Object.values(values).some((value) => value === '') || mountRows.some((row) => !row.mount.trim() || row.warning === '' || row.critical === '') || new Set(mountPaths).size !== mountPaths.length)
 
   return (
     <AdminSection
@@ -1704,6 +1884,25 @@ function IncidentThresholdsSection() {
             <ThresholdInput label="Restarts" value={values?.restart_loop_count} step={1} onChange={set('restart_loop_count')} disabled={loading} />restarts in
             <ThresholdInput label="Restart window in minutes" value={values?.restart_loop_window_minutes} step={1} onChange={set('restart_loop_window_minutes')} disabled={loading} />min
           </span>
+        </div>
+        <label className="flex flex-col gap-3 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:py-2.5">
+          <span><span className="text-[#bcbcbc]">Reboot and OOM-kill incidents</span><span className="block text-xs text-[#7f8589]">Minutes an incident stays open after the event</span></span>
+          <ThresholdInput label="Event incident window in minutes" value={values?.event_window_minutes} step={1} onChange={set('event_window_minutes')} disabled={loading} />
+        </label>
+        <div className="rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-3 text-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span><span className="text-[#bcbcbc]">Disk usage per mount</span><span className="block text-xs text-[#7f8589]">Replaces the default disk thresholds for that mount, on every server</span></span>
+            <button type="button" disabled={loading} onClick={() => setMountRows((rows) => [...rows, { mount: '', warning: values?.disk_warning_pct ?? 85, critical: values?.disk_critical_pct ?? 95 }])} className={secondaryButtonClass}>Add override</button>
+          </div>
+          {mountRows.length > 0 && <div className="mt-3 space-y-2">{mountRows.map((row, index) => (
+            <div key={index} className="flex flex-wrap items-end gap-2 sm:items-center">
+              <input type="text" aria-label="Mount path" placeholder="/mnt/data" value={row.mount} onChange={(event) => setMountRow(index, 'mount')(event.target.value)} className="h-10 min-w-0 flex-1 basis-40 rounded-xl border border-[#1f2326] bg-[#0d1013] px-3 font-mono text-xs text-white outline-none focus:border-white/30 sm:h-8" />
+              <ThresholdInput label={`${row.mount || 'Mount'} warning`} caption="Warning" value={row.warning} step={1} onChange={setMountRow(index, 'warning')} />
+              <ThresholdInput label={`${row.mount || 'Mount'} critical`} caption="Critical" value={row.critical} step={1} onChange={setMountRow(index, 'critical')} />
+              <span className="pb-2 text-xs text-[#9aa0a6] sm:pb-0">%</span>
+              <button type="button" aria-label={`Remove override for ${row.mount || 'mount'}`} onClick={() => setMountRows((rows) => rows.filter((_, i) => i !== index))} className="pb-2 text-lg leading-none text-[#9aa0a6] hover:text-red-300 sm:pb-0">×</button>
+            </div>
+          ))}</div>}
         </div>
       </div>
       {message && <p className={`mt-3 text-xs ${message.ok ? 'text-emerald-300' : 'text-amber-200'}`}>{message.text}</p>}

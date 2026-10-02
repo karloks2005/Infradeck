@@ -116,6 +116,20 @@ def get_recent_logs(
     return result
 
 
+PASSWORD_MIN_LENGTH = 16
+# bcrypt only uses the first 72 bytes (and refuses longer input), so longer passwords are rejected
+# up front instead of being silently truncated or crashing.
+PASSWORD_MAX_BYTES = 72
+
+
+def validate_password(password: str) -> None:
+    """New passwords must be long enough to resist guessing; existing accounts keep working as they are."""
+    if len(password) < PASSWORD_MIN_LENGTH:
+        raise ValueError(f"Password must be at least {PASSWORD_MIN_LENGTH} characters long. A few random words make a good passphrase.")
+    if len(password.encode("utf-8")) > PASSWORD_MAX_BYTES:
+        raise ValueError(f"Password must be at most {PASSWORD_MAX_BYTES} bytes long.")
+
+
 def register_user(db, redis_client, *, name: str, email: str, password: str):
     normalized_name = name.strip()
     normalized_email = email.strip().lower()
@@ -124,8 +138,7 @@ def register_user(db, redis_client, *, name: str, email: str, password: str):
         raise ValueError("Name is required.")
     if not normalized_email:
         raise ValueError("Email is required.")
-    if len(password) < 6:
-        raise ValueError("Password must be at least 6 characters long.")
+    validate_password(password)
 
     existing = db.query(User).filter(User.email == normalized_email).first()
     if existing:
@@ -164,7 +177,8 @@ def authenticate_user(db, redis_client, *, email: str, password: str):
     if not user or not user.is_active:
         raise ValueError("Invalid email or password.")
 
-    if not bcrypt.checkpw(password.encode("utf-8"), user.password_hash.encode("utf-8")):
+    # Anything over bcrypt's limit can't be a valid password here; bcrypt would raise with a different message.
+    if len(password.encode("utf-8")) > PASSWORD_MAX_BYTES or not bcrypt.checkpw(password.encode("utf-8"), user.password_hash.encode("utf-8")):
         raise ValueError("Invalid email or password.")
 
     record_audit_log(db, user_id=user.id, level="INFO", message="User signed in", source="auth")

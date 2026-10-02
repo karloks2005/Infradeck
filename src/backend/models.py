@@ -122,8 +122,24 @@ class PendingCollector(Base):
     os_info: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)  # pending | dismissed | approved
     approved_server_id: Mapped[Optional[int]] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), nullable=True)
+    # The join token this request presented, if any (shown as "verified" on the dashboard).
+    join_token_id: Mapped[Optional[int]] = mapped_column(ForeignKey("join_tokens.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     last_poll_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class JoinToken(Base):
+    """Minted by the Connect a server button and embedded in its command; proves who asked a collector to join."""
+
+    __tablename__ = "join_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Set when the server it created is approved; a used token can't register anything else.
+    used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class EnrollmentKey(Base):
@@ -154,6 +170,28 @@ class HostMetric(Base):
     net_bytes_sent_mb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     net_bytes_recv_mb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     system_uptime_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # System state read from the kernel; None means the collector couldn't tell.
+    boot_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    oom_kill_total: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    kernel_tainted: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    ntp_synced: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    reboot_required: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    # How the previous boot ended (clean | unclean | unknown), from the optional system helper.
+    last_shutdown: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+
+
+class SystemEvent(Base):
+    """Something that happened on a host (reboot, OOM kill, kernel fault), found by comparing check-ins."""
+
+    __tablename__ = "system_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), index=True, nullable=False)
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True, nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)  # reboot | oom_kill | kernel_fault | kernel_error
+    # Identifies the occurrence so a snapshot that repeats it doesn't record it twice.
+    event_key: Mapped[Optional[str]] = mapped_column(String(128), index=True, nullable=True)
+    detail: Mapped[str] = mapped_column(String(512), nullable=False)
 
 
 class MountMetric(Base):

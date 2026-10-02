@@ -46,6 +46,10 @@ services:
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      # Connect a server panel: images remote hosts install, and the address they reach this dashboard at.
+      COLLECTOR_IMAGE: ${COLLECTOR_IMAGE:-}
+      DOCKER_PROXY_IMAGE: ${DOCKER_PROXY_IMAGE:-}
+      COLLECTOR_PUBLIC_URL: ${COLLECTOR_PUBLIC_URL:-}
     # Browsers and remote collectors reach the API through the frontend at /api;
     # the direct port is only published on this machine for debugging.
     ports:
@@ -77,14 +81,67 @@ services:
       # on the dashboard. An optional enrollment key skips that approval.
       HOMELAB_ENROLL_KEY: ${HOMELAB_ENROLL_KEY:-}
       HOMELAB_SERVER_NAME: ${HOMELAB_SERVER_NAME:-}
+      # Docker data comes through the read-only proxy; the collector has no Docker socket.
+      HOMELAB_DOCKER_HOST: /run/docker-proxy/docker.sock
     volumes:
       - /proc:/host/proc:ro
       - /:/hostfs:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - collector_state:/var/lib/homelab-collector
+      # Summary from the optional system helper (read-only; empty unless that profile runs).
+      - system_events:/helper:ro
+      - docker_proxy_socket:/run/docker-proxy:ro
+    # Read-only host view, no capabilities: as root it then can't read other users' private
+    # files (SSH keys, .env) even though / is mounted.
+    cap_drop: [ALL]
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       backend:
         condition: service_healthy
+
+  # The only container that mounts the Docker socket (a mount flag can't make it read-only).
+  # It answers three read requests and nothing else. It has no network at all: the collector
+  # reaches it through a Unix socket in a volume only the two of them share. See SECURITY.md.
+  docker-proxy:
+    build:
+      context: .
+      dockerfile: docker/docker-proxy.Dockerfile
+    image: homelab-docker-proxy:latest
+    container_name: homelab-docker-proxy
+    restart: unless-stopped
+    user: "0:0"
+    cap_drop: [ALL]
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    network_mode: none
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - docker_proxy_socket:/run/docker-proxy
+
+  # Optional: adds OOM-killer process names, kernel errors and crash-vs-clean-shutdown detection.
+  # Enable with: docker compose --profile system-events up -d
+  # Its only privilege is CAP_SYSLOG (to read the kernel log); it has no network, a read-only
+  # filesystem, and sees the host only through the read-only wtmp file. See SECURITY.md.
+  system-helper:
+    profiles: ["system-events"]
+    build:
+      context: .
+      dockerfile: docker/system-helper.Dockerfile
+    image: homelab-system-helper:latest
+    container_name: homelab-system-helper
+    restart: unless-stopped
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [SYSLOG]
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - /var/log/wtmp:/host/wtmp:ro
+      - system_events:/out
 
   frontend:
     build:
@@ -125,5 +182,7 @@ volumes:
   postgres_data:
   redis_data:
   collector_state:
+  system_events:
+  docker_proxy_socket:
   caddy_data:
   caddy_config:

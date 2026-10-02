@@ -10,18 +10,19 @@ import time
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
+from urllib.parse import urlsplit
 
 import redis
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import case, func, inspect, text
 
 from .alerts import CONTAINER_RULE_PREFIX, CRITICAL, SERVER_OFFLINE_RULE, SEVERITIES, active_rule_keys, raise_alert, resolve_alerts, sync_alerts
 from .auth import authenticate_user, get_recent_logs, get_user_from_session, logout_user, record_audit_log, register_user
 from .db import SessionLocal, check_database, get_db
-from .models import AppSetting, AuditLog, Base, ChatMessage, ContainerMetric, Conversation, EnrollmentKey, HostMetric, IncidentAlert, MountMetric, PendingCollector, Server, User
+from .models import AppSetting, AuditLog, Base, ChatMessage, ContainerMetric, Conversation, EnrollmentKey, HostMetric, IncidentAlert, JoinToken, MountMetric, PendingCollector, Server, SystemEvent, User
 
 from .db import engine
 from .config import (
@@ -30,13 +31,19 @@ from .config import (
     REDIS_URL,
     REGISTER_RATE_LIMIT,
     REGISTER_RATE_WINDOW_SECONDS,
+    ADMIN_BOOTSTRAP_TOKEN,
     ALLOW_REGISTRATION,
+    COLLECTOR_ACCESS,
+    COLLECTOR_IMAGE,
+    COLLECTOR_PUBLIC_URL,
+    DOCKER_PROXY_IMAGE,
+    JOIN_TOKEN_TTL_SECONDS,
     CORS_ORIGINS,
     SESSION_COOKIE_NAME,
     SESSION_COOKIE_SECURE,
     SESSION_TTL_SECONDS,
 )
-from .rules import DEFAULT_THRESHOLDS, HOST_RULE_PREFIX, container_rules, host_rules, validate_thresholds
+from .rules import DEFAULT_THRESHOLDS, HOST_RULE_PREFIX, container_rules, host_rules, validate_thresholds, detect_system_events, system_rules, SYSTEM_RULE_PREFIX, validate_mount_thresholds, validate_helper_events, REBOOT_DETAILS, REBOOT_KEY_PREFIX
 from .rate_limit import enforce_ip_limit, enforce_login_limit, enforce_register_limit, reset_limits
 from ..agent.service import delete_agent_conversation, send_agent_message
 
@@ -45,6 +52,8 @@ class RegisterRequest(BaseModel):
     name: str
     email: EmailStr
     password: str
+    # Only needed for the very first account; see ensure_bootstrap_token.
+    bootstrap_token: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -78,6 +87,12 @@ class CollectorRegisterRequest(BaseModel):
     hostname: str
     machine_id: str | None = None
     os_info: str | None = None
+    join_token: str | None = None
+
+
+class ApproveRequest(BaseModel):
+    # Required to approve a request whose machine matches a server that already exists.
+    replace: bool = False
 
 
 class AdminSettingsRequest(BaseModel):
@@ -85,6 +100,8 @@ class AdminSettingsRequest(BaseModel):
     metrics_retention_days: int | None = None
     agent_chat_enabled: bool | None = None
     alert_thresholds: dict | None = None
+    # Replaces all per-mount disk overrides: {mount: {disk_warning_pct, disk_critical_pct}}.
+    mount_thresholds: dict | None = None
 
 
 class MetricsIngestRequest(BaseModel):
@@ -119,6 +136,36 @@ def agent_error_message(exc: Exception) -> str:
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 app = FastAPI(title="Homelab Agent API")
 
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def cross_site_request(method: str, headers, allowed_origins: list[str]) -> bool:
+    """True for a browser request that came from another site and must be refused.
+
+    Cookies are SameSite=Lax, which still lets a page on a sibling subdomain (other apps behind the same
+    reverse proxy count as same-site) send state-changing requests with the session cookie. Browsers
+    always say where such a request came from, so refuse it unless that is this dashboard. Tools that
+    aren't browsers (collectors, curl) send neither header and are unaffected; they authenticate with
+    tokens, not cookies.
+    """
+    if method not in UNSAFE_METHODS:
+        return False
+    origin = headers.get("origin")
+    if origin is not None:
+        if origin in allowed_origins:
+            return False
+        parsed = urlsplit(origin)
+        # Same host and port as the dashboard was reached on; the scheme can't be compared behind a TLS-terminating proxy.
+        return not (parsed.scheme in ("http", "https") and parsed.netloc and parsed.netloc == headers.get("host"))
+    return headers.get("sec-fetch-site") not in (None, "same-origin", "none")
+
+
+@app.middleware("http")
+async def refuse_cross_site_requests(request: Request, call_next):
+    if cross_site_request(request.method, request.headers, CORS_ORIGINS):
+        return JSONResponse({"detail": "Cross-site request refused."}, status_code=403)
+    return await call_next(request)
+
 app.add_middleware(
     CORSMiddleware,
     # Only needed when the dashboard is served from a different origin than /api.
@@ -144,6 +191,14 @@ def startup_event():
                 ("started_at", "VARCHAR(64)"), ("ports", "VARCHAR(512)"),
             ):
                 connection.execute(text(f"ALTER TABLE container_metrics ADD COLUMN IF NOT EXISTS {column} {column_type}"))
+            for column, column_type in (
+                ("boot_id", "VARCHAR(64)"), ("oom_kill_total", "INTEGER"), ("kernel_tainted", "INTEGER"),
+                ("ntp_synced", "BOOLEAN"), ("reboot_required", "BOOLEAN"), ("last_shutdown", "VARCHAR(16)"),
+            ):
+                connection.execute(text(f"ALTER TABLE host_metrics ADD COLUMN IF NOT EXISTS {column} {column_type}"))
+            connection.execute(text("ALTER TABLE system_events ADD COLUMN IF NOT EXISTS event_key VARCHAR(128)"))
+            connection.execute(text("ALTER TABLE pending_collectors ADD COLUMN IF NOT EXISTS join_token_id INTEGER REFERENCES join_tokens(id) ON DELETE SET NULL"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_system_events_event_key ON system_events (event_key)"))
             connection.execute(text("ALTER TABLE incident_alerts ADD COLUMN IF NOT EXISTS rule_key VARCHAR(255)"))
             connection.execute(text("ALTER TABLE incident_alerts ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP WITH TIME ZONE"))
             connection.execute(text("CREATE INDEX IF NOT EXISTS ix_incident_alerts_rule_key ON incident_alerts (rule_key)"))
@@ -167,6 +222,9 @@ def startup_event():
     db = SessionLocal()
     try:
         ensure_admin_exists(db)
+        setup_token = ensure_bootstrap_token(db)
+        if setup_token:
+            print(f"First-run setup token: {setup_token}  (needed to create the first account; shown again at every start until it exists)", flush=True)
     finally:
         db.close()
     threading.Thread(target=_offline_watch_loop, name="offline-watch", daemon=True).start()
@@ -191,13 +249,41 @@ def health():
     }
 
 
+BOOTSTRAP_TOKEN_KEY = "bootstrap_token_hash"
+
+
 def registration_open(db) -> bool:
     return ALLOW_REGISTRATION or db.query(User).count() == 0
 
 
+def ensure_bootstrap_token(db) -> str | None:
+    """Make sure a fresh install can only be claimed by someone who can read its configuration or logs.
+
+    While there are no accounts, the first one needs a setup token: ADMIN_BOOTSTRAP_TOKEN if set,
+    otherwise a random one generated here and returned so the caller can print it. Only its hash is
+    stored. Once an account exists the token is deleted and nothing is required any more.
+    """
+    setting = db.get(AppSetting, BOOTSTRAP_TOKEN_KEY)
+    if db.query(User).count() > 0:
+        if setting:
+            db.delete(setting)
+            db.commit()
+        return None
+    token = ADMIN_BOOTSTRAP_TOKEN or f"hlb_{secrets.token_urlsafe(24)}"
+    _set_setting(db, BOOTSTRAP_TOKEN_KEY, _hash_secret(token))
+    db.commit()
+    return None if ADMIN_BOOTSTRAP_TOKEN else token
+
+
+def _bootstrap_token_valid(db, token: str | None) -> bool:
+    setting = db.get(AppSetting, BOOTSTRAP_TOKEN_KEY)
+    # No stored token (the backend hasn't started up properly) means refuse, never allow.
+    return bool(setting and token and hmac.compare_digest(setting.value, _hash_secret(token.strip())))
+
+
 @app.get("/auth/config")
 def auth_config(db=Depends(get_db)):
-    return {"registration_enabled": registration_open(db)}
+    return {"registration_enabled": registration_open(db), "bootstrap_required": db.query(User).count() == 0}
 
 
 @app.post("/auth/register")
@@ -210,6 +296,9 @@ def auth_register(payload: RegisterRequest, request: Request, response: Response
         limit=REGISTER_RATE_LIMIT,
         window_seconds=REGISTER_RATE_WINDOW_SECONDS,
     )
+    first_account = db.query(User).count() == 0
+    if first_account and not _bootstrap_token_valid(db, payload.bootstrap_token):
+        raise HTTPException(status_code=403, detail="This install needs its setup token to create the first account. Find it in the backend log: docker compose logs backend | grep \"setup token\"")
     try:
         result = register_user(
             db,
@@ -221,6 +310,8 @@ def auth_register(payload: RegisterRequest, request: Request, response: Response
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    if first_account:
+        ensure_bootstrap_token(db)  # an account exists now: this removes the token
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=result["session_id"],
@@ -333,6 +424,7 @@ MAX_METRICS_RETENTION_DAYS = 3650
 
 AGENT_CHAT_ENABLED_KEY = "agent_chat_enabled"
 ALERT_THRESHOLDS_KEY = "alert_thresholds"
+MOUNT_THRESHOLDS_KEY = "mount_thresholds"
 
 
 def _set_setting(db, key: str, value: str) -> None:
@@ -366,8 +458,17 @@ def get_alert_thresholds(db) -> dict:
         return dict(DEFAULT_THRESHOLDS)
 
 
+def get_mount_thresholds(db) -> dict:
+    """Per-mount disk threshold overrides; anything unreadable is ignored in favor of the global thresholds."""
+    setting = db.get(AppSetting, MOUNT_THRESHOLDS_KEY)
+    try:
+        return validate_mount_thresholds(json.loads(setting.value)) if setting else {}
+    except ValueError:
+        return {}
+
+
 def _admin_settings(db) -> dict:
-    return {"metrics_retention_days": get_metrics_retention_days(db), "agent_chat_enabled": is_agent_chat_enabled(db), "alert_thresholds": get_alert_thresholds(db)}
+    return {"metrics_retention_days": get_metrics_retention_days(db), "agent_chat_enabled": is_agent_chat_enabled(db), "alert_thresholds": get_alert_thresholds(db), "mount_thresholds": get_mount_thresholds(db)}
 
 
 def purge_old_metrics(db, now: datetime | None = None) -> int:
@@ -376,6 +477,7 @@ def purge_old_metrics(db, now: datetime | None = None) -> int:
     deleted = db.query(HostMetric).filter(HostMetric.time < cutoff).delete(synchronize_session=False)
     deleted += db.query(ContainerMetric).filter(ContainerMetric.time < cutoff).delete(synchronize_session=False)
     deleted += db.query(MountMetric).filter(MountMetric.time < cutoff).delete(synchronize_session=False)
+    deleted += db.query(SystemEvent).filter(SystemEvent.time < cutoff).delete(synchronize_session=False)
     db.commit()
     return deleted
 
@@ -409,6 +511,14 @@ def update_admin_settings(payload: AdminSettingsRequest, session_id: Annotated[s
         _set_setting(db, ALERT_THRESHOLDS_KEY, json.dumps(thresholds))
         if changed:
             changes.append("Changed alert thresholds: " + ", ".join(f"{key}={value}" for key, value in changed.items()))
+    if payload.mount_thresholds is not None:
+        try:
+            mount_thresholds = validate_mount_thresholds(payload.mount_thresholds)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if mount_thresholds != get_mount_thresholds(db):
+            _set_setting(db, MOUNT_THRESHOLDS_KEY, json.dumps(mount_thresholds))
+            changes.append("Changed per-mount disk thresholds: " + (", ".join(f"{mount}={limits['disk_warning_pct']:g}/{limits['disk_critical_pct']:g}" for mount, limits in mount_thresholds.items()) or "none"))
     db.commit()
     for change in changes:
         record_audit_log(db, user_id=user["id"], level="INFO", message=change, source="admin")
@@ -425,6 +535,9 @@ def agent_config(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_N
 OVERVIEW_ALERT_LIMIT = 50
 
 
+SYSTEM_EVENTS_SHOWN = 10
+
+
 @app.get("/monitoring/overview")
 def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     # Servers belong to the install: everyone signed in can view them, only admins manage them.
@@ -432,6 +545,11 @@ def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_C
     # The dashboard's own machine first, then the newest servers.
     servers = db.query(Server).order_by(Server.is_dashboard_host.desc(), Server.created_at.desc()).all()
     alert_counts = dict(db.query(IncidentAlert.server_id, func.count()).filter(IncidentAlert.status == "active").group_by(IncidentAlert.server_id).all())
+    since = datetime.now(timezone.utc) - timedelta(days=7)
+    events: dict[int, list[SystemEvent]] = {}
+    for event in db.query(SystemEvent).filter(SystemEvent.time >= since).order_by(SystemEvent.time.desc()):
+        if len(events.setdefault(event.server_id, [])) < SYSTEM_EVENTS_SHOWN:
+            events[event.server_id].append(event)
     result = []
     for server in servers:
         metric = db.query(HostMetric).filter(HostMetric.server_id == server.id).order_by(HostMetric.time.desc()).first()
@@ -443,7 +561,8 @@ def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_C
             "check_interval_seconds": server.check_interval_seconds, "is_dashboard_host": server.is_dashboard_host,
             "active_alert_count": alert_counts.get(server.id, 0),
             "last_seen_at": server.last_seen_at.isoformat() if server.last_seen_at else None,
-            "host": ({key: getattr(metric, key) for key in ("time", "cpu_utilization_pct", "load_1m", "load_5m", "load_15m", "ram_used_gb", "ram_available_gb", "ram_pct", "swap_pct", "disk_usage_pct", "disk_inodes_pct", "net_bytes_sent_mb", "net_bytes_recv_mb", "system_uptime_seconds")} if metric else None),
+            "host": ({key: getattr(metric, key) for key in ("time", "cpu_utilization_pct", "load_1m", "load_5m", "load_15m", "ram_used_gb", "ram_available_gb", "ram_pct", "swap_pct", "disk_usage_pct", "disk_inodes_pct", "net_bytes_sent_mb", "net_bytes_recv_mb", "system_uptime_seconds", "oom_kill_total", "kernel_tainted", "ntp_synced", "reboot_required", "last_shutdown")} if metric else None),
+            "system_events": [{"time": e.time.isoformat(), "kind": e.kind, "detail": e.detail} for e in events.get(server.id, [])],
             "mounts": [{key: getattr(m, key) for key in ("mount", "fs_type", "total_gb", "used_gb", "used_pct", "inodes_pct")} for m in mounts],
             "containers": [{"container_id": c.container_id, "name": c.name, "image": c.image, "status": c.status, "restart_count": c.restart_count, "cpu_pct": c.cpu_pct, "memory_used_mb": c.memory_used_mb, "memory_pct": c.memory_pct, "healthcheck_status": c.healthcheck_status, "time": c.time.isoformat()} for c in latest.values()],
         })
@@ -457,6 +576,7 @@ def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_C
     return {
         "servers": result, "pending_collectors": pending, "alert_count": active_alerts.count(),
         # Lets the dashboard color disk bars the same way the alert rules judge them.
+        "mount_thresholds": get_mount_thresholds(db),
         "disk_thresholds": {key: thresholds[key] for key in ("disk_warning_pct", "disk_critical_pct", "inodes_warning_pct", "inodes_critical_pct")},
         "alerts": [{"id": a.id, "server_id": a.server_id, "hostname": hostnames.get(a.server_id), "severity": a.severity, "title": a.title, "description": a.description, "created_at": a.created_at.isoformat()} for a in alerts],
     }
@@ -525,6 +645,22 @@ def _hash_secret(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+def _collector_via(request) -> str:
+    """Which listener the request came in on: "vpn", "internal", or "" (public or direct).
+
+    nginx sets the header on its collector listeners and clears it on the public one, so a client
+    can't claim a listener it didn't use. In strict mode only collector listeners are answered.
+    """
+    via = getattr(request, "headers", {}).get("x-collector-via", "")
+    if COLLECTOR_ACCESS == "strict" and via not in ("vpn", "internal"):
+        raise HTTPException(status_code=404, detail="Not Found")
+    return via
+
+
+def require_collector_listener(request: Request) -> None:
+    _collector_via(request)
+
+
 @app.get("/monitoring/enrollment-key")
 def get_enrollment_key(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     user = _require_admin(session_id, db)
@@ -556,7 +692,7 @@ def revoke_enrollment_key(session_id: Annotated[str | None, Cookie(alias=SESSION
     return {"status": "revoked"}
 
 
-@app.post("/monitoring/collectors/enroll")
+@app.post("/monitoring/collectors/enroll", dependencies=[Depends(require_collector_listener)])
 def enroll_collector(payload: EnrollRequest, db=Depends(get_db)):
     """Register (or re-register) a collector using the owner's enrollment key.
 
@@ -590,28 +726,57 @@ PAIRING_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 PENDING_VISIBLE_SECONDS = 120
 PENDING_RETENTION = timedelta(days=1)
 MAX_PENDING_COLLECTORS = 100
-COLLECTOR_SOURCE = Path(__file__).resolve().parents[1] / "agent" / "collector.py"
+MAX_OPEN_JOIN_TOKENS = 20
+JOIN_TOKEN_PREFIX = "hlj_"
 
 
 def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-@app.get("/collector.py", response_class=PlainTextResponse)
-def collector_source():
-    """Serve the collector so new machines can run it from a stock Python image."""
-    return PlainTextResponse(COLLECTOR_SOURCE.read_text(), media_type="text/x-python")
+@app.post("/monitoring/join-tokens")
+def create_join_token(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    """Mint the single-use token the Connect a server command carries. The plaintext is returned only once."""
+    user = _require_admin(session_id, db)
+    now = datetime.now(timezone.utc)
+    if db.query(JoinToken).filter(JoinToken.used_at.is_(None), JoinToken.expires_at > now).count() >= MAX_OPEN_JOIN_TOKENS:
+        raise HTTPException(status_code=429, detail="Too many unused join tokens. Wait for them to expire or add the servers already waiting.")
+    plaintext = f"{JOIN_TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
+    db.add(JoinToken(token_hash=_hash_secret(plaintext), created_by=user["id"], expires_at=now + timedelta(seconds=JOIN_TOKEN_TTL_SECONDS)))
+    db.commit()
+    return {"join_token": plaintext, "expires_in_seconds": JOIN_TOKEN_TTL_SECONDS}
 
 
-@app.post("/monitoring/collectors/register")
+@app.get("/monitoring/install-info")
+def install_info(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    """What the Connect a server panel needs to build its command."""
+    _require_admin(session_id, db)
+    return {"strict": COLLECTOR_ACCESS == "strict", "collector_url": COLLECTOR_PUBLIC_URL or None, "collector_image": COLLECTOR_IMAGE or None, "proxy_image": DOCKER_PROXY_IMAGE or None}
+
+
+@app.post("/monitoring/collectors/register", dependencies=[Depends(require_collector_listener)])
 def register_collector(payload: CollectorRegisterRequest, request: Request, db=Depends(get_db)):
-    """Unauthenticated: a new collector asks to join and waits until a user clicks Add."""
+    """A new collector asks to join and waits until a user clicks Add.
+
+    Over the VPN listener a join token from the dashboard's Connect a server command is required.
+    """
+    via = _collector_via(request)
     ip_address = _client_ip(request)
     enforce_ip_limit(redis_client, scope="collector-register", ip_address=ip_address, limit=30, window_seconds=3600)
     hostname = payload.hostname.strip()[:255]
     if not hostname:
         raise HTTPException(status_code=400, detail="Hostname is required.")
     machine_id = (payload.machine_id or "").strip()[:64] or None
+    join_token = None
+    if payload.join_token:
+        join_token = db.query(JoinToken).filter(JoinToken.token_hash == _hash_secret(payload.join_token.strip()), JoinToken.used_at.is_(None), JoinToken.expires_at > datetime.now(timezone.utc)).first()
+        if not join_token:
+            raise HTTPException(status_code=403, detail="The join token is invalid, expired or already used. Copy a fresh command from the dashboard.")
+    elif COLLECTOR_ACCESS == "strict" and via == "vpn":
+        raise HTTPException(status_code=403, detail="A join token is required. Copy the command from the dashboard's Connect a server button.")
+    if join_token:
+        # The same host retrying with its token replaces its earlier request until someone approves it.
+        db.query(PendingCollector).filter(PendingCollector.join_token_id == join_token.id, PendingCollector.status != "approved").delete(synchronize_session=False)
     if machine_id:
         # A restarted collector replaces its own earlier request instead of piling up duplicates.
         db.query(PendingCollector).filter(PendingCollector.machine_id == machine_id, PendingCollector.ip_address == ip_address, PendingCollector.status != "approved").delete(synchronize_session=False)
@@ -622,13 +787,14 @@ def register_collector(payload: CollectorRegisterRequest, request: Request, db=D
     pending = PendingCollector(
         poll_secret_hash=_hash_secret(secret), pairing_code=f"{code[:3]}-{code[3:]}", hostname=hostname,
         machine_id=machine_id, ip_address=ip_address[:64], os_info=(payload.os_info or "")[:255] or None,
+        join_token_id=join_token.id if join_token else None,
     )
     db.add(pending)
     db.commit()
     return {"request_secret": secret, "pairing_code": pending.pairing_code, "poll_interval_seconds": 5}
 
 
-@app.post("/monitoring/collectors/register/poll")
+@app.post("/monitoring/collectors/register/poll", dependencies=[Depends(require_collector_listener)])
 def poll_collector_registration(authorization: Annotated[str | None, Header()] = None, db=Depends(get_db)):
     secret = authorization.removeprefix("Bearer ").strip() if authorization and authorization.startswith("Bearer ") else ""
     pending = db.query(PendingCollector).filter(PendingCollector.poll_secret_hash == _hash_secret(secret)).first() if secret else None
@@ -650,6 +816,10 @@ def poll_collector_registration(authorization: Annotated[str | None, Header()] =
     return {"status": "approved", "server_id": server.id, "collector_token": token, "check_interval_seconds": server.check_interval_seconds}
 
 
+def _server_for_machine(db, machine_id: str | None) -> Server | None:
+    return db.query(Server).filter(Server.machine_id == machine_id).first() if machine_id else None
+
+
 def _pending_for_user(pending_id: int, db) -> PendingCollector:
     pending = db.query(PendingCollector).filter(PendingCollector.id == pending_id, PendingCollector.status != "approved").first()
     if not pending:
@@ -658,18 +828,21 @@ def _pending_for_user(pending_id: int, db) -> PendingCollector:
 
 
 @app.post("/monitoring/pending-collectors/{pending_id}/approve")
-def approve_pending_collector(pending_id: int, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+def approve_pending_collector(pending_id: int, payload: ApproveRequest | None = None, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     user = _require_admin(session_id, db)
     pending = _pending_for_user(pending_id, db)
-    server = None
-    if pending.machine_id:
-        server = db.query(Server).filter(Server.machine_id == pending.machine_id).first()
+    server = _server_for_machine(db, pending.machine_id)
+    if server and not (payload and payload.replace):
+        # Approving mints new credentials for that server and locks out its current collector, so never do it silently.
+        raise HTTPException(status_code=409, detail=f"This machine matches the existing server {server.hostname}. Approving replaces that server's credentials and signs its current collector out. Confirm to continue.")
     if not server:
         server = Server(owner_id=user["id"], hostname=pending.hostname, machine_id=pending.machine_id, ip_address=pending.ip_address, os_info=pending.os_info)
         db.add(server)
         db.flush()
     pending.status = "approved"
     pending.approved_server_id = server.id
+    if pending.join_token_id:
+        db.query(JoinToken).filter(JoinToken.id == pending.join_token_id).update({"used_at": datetime.now(timezone.utc)}, synchronize_session=False)
     db.commit()
     return {"status": "approved", "server_id": server.id}
 
@@ -691,13 +864,19 @@ def visible_pending_collectors(db, now: datetime | None = None) -> list[dict]:
     for row in rows:
         last_poll = row.last_poll_at if row.last_poll_at.tzinfo else row.last_poll_at.replace(tzinfo=timezone.utc)
         if last_poll >= cutoff:
-            visible.append({"id": row.id, "hostname": row.hostname, "pairing_code": row.pairing_code, "ip_address": row.ip_address, "os_info": row.os_info, "status": row.status, "created_at": row.created_at.isoformat()})
+            existing = _server_for_machine(db, row.machine_id)
+            visible.append({
+                "id": row.id, "hostname": row.hostname, "pairing_code": row.pairing_code, "ip_address": row.ip_address, "os_info": row.os_info, "status": row.status, "created_at": row.created_at.isoformat(),
+                "verified": row.join_token_id is not None,
+                "replaces": {"id": existing.id, "hostname": existing.hostname} if existing else None,
+            })
     return visible
 
 
 def purge_stale_pending(db, now: datetime | None = None) -> None:
     cutoff = (now or datetime.now(timezone.utc)) - PENDING_RETENTION
     db.query(PendingCollector).filter(PendingCollector.last_poll_at < cutoff).delete(synchronize_session=False)
+    db.query(JoinToken).filter(JoinToken.expires_at < (now or datetime.now(timezone.utc)) - timedelta(days=1)).delete(synchronize_session=False)
     db.commit()
 
 
@@ -765,6 +944,7 @@ def delete_monitored_server(server_id: int, session_id: Annotated[str | None, Co
     db.query(HostMetric).filter(HostMetric.server_id == server.id).delete(synchronize_session=False)
     db.query(ContainerMetric).filter(ContainerMetric.server_id == server.id).delete(synchronize_session=False)
     db.query(MountMetric).filter(MountMetric.server_id == server.id).delete(synchronize_session=False)
+    db.query(SystemEvent).filter(SystemEvent.server_id == server.id).delete(synchronize_session=False)
     db.query(IncidentAlert).filter(IncidentAlert.server_id == server.id).delete(synchronize_session=False)
     db.query(PendingCollector).filter(PendingCollector.approved_server_id == server.id).delete(synchronize_session=False)
     db.delete(server)
@@ -785,7 +965,30 @@ def update_check_interval(server_id: int, payload: dict, session_id: Annotated[s
     return {"id": server.id, "check_interval_seconds": server.check_interval_seconds}
 
 
-@app.post("/monitoring/metrics/ingest")
+def record_helper_events(db, server_id: int, raw, now: datetime) -> None:
+    """Store the helper's kernel-log events once each; the helper republishes the whole ring buffer."""
+    events = validate_helper_events(raw, now)
+    if not events:
+        return
+    known = {key for (key,) in db.query(SystemEvent.event_key).filter(SystemEvent.server_id == server_id, SystemEvent.event_key.in_([event[3] for event in events]))}
+    for kind, time, detail, key in events:
+        if key not in known:
+            known.add(key)
+            db.add(SystemEvent(server_id=server_id, time=time, kind=kind, detail=detail, event_key=key))
+
+
+def _clean_system_fields(fields: dict) -> None:
+    """Drop system-state values of the wrong type; a collector reports None when it can't tell."""
+    for key, kind in (("oom_kill_total", int), ("kernel_tainted", int), ("ntp_synced", bool), ("reboot_required", bool)):
+        if key in fields and not (isinstance(fields[key], kind) and (kind is bool or not isinstance(fields[key], bool))):
+            fields[key] = None
+    if "last_shutdown" in fields and fields["last_shutdown"] not in {"clean", "unclean", "unknown"}:
+        fields["last_shutdown"] = None
+    if "boot_id" in fields:
+        fields["boot_id"] = fields["boot_id"][:64] if isinstance(fields["boot_id"], str) and fields["boot_id"] else None
+
+
+@app.post("/monitoring/metrics/ingest", dependencies=[Depends(require_collector_listener)])
 def ingest_metrics(payload: MetricsIngestRequest, authorization: Annotated[str | None, Header()] = None, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     server = db.query(Server).filter(Server.id == payload.server_id).first()
     if not server:
@@ -804,7 +1007,18 @@ def ingest_metrics(payload: MetricsIngestRequest, authorization: Annotated[str |
     if server.is_dashboard_host:
         db.query(Server).filter(Server.id != server.id, Server.is_dashboard_host.is_(True)).update({"is_dashboard_host": False}, synchronize_session=False)
     now = datetime.now(timezone.utc)
-    db.add(HostMetric(server_id=server.id, time=now, **{k: v for k, v in payload.host.items() if k in HostMetric.__table__.columns.keys() and k not in {"id", "server_id", "time"}}))
+    host_fields = {k: v for k, v in payload.host.items() if k in HostMetric.__table__.columns.keys() and k not in {"id", "server_id", "time"}}
+    _clean_system_fields(host_fields)
+    previous = db.query(HostMetric).filter(HostMetric.server_id == server.id).order_by(HostMetric.time.desc(), HostMetric.id.desc()).first()
+    # Only a collector that found the system helper sends its events; then they replace the OOM counter.
+    helper_active = isinstance(payload.host.get("helper_events"), list)
+    for kind, detail, key in detect_system_events(previous, host_fields, helper_active):
+        db.add(SystemEvent(server_id=server.id, time=now, kind=kind, detail=detail, event_key=key))
+    record_helper_events(db, server.id, payload.host.get("helper_events"), now)
+    # The helper can finish after a reboot was first noticed; fill in how the last shutdown went.
+    if host_fields.get("boot_id") and host_fields.get("last_shutdown") in REBOOT_DETAILS:
+        db.query(SystemEvent).filter(SystemEvent.server_id == server.id, SystemEvent.event_key == f"{REBOOT_KEY_PREFIX}{host_fields['boot_id']}").update({"detail": REBOOT_DETAILS[host_fields["last_shutdown"]]}, synchronize_session=False)
+    db.add(HostMetric(server_id=server.id, time=now, **host_fields))
     mounts = payload.host.get("mounts")
     for mount in mounts if isinstance(mounts, list) else []:
         if isinstance(mount, dict) and isinstance(mount.get("mount"), str) and mount["mount"]:
@@ -816,7 +1030,8 @@ def ingest_metrics(payload: MetricsIngestRequest, authorization: Annotated[str |
         db.add(ContainerMetric(server_id=server.id, time=now, **allowed))
     db.flush()  # the rules read this check-in back from the history tables
     thresholds = get_alert_thresholds(db)
-    sync_alerts(db, server.id, HOST_RULE_PREFIX, host_rules(db, server, thresholds, active_rule_keys(db, server.id, HOST_RULE_PREFIX)))
+    sync_alerts(db, server.id, HOST_RULE_PREFIX, host_rules(db, server, thresholds, active_rule_keys(db, server.id, HOST_RULE_PREFIX), get_mount_thresholds(db)))
+    sync_alerts(db, server.id, SYSTEM_RULE_PREFIX, system_rules(db, server, thresholds, now))
     # The collector sends no containers when Docker is unreachable; keep container alerts as they are rather than resolving them all.
     if containers:
         sync_alerts(db, server.id, CONTAINER_RULE_PREFIX, container_rules(db, server.id, containers, thresholds, now))

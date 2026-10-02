@@ -167,6 +167,56 @@ def test_mount_path_with_braces_does_not_break_titles(db):
     assert _active(db)["host:disk:/mnt/{odd}"].title == "Disk usage on nas:/mnt/{odd} is 99%"
 
 
+def _override(db, mount_thresholds):
+    return main.update_admin_settings(main.AdminSettingsRequest(mount_thresholds=mount_thresholds), session_id="s", db=db)
+
+
+def test_mount_override_replaces_global_disk_thresholds_for_that_mount_only(db):
+    _override(db, {"/mnt/data": {"disk_warning_pct": 50, "disk_critical_pct": 60}})
+    for _ in range(3):
+        _ingest(db, mounts=[_mount("/", 70), _mount("/mnt/data", 65), _mount("/mnt/other", 70)])
+
+    active = _active(db)
+    assert set(active) == {"host:disk:/mnt/data"}
+    assert active["host:disk:/mnt/data"].severity == CRITICAL
+
+
+def test_mount_override_can_be_looser_than_global(db):
+    _override(db, {"/mnt/backup": {"disk_warning_pct": 97, "disk_critical_pct": 99}})
+    for _ in range(3):
+        _ingest(db, mounts=[_mount("/mnt/backup", 92)])
+
+    assert _active(db) == {}
+
+
+def test_mount_override_applies_to_root_for_old_collectors(db):
+    _override(db, {"/": {"disk_warning_pct": 30, "disk_critical_pct": 40}})
+    for _ in range(3):
+        _ingest(db, disk_usage_pct=35)
+
+    assert _active(db)["host:disk:/"].severity == WARNING
+
+
+def test_mount_thresholds_are_validated_audited_and_replaced(db):
+    good = {"disk_warning_pct": 50, "disk_critical_pct": 60}
+    for bad in ({"data": good}, {"/d": {"disk_warning_pct": 60, "disk_critical_pct": 60}}, {"/d": {"disk_warning_pct": 0, "disk_critical_pct": 60}},
+                {"/d": {"disk_warning_pct": 50}}, {"/d": {"disk_warning_pct": "5", "disk_critical_pct": 60}}, {"/d": good | {"extra": 1}}):
+        with pytest.raises(HTTPException) as exc:
+            _override(db, bad)
+        assert exc.value.status_code == 400
+
+    assert _override(db, {"/mnt/data": good})["mount_thresholds"] == {"/mnt/data": good}
+    assert db.query(AuditLog).one().message == "Changed per-mount disk thresholds: /mnt/data=50/60"
+    assert _override(db, {})["mount_thresholds"] == {}
+
+
+def test_corrupt_mount_thresholds_are_ignored(db):
+    main._set_setting(db, main.MOUNT_THRESHOLDS_KEY, "not json")
+    db.commit()
+
+    assert main.get_mount_thresholds(db) == {}
+
+
 def test_overview_shows_latest_mounts_and_disk_thresholds(db, monkeypatch):
     monkeypatch.setattr(main, "_current_user", lambda session_id, db: {"id": 1})
     _ingest(db, mounts=[_mount("/", 10)])

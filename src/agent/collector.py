@@ -3,14 +3,17 @@
 Only HOMELAB_API_URL is required. On first start the collector asks to join and
 appears on the dashboard under "New servers detected"; once someone clicks Add
 it receives its token (no restart) and saves it under HOMELAB_STATE_DIR.
+HOMELAB_JOIN_TOKEN (from the dashboard's Connect a server command) proves who asked it to join.
 HOMELAB_ENROLL_KEY skips the approval step for automated installs, and
 HOMELAB_SERVER_ID / HOMELAB_COLLECTOR_TOKEN still work as explicit credentials.
 Run with ``python -m src.agent.collector`` or as a standalone script (standard
-library only; the backend serves it at /collector.py). Docker access is optional; when
+library only; it ships as a container image). Docker access is optional; when
 the socket is unavailable, host metrics continue to be sent.
 """
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
 import http.client
 import json
 import os
@@ -19,6 +22,7 @@ import socket
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -132,6 +136,108 @@ def collect_mounts() -> list[dict[str, Any]]:
     return sorted(by_device.values(), key=lambda entry: entry["mount"])
 
 
+def _read_text(path: Path) -> str | None:
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return None
+
+
+def _oom_kill_total() -> int | None:
+    """Processes the kernel OOM killer has stopped since boot (needs Linux 4.13+)."""
+    for line in (_read_text(HOST_PROC / "vmstat") or "").splitlines():
+        if line.startswith("oom_kill "):
+            return int(line.split()[1])
+    return None
+
+
+class _Timex(ctypes.Structure):
+    _fields_ = [
+        ("modes", ctypes.c_uint), ("offset", ctypes.c_long), ("freq", ctypes.c_long), ("maxerror", ctypes.c_long),
+        ("esterror", ctypes.c_long), ("status", ctypes.c_int), ("constant", ctypes.c_long), ("precision", ctypes.c_long),
+        ("tolerance", ctypes.c_long), ("time_sec", ctypes.c_long), ("time_usec", ctypes.c_long), ("tick", ctypes.c_long),
+        ("ppsfreq", ctypes.c_long), ("jitter", ctypes.c_long), ("shift", ctypes.c_int), ("stabil", ctypes.c_long),
+        ("jitcnt", ctypes.c_long), ("calcnt", ctypes.c_long), ("errcnt", ctypes.c_long), ("stbcnt", ctypes.c_long),
+        ("tai", ctypes.c_int), ("padding", ctypes.c_int * 11),
+    ]
+
+
+_TIME_ERROR = 5
+
+
+def _ntp_synced() -> bool | None:
+    """Whether the kernel clock is disciplined by a time service; None when it can't be read."""
+    # A read-only adjtimex (modes=0) covers chrony, ntpd and timesyncd alike. Docker's default
+    # seccomp profile may refuse it, in which case timesyncd's marker file is the fallback.
+    try:
+        libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+        state = libc.adjtimex(ctypes.byref(_Timex()))
+        if state >= 0:
+            return state != _TIME_ERROR
+    except (OSError, AttributeError):
+        pass
+    if (HOST_ROOT / "run/systemd/timesyncd/synchronized").exists():
+        return True
+    return None
+
+
+def _reboot_required() -> bool | None:
+    """Debian and Ubuntu flag pending reboots with a file; other distros aren't checked, so None."""
+    if (HOST_ROOT / "run/reboot-required").exists() or (HOST_ROOT / "var/run/reboot-required").exists():
+        return True
+    return False if (HOST_ROOT / "etc/debian_version").exists() else None
+
+
+HELPER_FILE_MAX_BYTES = 256 * 1024
+HELPER_MAX_AGE_SECONDS = 300
+
+
+def _helper_path() -> Path:
+    return Path(os.getenv("HOMELAB_HELPER_FILE", "/helper/system.json"))
+
+
+def collect_helper(boot_id: str | None, path: Path | None = None, now: float | None = None) -> dict[str, Any]:
+    """Summary from the optional system helper; {} when it isn't installed, stale or from another boot.
+
+    The file is treated as untrusted input: symlinks are refused, size is capped, and only
+    expected fields are passed on (the backend validates them again).
+    """
+    path = path or _helper_path()
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return {}
+    try:
+        raw = os.read(fd, HELPER_FILE_MAX_BYTES + 1)
+    except OSError:
+        return {}
+    finally:
+        os.close(fd)
+    try:
+        data = json.loads(raw) if len(raw) <= HELPER_FILE_MAX_BYTES else None
+        generated = datetime.fromisoformat(data["generated_at"]).timestamp()
+    except (ValueError, KeyError, TypeError):
+        return {}
+    if not isinstance(data, dict) or data.get("boot_id") != boot_id or abs((now if now is not None else time.time()) - generated) > HELPER_MAX_AGE_SECONDS:
+        return {}
+    events = data.get("events")
+    return {"last_shutdown": data.get("last_shutdown"), "helper_events": events if isinstance(events, list) else []}
+
+
+def collect_system() -> dict[str, Any]:
+    """Kernel-reported system state; the optional helper adds what needs log access."""
+    tainted = _read_text(HOST_PROC / "sys/kernel/tainted")
+    boot_id = _read_text(HOST_PROC / "sys/kernel/random/boot_id")
+    return {
+        **collect_helper(boot_id),
+        "boot_id": boot_id,
+        "oom_kill_total": _oom_kill_total(),
+        "kernel_tainted": int(tainted) if tainted and tainted.isdigit() else None,
+        "ntp_synced": _ntp_synced(),
+        "reboot_required": _reboot_required(),
+    }
+
+
 def collect_host() -> tuple[dict[str, Any], dict[str, Any]]:
     before_total, before_idle = _cpu_times()
     time.sleep(0.15)
@@ -162,6 +268,7 @@ def collect_host() -> tuple[dict[str, Any], dict[str, Any]]:
         "net_bytes_recv_mb": round(received / MiB, 3),
         "system_uptime_seconds": round(uptime, 1),
         "mounts": collect_mounts(),
+        **collect_system(),
     }
     server = {
         "hostname": _host_hostname(),
@@ -236,7 +343,8 @@ def _docker_request(socket_path: str, endpoint: str) -> Any:
 
 
 def collect_containers(socket_path: str | None = None) -> list[dict[str, Any]]:
-    socket_path = socket_path or os.getenv("DOCKER_SOCKET_PATH", "/var/run/docker.sock")
+    # The read-only proxy is preferred: it keeps the Docker socket, which is root on the host, out of this container.
+    socket_path = socket_path or os.getenv("HOMELAB_DOCKER_HOST") or os.getenv("DOCKER_SOCKET_PATH", "/var/run/docker.sock")
     if not Path(socket_path).exists():
         return []
     containers = _docker_request(socket_path, "/containers/json?all=1")
@@ -379,14 +487,23 @@ def _post_json(url: str, payload: dict[str, Any], bearer: str | None = None) -> 
         return json.loads(response.read().decode())
 
 
+def _error_detail(exc: urllib.error.HTTPError) -> str:
+    """The backend's explanation, e.g. that a join token has expired, without trusting its size or shape."""
+    try:
+        detail = json.loads(exc.read(2048)).get("detail")
+        return " ".join(str(detail).split())[:200] if detail else "no details"
+    except (ValueError, AttributeError, OSError):
+        return "no details"
+
+
 def request_approval(api_url: str) -> tuple[int, str]:
     """Ask to join, then wait until someone clicks Add on the dashboard. No restart needed."""
     base = api_url.rstrip("/")
     while True:
         try:
-            registration = _post_json(f"{base}/monitoring/collectors/register", {"hostname": _host_hostname(), "machine_id": _machine_id(), "os_info": _host_os_info()})
+            registration = _post_json(f"{base}/monitoring/collectors/register", {"hostname": _host_hostname(), "machine_id": _machine_id(), "os_info": _host_os_info(), "join_token": os.getenv("HOMELAB_JOIN_TOKEN", "").strip() or None})
         except urllib.error.HTTPError as exc:
-            print(f"Registration refused (HTTP {exc.code}); retrying in 5 minutes", flush=True)
+            print(f"Registration refused (HTTP {exc.code}): {_error_detail(exc)}; retrying in 5 minutes", flush=True)
             time.sleep(300)
             continue
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:

@@ -37,8 +37,8 @@ def _login_as(monkeypatch, user_id):
 
 
 def test_first_registered_user_is_admin_and_later_ones_are_not(db):
-    first = register_user(db, FakeRedis(), name="First", email="first@example.com", password="secret123")
-    second = register_user(db, FakeRedis(), name="Second", email="second@example.com", password="secret123")
+    first = register_user(db, FakeRedis(), name="First", email="first@example.com", password="correct-horse-battery-staple")
+    second = register_user(db, FakeRedis(), name="Second", email="second@example.com", password="correct-horse-battery-staple")
 
     assert first["user"]["role"] == "admin"
     assert second["user"]["role"] == "user"
@@ -164,7 +164,7 @@ def test_admin_can_turn_agent_chat_off_and_on(fleet, monkeypatch):
 
     result = main.update_admin_settings(main.AdminSettingsRequest(agent_chat_enabled=False), session_id="s", db=fleet)
 
-    assert result == {"metrics_retention_days": main.DEFAULT_METRICS_RETENTION_DAYS, "agent_chat_enabled": False, "alert_thresholds": rules.DEFAULT_THRESHOLDS}
+    assert result == {"metrics_retention_days": main.DEFAULT_METRICS_RETENTION_DAYS, "agent_chat_enabled": False, "alert_thresholds": rules.DEFAULT_THRESHOLDS, "mount_thresholds": {}}
     _login_as(monkeypatch, 2)
     assert main.agent_config(session_id="s", db=fleet) == {"chat_enabled": False}
 

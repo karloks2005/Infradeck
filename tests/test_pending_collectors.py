@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 
 from src.agent import collector
 from src.backend import main
-from src.backend.models import Base, PendingCollector, Server, User
+from src.backend.models import Base, JoinToken, PendingCollector, Server, User
 
 
 @pytest.fixture
@@ -98,7 +98,16 @@ def test_approving_known_machine_reuses_existing_server(db):
     db.add(Server(id=3, owner_id=1, hostname="nas", machine_id="machine-a"))
     db.commit()
     registration = _register(db)
-    main.approve_pending_collector(db.query(PendingCollector).one().id, session_id="s", db=db)
+    pending_id = db.query(PendingCollector).one().id
+    assert main.visible_pending_collectors(db)[0]["replaces"] == {"id": 3, "hostname": "nas"}
+
+    # Replacing a server's credentials locks out its current collector, so it needs explicit confirmation.
+    with pytest.raises(HTTPException) as exc:
+        main.approve_pending_collector(pending_id, session_id="s", db=db)
+    assert exc.value.status_code == 409 and "nas" in exc.value.detail
+    assert db.query(PendingCollector).one().status == "pending"
+
+    main.approve_pending_collector(pending_id, main.ApproveRequest(replace=True), session_id="s", db=db)
 
     assert _poll(db, registration["request_secret"])["server_id"] == 3
     assert db.query(Server).count() == 1
@@ -117,10 +126,6 @@ def test_purge_removes_abandoned_requests(db):
 
     main.purge_stale_pending(db)
     assert db.query(PendingCollector).count() == 0
-
-
-def test_collector_source_is_served():
-    assert "def run_collector" in main.collector_source().body.decode()
 
 
 def test_collector_waits_for_approval_without_restart(monkeypatch):
@@ -150,3 +155,175 @@ def test_collector_without_key_or_credentials_requests_approval(tmp_path, monkey
 
     assert collector.resolve_credentials("http://dash/api") == (11, "approved-token")
     assert collector.load_credentials() == (11, "approved-token")
+
+
+def test_collector_sends_its_join_token_when_registering(monkeypatch):
+    sent = []
+
+    def fake_post(url, payload, bearer=None):
+        sent.append((url, payload))
+        if url.endswith("/register"):
+            return {"request_secret": "s", "pairing_code": "ABC-123", "poll_interval_seconds": 2}
+        return {"status": "approved", "server_id": 4, "collector_token": "tok"}
+
+    monkeypatch.setenv("HOMELAB_JOIN_TOKEN", "hlj_abc ")
+    monkeypatch.setattr(collector, "_post_json", fake_post)
+    monkeypatch.setattr(collector.time, "sleep", lambda seconds: None)
+
+    assert collector.request_approval("http://dash/api") == (4, "tok")
+    assert sent[0][1]["join_token"] == "hlj_abc"
+
+
+def test_collector_without_a_join_token_sends_none(monkeypatch):
+    sent = []
+    monkeypatch.delenv("HOMELAB_JOIN_TOKEN", raising=False)
+    monkeypatch.setattr(collector, "_post_json", lambda url, payload, bearer=None: sent.append(payload) or {"request_secret": "s", "pairing_code": "A", "poll_interval_seconds": 2} if url.endswith("/register") else {"status": "approved", "server_id": 1, "collector_token": "t"})
+    monkeypatch.setattr(collector.time, "sleep", lambda seconds: None)
+    collector.request_approval("http://dash/api")
+    assert sent[0]["join_token"] is None
+
+
+def test_collector_explains_a_refused_registration(monkeypatch, capsys):
+    import io, json, urllib.error
+    calls = []
+
+    def fake_post(url, payload, bearer=None):
+        calls.append(url)
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(url, 403, "Forbidden", {}, io.BytesIO(json.dumps({"detail": "The join token is invalid, expired or already used."}).encode()))
+        if url.endswith("/register"):
+            return {"request_secret": "s", "pairing_code": "A", "poll_interval_seconds": 2}
+        return {"status": "approved", "server_id": 1, "collector_token": "t"}
+
+    monkeypatch.setattr(collector, "_post_json", fake_post)
+    monkeypatch.setattr(collector.time, "sleep", lambda seconds: None)
+    collector.request_approval("http://dash/api")
+
+    assert "join token is invalid, expired or already used" in capsys.readouterr().out
+
+
+# --- join tokens and the collector listener -------------------------------------------------
+
+def _mint(db):
+    return main.create_join_token(session_id="s", db=db)["join_token"]
+
+
+def _request(via="", ip="10.0.0.5"):
+    return SimpleNamespace(client=SimpleNamespace(host=ip), headers={"x-collector-via": via} if via else {})
+
+
+def _register_via(db, via, token=None, machine_id="machine-a", hostname="nas", ip="10.0.0.5"):
+    payload = main.CollectorRegisterRequest(hostname=hostname, machine_id=machine_id, join_token=token)
+    return main.register_collector(payload, _request(via, ip), db=db)
+
+
+@pytest.fixture
+def strict(monkeypatch):
+    monkeypatch.setattr(main, "COLLECTOR_ACCESS", "strict")
+
+
+def test_join_token_is_minted_hashed_and_expires(db):
+    token = _mint(db)
+    row = db.query(JoinToken).one()
+
+    assert token.startswith("hlj_") and row.token_hash == main._hash_secret(token) and token not in row.token_hash
+    expires = row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=timezone.utc)  # SQLite drops the zone
+    assert 0 < (expires - datetime.now(timezone.utc)).total_seconds() <= main.JOIN_TOKEN_TTL_SECONDS
+
+
+def test_join_token_minting_requires_admin_and_is_capped(db, monkeypatch):
+    for _ in range(main.MAX_OPEN_JOIN_TOKENS):
+        _mint(db)
+    with pytest.raises(HTTPException) as exc:
+        _mint(db)
+    assert exc.value.status_code == 429
+
+    monkeypatch.setattr(main, "_current_user", lambda session_id, db: {"id": 2})
+    db.add(User(id=2, name="Member", email="m@example.com", password_hash="x", role="user"))
+    db.commit()
+    with pytest.raises(HTTPException) as exc:
+        main.create_join_token(session_id="s", db=db)
+    assert exc.value.status_code == 403
+
+
+def test_registration_with_a_valid_token_is_marked_verified(db, strict):
+    _register_via(db, "vpn", _mint(db))
+
+    [item] = main.visible_pending_collectors(db)
+    assert item["verified"] is True
+
+
+def test_vpn_listener_refuses_registration_without_a_token(db, strict):
+    with pytest.raises(HTTPException) as exc:
+        _register_via(db, "vpn")
+    assert exc.value.status_code == 403 and "join token" in exc.value.detail
+    assert db.query(PendingCollector).count() == 0
+
+
+@pytest.mark.parametrize("bad", ["", "hlj_nonsense", "x" * 500])
+def test_wrong_tokens_are_refused(db, strict, bad):
+    _mint(db)
+    with pytest.raises(HTTPException) as exc:
+        _register_via(db, "vpn", bad or "   ")
+    assert exc.value.status_code == 403
+    assert db.query(PendingCollector).count() == 0
+
+
+def test_expired_token_is_refused(db, strict):
+    token = _mint(db)
+    db.query(JoinToken).update({"expires_at": datetime.now(timezone.utc) - timedelta(seconds=1)})
+    db.commit()
+    with pytest.raises(HTTPException) as exc:
+        _register_via(db, "vpn", token)
+    assert exc.value.status_code == 403
+
+
+def test_token_is_consumed_when_the_server_is_approved(db, strict):
+    token = _mint(db)
+    _register_via(db, "vpn", token)
+    main.approve_pending_collector(db.query(PendingCollector).one().id, session_id="s", db=db)
+
+    assert db.query(JoinToken).one().used_at is not None
+    with pytest.raises(HTTPException) as exc:
+        _register_via(db, "vpn", token, machine_id="machine-b", hostname="other")
+    assert exc.value.status_code == 403
+
+
+def test_same_host_can_retry_with_its_token_before_approval(db, strict):
+    token = _mint(db)
+    _register_via(db, "vpn", token)
+    _register_via(db, "vpn", token)
+
+    assert db.query(PendingCollector).count() == 1
+
+
+def test_strict_mode_hides_collector_endpoints_from_the_public_listener(db, strict):
+    for via in ("", "public", "something-else"):
+        with pytest.raises(HTTPException) as exc:
+            main.require_collector_listener(_request(via))
+        assert exc.value.status_code == 404
+    main.require_collector_listener(_request("vpn"))
+    main.require_collector_listener(_request("internal"))
+
+
+def test_internal_listener_needs_no_token_so_the_dashboards_own_collector_can_join(db, strict):
+    _register_via(db, "internal")
+    assert main.visible_pending_collectors(db)[0]["verified"] is False
+
+
+def test_open_mode_keeps_working_without_tokens(db):
+    _register_via(db, "")
+    assert db.query(PendingCollector).count() == 1
+
+
+def test_a_bad_token_is_refused_even_in_open_mode(db):
+    with pytest.raises(HTTPException) as exc:
+        _register_via(db, "", "hlj_wrong")
+    assert exc.value.status_code == 403
+
+
+def test_install_info_reports_the_configured_addresses(db, monkeypatch):
+    monkeypatch.setattr(main, "COLLECTOR_PUBLIC_URL", "http://10.8.0.1:8081/api")
+    monkeypatch.setattr(main, "COLLECTOR_IMAGE", "ghcr.io/o/c@sha256:abc")
+    info = main.install_info(session_id="s", db=db)
+    assert info == {"strict": False, "collector_url": "http://10.8.0.1:8081/api", "collector_image": "ghcr.io/o/c@sha256:abc", "proxy_image": None}

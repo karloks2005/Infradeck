@@ -246,3 +246,6 @@ dist-ssr/
 *.local
 .vscode/*
 !.vscode/extensions.json
+
+# Local SQLite development database
+dev.db

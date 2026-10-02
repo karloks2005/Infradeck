@@ -26,3 +26,18 @@ CORS_ORIGINS = [
     for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:5176").split(",")
     if origin.strip()
 ]
+
+# "strict" makes the collector endpoints answer only requests that arrived through the VPN or
+# internal listener (see docker/nginx.strict.conf); "open" keeps the single-listener behaviour.
+COLLECTOR_ACCESS = os.getenv("COLLECTOR_ACCESS", "open").lower()
+# What the Connect a server panel shows: the collector listener's address on your VPN, and the
+# pinned images remote hosts install. All optional.
+COLLECTOR_PUBLIC_URL = os.getenv("COLLECTOR_PUBLIC_URL", "").strip().rstrip("/")
+COLLECTOR_IMAGE = os.getenv("COLLECTOR_IMAGE", "").strip()
+DOCKER_PROXY_IMAGE = os.getenv("DOCKER_PROXY_IMAGE", "").strip()
+JOIN_TOKEN_TTL_SECONDS = int(os.getenv("JOIN_TOKEN_TTL_SECONDS", "900"))
+
+# Creating the first account (which becomes the admin) needs a setup token, so nobody else can claim a
+# fresh install. Leave unset to have one generated and printed in the backend log at every start until
+# the first account exists; set it to choose your own.
+ADMIN_BOOTSTRAP_TOKEN = os.getenv("ADMIN_BOOTSTRAP_TOKEN", "").strip()
