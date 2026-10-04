@@ -11,11 +11,12 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func
 
 from .alerts import CONTAINER_RULE_PREFIX, CRITICAL, INFO, WARNING
-from .models import ContainerMetric, HostMetric, MountMetric, SystemEvent
+from .models import ContainerMetric, FirewallState, HostMetric, ListenerState, MountMetric, SystemEvent
 
 HOST_RULE_PREFIX = "host:"
 SYSTEM_RULE_PREFIX = "system:"
 TREND_RULE_PREFIX = "trend:"
+NETWORK_RULE_PREFIX = "network:"
 
 DEFAULT_THRESHOLDS: dict[str, float | int] = {
     "disk_warning_pct": 85, "disk_critical_pct": 95,
@@ -391,6 +392,122 @@ def container_rules(db, server_id: int, containers: list[dict], thresholds: dict
             firing[f"{CONTAINER_RULE_PREFIX}{name}:removed"] = (INFO, f"Container {name} is no longer present", f"{name} disappeared from this server. If you removed it on purpose this clears by itself.")
         elif event.kind == "image_changed" and name in present:
             firing[f"{CONTAINER_RULE_PREFIX}{name}:image"] = (INFO, f"Container {name} is running a different image", f"{event.detail}. Expected after an update or rebuild; investigate if you didn't make one.")
+    return firing
+
+
+NETWORK_EVENT_KINDS = ("port_opened", "port_closed", "firewall_changed", "firewall_weakened", "network_notice")
+MAX_NETWORK_EVENTS_PER_CHECKIN = 10
+MAX_NETWORK_EVENTS_PER_HOUR = 40
+MAX_LISTENERS = 512
+EPHEMERAL_PORT_START = 32768
+LISTENER_PROTOCOLS = ("tcp", "udp")
+LISTENER_SCOPES = {"loopback": "loopback only", "any": "all interfaces", "specific": "a specific address"}
+FIREWALL_LABELS = {"ufw": "ufw IPv4 rules", "ufw6": "ufw IPv6 rules", "ufw-conf": "ufw settings", "nftables": "nftables.conf",
+                   "iptables": "iptables rules.v4", "ip6tables": "ip6tables rules.v6"}
+_SHA16 = re.compile(r"[0-9a-f]{16}")
+INTERNET_STATUSES = ("ok", "degraded", "dns_failed", "down")
+
+
+def listener_tracked(proto: str, port: int, scope: str) -> bool:
+    """Ephemeral ports are skipped: loopback ones and all UDP ones are programs talking out, not services."""
+    return not (port >= EPHEMERAL_PORT_START and (scope == "loopback" or proto == "udp"))
+
+
+def validate_listeners(raw) -> list[tuple[str, int, str]] | None:
+    """The tracked, well-formed listeners a collector reported (deduplicated, capped), or None if it isn't a list."""
+    if not isinstance(raw, list):
+        return None
+    found: set[tuple[str, int, str]] = set()
+    for item in raw[:MAX_LISTENERS + 100]:
+        if not isinstance(item, dict):
+            continue
+        proto, port, scope = item.get("proto"), item.get("port"), item.get("scope")
+        if proto in LISTENER_PROTOCOLS and scope in LISTENER_SCOPES and isinstance(port, int) and not isinstance(port, bool) and 1 <= port <= 65535 and listener_tracked(proto, port, scope):
+            found.add((proto, port, scope))
+    return sorted(found)[:MAX_LISTENERS]
+
+
+def validate_firewall(raw) -> dict | None:
+    """{"files": {name: (sha, rules)}, "ufw_enabled": bool | None} from a collector's report, or None if unusable.
+
+    A report of None means the collector found no firewall files at all, which is a real (empty) state.
+    """
+    if raw is None:
+        return {"files": {}, "ufw_enabled": None}
+    if not isinstance(raw, dict) or not isinstance(raw.get("files"), list):
+        return None
+    files: dict[str, tuple[str, int]] = {}
+    for item in raw["files"][:len(FIREWALL_LABELS) * 2]:
+        if not isinstance(item, dict):
+            continue
+        name, sha, count = item.get("name"), item.get("sha"), item.get("rules")
+        if name in FIREWALL_LABELS and name not in files and isinstance(sha, str) and _SHA16.fullmatch(sha) and isinstance(count, int) and not isinstance(count, bool) and 0 <= count <= 1_000_000:
+            files[name] = (sha, count)
+    enabled = raw.get("ufw_enabled")
+    return {"files": files, "ufw_enabled": enabled if isinstance(enabled, bool) else None}
+
+
+def _listener_text(proto: str, port: int, scope: str) -> str:
+    return f"{proto}/{port} ({LISTENER_SCOPES[scope]})"
+
+
+def detect_listener_changes(known: dict[tuple[str, int, str], object], current: set[tuple[str, int, str]]) -> list[tuple[str, str, str]]:
+    """(kind, detail, key) for ports that opened or closed. Nothing is reported without a baseline or a current list."""
+    if not known or not current:
+        return []
+    events = [("port_opened", f"New listener: {_listener_text(*key)}", "/".join(map(str, key))) for key in sorted(current - known.keys())]
+    events += [("port_closed", f"Listener closed: {_listener_text(*key)}", "/".join(map(str, key))) for key in sorted(known.keys() - current)]
+    return events
+
+
+def detect_firewall_changes(known: dict[str, FirewallState], firewall: dict) -> list[tuple[str, str, str]]:
+    """(kind, detail, name) for changes since the last report; a report that lowers protection is "weakened"."""
+    if not known:
+        return []  # first report for this server is only a baseline
+    events: list[tuple[str, str, str]] = []
+    for name, (sha, count) in sorted(firewall["files"].items()):
+        label, row = FIREWALL_LABELS[name], known.get(name)
+        if row is None:
+            events.append(("firewall_changed", f"{label} appeared", name))
+        elif row.sha != sha:
+            if name == "ufw-conf" and row.enabled is True and firewall["ufw_enabled"] is False:
+                events.append(("firewall_weakened", "ufw was enabled and is now disabled", name))
+            elif name == "ufw-conf" and row.enabled is False and firewall["ufw_enabled"] is True:
+                events.append(("firewall_changed", "ufw was disabled and is now enabled", name))
+            elif name == "ufw-conf":
+                events.append(("firewall_changed", f"{label} changed", name))
+            elif count < row.rules:
+                events.append(("firewall_weakened", f"{label} lost rules ({row.rules} to {count})", name))
+            else:
+                events.append(("firewall_changed", f"{label} changed ({row.rules} to {count} rules)", name))
+    events += [("firewall_weakened", f"{FIREWALL_LABELS[name]} is no longer present", name) for name in sorted(known.keys() - firewall["files"].keys())]
+    return events
+
+
+def network_rules(db, server, thresholds: dict, now: datetime) -> dict[str, tuple[str, str, str]]:
+    """Incidents for the internet check, newly exposed listeners and firewall changes."""
+    host, sustained = server.hostname, thresholds["sustained_checks"]
+    firing: dict[str, tuple[str, str, str]] = {}
+    samples = db.query(HostMetric).filter(HostMetric.server_id == server.id).order_by(HostMetric.time.desc(), HostMetric.id.desc()).limit(sustained).all()
+    if len(samples) >= sustained:
+        if all(sample.internet_status == "down" for sample in samples):
+            firing[f"{NETWORK_RULE_PREFIX}internet"] = (WARNING, f"{host} cannot reach the internet", "Every connectivity target failed for several check-ins in a row. Check the uplink, the router and the host's network settings.")
+        elif all(sample.internet_status == "dns_failed" for sample in samples):
+            firing[f"{NETWORK_RULE_PREFIX}dns"] = (WARNING, f"DNS is failing on {host}", "The connectivity targets can't be resolved by name, for several check-ins in a row. Check the DNS servers the host uses.")
+    since = now - timedelta(minutes=thresholds["event_window_minutes"])
+    events = db.query(SystemEvent).filter(SystemEvent.server_id == server.id, SystemEvent.kind.in_(NETWORK_EVENT_KINDS), SystemEvent.time >= since).order_by(SystemEvent.time.desc()).all()
+    open_ports = {(row.proto, row.port, row.scope) for row in db.query(ListenerState).filter(ListenerState.server_id == server.id)}
+    for event in events:
+        if event.kind == "port_opened" and event.event_key:
+            proto, _, rest = event.event_key.partition("/")
+            port, _, scope = rest.partition("/")
+            if scope != "loopback" and port.isdigit() and (proto, int(port), scope) in open_ports:
+                firing[f"{NETWORK_RULE_PREFIX}port:{proto}/{port}"] = (WARNING, f"New listener on {proto}/{port} on {host}", f"{event.detail}. Something started listening on a port that other machines can reach. Expected after starting a service; investigate if you didn't.")
+    for kind, severity, title in (("firewall_weakened", WARNING, f"Firewall protection was reduced on {host}"), ("firewall_changed", INFO, f"Firewall configuration changed on {host}")):
+        details = list(dict.fromkeys(event.detail for event in events if event.kind == kind))[:3]
+        if details:
+            firing[f"{NETWORK_RULE_PREFIX}firewall"] = (severity, title, "; ".join(details) + ". This reads configuration files, not the live ruleset. If you didn't make the change, check the host.")
+            break
     return firing
 
 

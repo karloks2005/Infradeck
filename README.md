@@ -32,12 +32,16 @@ for what every component can touch and the limits of each protection.
 - **System health per server**: reboots, OOM-killer activity, kernel fault flags,
   clock synchronisation and pending reboots, plus (with the optional system helper)
   whether the last shutdown was clean and which process the OOM killer stopped.
+- **Network at a glance**: which ports each server listens on (and which are reachable
+  from other machines), whether its firewall configuration changed, and, if you turn
+  it on, whether it can still reach the internet.
 - **Incidents with sensible alert rules**: disk (with per-mount overrides), inodes,
   memory, swap, load per CPU core, container restart loops, failing healthchecks,
   reboots and crashes, OOM kills, kernel faults, unsynchronised clocks, an
   unreachable or slow Docker daemon, containers that crash or are killed for running
-  out of memory, containers that vanish or change image, possible memory leaks, and
-  servers that stop reporting. One incident per problem, opened only after a sustained
+  out of memory, containers that vanish or change image, possible memory leaks, new
+  ports opened to the network, firewall changes, lost internet or DNS, and servers
+  that stop reporting. One incident per problem, opened only after a sustained
   breach where that makes sense and resolved automatically when it clears.
   Thresholds are editable by admins.
 - **Add servers with one command and one click**: click **Connect a server**, run
@@ -393,6 +397,9 @@ Alternatives:
   alert thresholds (including any per-mount overrides), a **System** row and a
   **Containers** list. Both lists start closed. A filter box appears for servers
   with more than 10 containers.
+- **Network** row: internet reachability, how many ports the server listens on and how
+  many are exposed, and the firewall state, opening into the listener list and the last
+  7 days of port and firewall changes.
 - **System** row: one line of status chips (when it booted, last shutdown, clock,
   OOM kills in the last 24 hours, kernel, pending updates) that opens into the
   last 7 days of reboots, OOM kills and kernel messages. A chip that says
@@ -432,12 +439,24 @@ stops firing.
 | Possible memory leak (steady climb over 12 hours) | 10 MB/h and 20% growth | warning |
 | Docker unreachable (after it worked before) | 3 check-ins in a row | critical |
 | Docker slow to list containers | over 2000 ms, 3 check-ins in a row | warning |
+| New listener reachable from other machines | stays open 60 minutes | warning |
+| Firewall configuration changed | stays open 60 minutes | info |
+| Firewall protection reduced (ufw turned off, rules removed, a file gone) | stays open 60 minutes | warning |
+| No internet (only if the check is on) | 3 check-ins in a row | warning |
+| DNS failing (only if the check is on) | 3 check-ins in a row | warning |
 | Server stopped reporting | 3 missed check-ins | critical |
 | Host rebooted | stays open 60 minutes | info (critical after an unclean shutdown) |
 | OOM killer fired | stays open 60 minutes | warning (critical at 3 or more) |
 | Kernel fault flags (machine check, bad page, oops, warning, soft lockup) | – | warning, clears on reboot |
 | Clock not synchronised | 3 check-ins in a row | warning |
 | Reboot required | – | info |
+
+New listening ports and firewall changes are noticed the same way, by comparing with
+what the previous check-in saw. The first report is a silent baseline, an unreadable
+or empty report is treated as unknown (never as "everything closed"), and short-lived
+programs using random high ports (loopback ones and all UDP ones) are ignored. A new
+port bound only to the loopback address is recorded but doesn't open an incident; one
+reachable from other machines does. Events are capped like the container ones.
 
 Container exits, removals and image changes are noticed by comparing each check-in
 with the previous one, matching containers **by name** (Compose recreates them with
@@ -563,6 +582,7 @@ standard-library Python.
 | `HOMELAB_JOIN_TOKEN` | empty | Single-use token from **Connect a server**; required over the VPN listener. |
 | `HOMELAB_ENROLL_KEY` | empty | Join immediately instead of waiting for approval. |
 | `HOMELAB_SERVER_NAME` | host's `/etc/hostname` | Name shown on the dashboard. |
+| `HOMELAB_CONNECTIVITY_TARGETS` | empty (check off) | Optional internet check: up to 5 comma-separated `host:port` targets (hostnames or IPv4), e.g. `1.1.1.1:443,9.9.9.9:443`. The collector opens a TCP connection and looks the name up; it sends nothing. Set on each collector; the dashboard cannot set it. |
 | `HOMELAB_STATE_DIR` | `/var/lib/homelab-collector` | Where the token is saved (mount a volume here). |
 | `HOMELAB_MACHINE_ID` | host's `/etc/machine-id` | Identity used to recognise reinstalled machines. |
 | `HOMELAB_DASHBOARD_HOST` | empty | `true` marks this machine as the one running the dashboard (set in the Compose files for the stack's own collector; leave it unset elsewhere). |
@@ -588,7 +608,12 @@ from the backend's response to each report.
   proxy mounts the socket; it has no network, answers three read-only requests and
   strips environment variables, labels, mounts and error text from what it returns.
   Everything a collector reports about containers is validated again by the backend
-  (types, ranges, lengths, counts) before it is stored. The collector still mounts `/`
+  (types, ranges, lengths, counts) before it is stored.
+- **Network checks are passive.** Listening ports are read from the host's `/proc`
+  (protocol, port and scope only, no process names), the firewall check reads known
+  configuration files and reports only a hash and a rule count (never the rules, and not
+  the live ruleset, which would need `CAP_NET_ADMIN`), and the internet check is off
+  unless you configure its targets on that collector. The collector still mounts `/`
   read-only; without capabilities it can't read other users' private files through it.
 - **Collector endpoints are not public.** On the server stack the public listener
   returns 404 for register, poll, enroll and ingest; they exist only on the
@@ -694,8 +719,9 @@ columns are added with `ALTER TABLE ... IF NOT EXISTS` in the startup hook in
 carries the boot ID, OOM counter, kernel flags, clock state and last shutdown), one
 per filesystem in `mount_metrics` and one per container in `container_metrics` (which
 also records the exit code, out-of-memory flag, finish time and image ID), all with the
-same timestamp. `system_events` holds reboots, OOM kills, kernel messages and container
-changes (appeared, removed, image changed), `join_tokens` the hashed single-use tokens, and per-mount disk
+same timestamp. `system_events` holds reboots, OOM kills, kernel messages, container
+changes (appeared, removed, image changed) and network changes (ports opened or closed,
+firewall changes); `listener_states` and `firewall_states` hold what was last seen, `join_tokens` the hashed single-use tokens, and per-mount disk
 thresholds live in `app_settings`. `docker/postgres/init/01_create_users.sql` initialises
 the `users` table on a fresh volume.
 
@@ -788,6 +814,9 @@ same address as everything else.
 | "Cross-site request refused" (403) on a button or form | The request came from another origin. Open the dashboard at the address you normally use. If a proxy in front rewrites the `Host` header, add your dashboard URL to `CORS_ORIGINS`. |
 | The **System** row shows *unknown* for last shutdown or has no kernel messages | The optional system helper isn't running. Start it with `docker compose --profile system-events up -d`. *Unknown* for reboot-required on non-Debian hosts is expected. |
 | `Error response … cannot assign requested address` for the collector gate | `COLLECTOR_BIND` is set to an address that doesn't exist yet (VPN not up). Start the VPN first, or fix the address. |
+| The **Network** row says *no config found* for the firewall | None of the known firewall files exist on that host (`/etc/ufw`, `/etc/nftables.conf`, `/etc/iptables/rules.v4`). The check reads configuration, not the live ruleset, so a host that configures its firewall some other way shows this. |
+| The **Network** row says *not checked* for the internet | The check is opt-in. Set `HOMELAB_CONNECTIVITY_TARGETS` on that collector (for example `1.1.1.1:443`). |
+| Listeners show *unknown* or the Network row is empty | The collector couldn't read the host's network tables (older collector, or a table with more than 500,000 sockets). An unreadable report never raises a "port closed" alert. |
 | Server marked offline | It missed 3 check-ins in a row. Check the machine, its collector log and its route to the dashboard. The incident resolves on the next report. |
 
 ## License

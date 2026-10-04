@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
+import hashlib
 import http.client
 import json
 import os
 import platform
 import re
 import socket
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -59,19 +61,266 @@ def _memory() -> dict[str, float]:
     }
 
 
-def _network_totals() -> tuple[int, int]:
+def _host_net_dirs() -> list[Path]:
+    """Where the host's network tables are. PID 1's view is the host's; a container's own /proc/net is not.
+
+    Only a collector running directly on the host may fall back to /proc/net. Inside a container that
+    fallback would silently report the container's own interfaces and sockets as the host's.
+    """
+    return [HOST_PROC / "1/net"] + ([HOST_PROC / "net"] if HOST_PROC == Path("/proc") else [])
+
+
+def _read_net_table(name: str) -> list[str] | None:
+    """The lines of a host network table (e.g. ``tcp``, ``dev``), or None if it can't be read."""
+    for directory in _host_net_dirs():
+        try:
+            with open(directory / name, "rb") as handle:
+                data = handle.read(MAX_NET_TABLE_BYTES + 1)
+        except OSError:
+            continue
+        if len(data) <= MAX_NET_TABLE_BYTES:
+            return data.decode("utf-8", errors="replace").splitlines()
+    return None
+
+
+MAX_NET_TABLE_BYTES = 8 * 1024 * 1024
+# Name prefixes of interfaces that are never physical, used only when sysfs can't say.
+_VIRTUAL_INTERFACES = ("lo", "veth", "docker", "br-", "virbr", "tun", "tap", "wg", "dummy", "ifb", "vboxnet", "vmnet")
+
+
+def _physical_interfaces() -> set[str] | None:
+    """Interfaces backed by real hardware (they have a ``device`` entry in sysfs), or None if sysfs isn't visible."""
+    base = HOST_ROOT / "sys/class/net"
+    try:
+        return {entry.name for entry in base.iterdir() if (entry / "device").exists()}
+    except OSError:
+        return None
+
+
+def _network_totals() -> tuple[int, int] | None:
+    """Bytes sent and received over the host's physical interfaces, or None if the host's table is unreadable.
+
+    Virtual interfaces (Docker bridges, veth pairs, loopback) are left out: their traffic is already
+    counted on the physical interface and would be counted twice.
+    """
+    lines = _read_net_table("dev")
+    if lines is None:
+        return None
+    physical = _physical_interfaces()
     sent = received = 0
-    for line in (HOST_PROC / "net/dev").read_text().splitlines()[2:]:
+    for line in lines[2:]:
         if ":" not in line:
             continue
         interface, raw = line.split(":", 1)
-        if interface.strip() == "lo":
+        interface = interface.strip()
+        if (interface not in physical) if physical else interface.startswith(_VIRTUAL_INTERFACES):
             continue
-        fields = [int(value) for value in raw.split()]
+        try:
+            fields = [int(value) for value in raw.split()]
+        except ValueError:
+            continue
         if len(fields) >= 9:
             received += fields[0]
             sent += fields[8]
     return sent, received
+
+
+EPHEMERAL_PORT_START = 32768  # Linux's default ephemeral range starts here
+MAX_LISTENERS = 512
+MAX_NET_TABLE_LINES = 500_000
+_ZERO_V6 = "0" * 32
+
+
+def _listener_scope(address: str) -> str | None:
+    """loopback, any (all interfaces) or specific, from a hex address in /proc/net/tcp(6) byte order."""
+    if len(address) == 8:  # IPv4: stored little-endian, so the first octet is the last byte
+        return "any" if address == "00000000" else "loopback" if address.endswith("7F") else "specific"
+    if len(address) == 32:
+        if address == _ZERO_V6:
+            return "any"
+        if address == "00000000000000000000000001000000":
+            return "loopback"
+        if address.startswith("0000000000000000FFFF0000"):  # IPv4-mapped IPv6
+            return _listener_scope(address[24:])
+        return "specific"
+    return None
+
+
+def listener_tracked(proto: str, port: int, scope: str) -> bool:
+    """Ephemeral ports are skipped: loopback ones, and every UDP one, are programs talking out, not services."""
+    return not (port >= EPHEMERAL_PORT_START and (scope == "loopback" or proto == "udp"))
+
+
+def _scan_listeners(table: str, proto: str) -> set[tuple[str, int, str]] | None:
+    """Listeners in one host network table, streamed so a busy server's huge connection table costs no memory.
+
+    None if the table can't be read or is longer than MAX_NET_TABLE_LINES: a truncated read could miss
+    listeners and make them look closed, so it is treated as unknown instead.
+    """
+    for directory in _host_net_dirs():
+        try:
+            handle = open(directory / table, "r", encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        found: set[tuple[str, int, str]] = set()
+        with handle:
+            try:
+                for number, line in enumerate(handle):
+                    if number > MAX_NET_TABLE_LINES:
+                        return None
+                    if number:
+                        found |= _parse_listener_line(line, proto)
+            except OSError:
+                continue
+        return found
+    return None
+
+
+def _parse_listener_line(line: str, proto: str) -> set[tuple[str, int, str]]:
+    fields = line.split()
+    if len(fields) < 4:
+        return set()
+    address, _, port_hex = fields[1].partition(":")
+    # TCP LISTEN is state 0A; a bound, unconnected UDP socket is state 07 with no remote address.
+    listening = fields[3] == "0A" if proto == "tcp" else fields[3] == "07" and fields[2].startswith(("00000000:0000", _ZERO_V6 + ":0000"))
+    if not listening:
+        return set()
+    try:
+        port = int(port_hex, 16)
+    except ValueError:
+        return set()
+    scope = _listener_scope(address)
+    return {(proto, port, scope)} if scope and 1 <= port <= 65535 and listener_tracked(proto, port, scope) else set()
+
+
+def collect_listeners() -> list[dict[str, Any]] | None:
+    """What is listening on the host (protocol, port, scope), read passively from /proc. None if unreadable.
+
+    No process names are collected: matching sockets to other users' processes needs privileges the
+    collector deliberately doesn't have. If any table is unreadable the whole answer is unknown, so a
+    partial picture can never be mistaken for ports having closed.
+    """
+    found: set[tuple[str, int, str]] = set()
+    for table, proto in (("tcp", "tcp"), ("tcp6", "tcp"), ("udp", "udp"), ("udp6", "udp")):
+        listeners = _scan_listeners(table, proto)
+        if listeners is None:
+            return None
+        found |= listeners
+    return [{"proto": proto, "port": port, "scope": scope} for proto, port, scope in sorted(found)[:MAX_LISTENERS]]
+
+
+_HOSTNAME = re.compile(r"(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*")
+_IPV4 = re.compile(r"(\d{1,3})(\.\d{1,3}){3}")
+MAX_CONNECTIVITY_TARGETS = 5
+CONNECT_TIMEOUT_SECONDS = 3.0
+CONNECTIVITY_DEADLINE_SECONDS = 6.0
+
+
+def _connectivity_targets() -> list[tuple[str, int]]:
+    """``host:port`` entries from HOMELAB_CONNECTIVITY_TARGETS (hostnames or IPv4 only). Empty means the check is off."""
+    targets: list[tuple[str, int]] = []
+    for entry in os.getenv("HOMELAB_CONNECTIVITY_TARGETS", "").split(","):
+        host, _, port = entry.strip().rpartition(":")
+        # A name whose last label is all digits isn't a valid hostname; it is a mistyped IP address.
+        valid_host = _IPV4.fullmatch(host) and all(int(part) <= 255 for part in host.split(".")) or (_HOSTNAME.fullmatch(host) and not host.rsplit(".", 1)[-1].isdigit())
+        if valid_host and port.isdigit() and 1 <= int(port) <= 65535 and (host, int(port)) not in targets:
+            targets.append((host, int(port)))
+        elif entry.strip():
+            print(f"Ignoring invalid connectivity target {entry.strip()[:60]!r}", flush=True)
+    return targets[:MAX_CONNECTIVITY_TARGETS]
+
+
+def _probe(host: str, port: int, results: dict[tuple[str, int], dict[str, Any]]) -> None:
+    """Resolve the name (if it is one) and open a TCP connection. Nothing is sent over it."""
+    outcome: dict[str, Any] = {"dns": None if _IPV4.fullmatch(host) else False, "tcp": False, "ms": None}
+    results[(host, port)] = outcome  # visible even if this thread outlives the deadline
+    started = time.monotonic()
+    try:
+        address = host if outcome["dns"] is None else socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)[0][4][0]
+        if outcome["dns"] is not None:
+            outcome["dns"] = True
+        socket.create_connection((address, port), CONNECT_TIMEOUT_SECONDS).close()
+        outcome["tcp"], outcome["ms"] = True, int((time.monotonic() - started) * 1000)
+    except (OSError, IndexError):
+        pass
+
+
+def summarise_connectivity(results: list[dict[str, Any]]) -> str:
+    """ok (all reachable), degraded (some), dns_failed (names don't resolve, nothing else wrong) or down."""
+    if all(result["tcp"] for result in results):
+        return "ok"
+    if any(result["tcp"] for result in results):
+        return "degraded"
+    return "dns_failed" if all(result["dns"] is False for result in results) else "down"
+
+
+def collect_connectivity() -> dict[str, Any]:
+    """Can this host reach the internet? Off unless HOMELAB_CONNECTIVITY_TARGETS is set on this collector.
+
+    The targets come from the collector's own environment, never from the dashboard, so a compromised
+    dashboard can't point these probes anywhere.
+    """
+    targets = _connectivity_targets()
+    if not targets:
+        return {"internet_status": None, "internet_latency_ms": None}
+    results: dict[tuple[str, int], dict[str, Any]] = {}
+    threads = [threading.Thread(target=_probe, args=(host, port, results), daemon=True) for host, port in targets]
+    deadline = time.monotonic() + CONNECTIVITY_DEADLINE_SECONDS
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
+    outcomes = [dict(results.get(target) or {"dns": False, "tcp": False, "ms": None}) for target in targets]
+    latencies = sorted(outcome["ms"] for outcome in outcomes if outcome["ms"] is not None)
+    return {"internet_status": summarise_connectivity(outcomes), "internet_latency_ms": latencies[len(latencies) // 2] if latencies else None}
+
+
+# Firewall configuration files that are looked at, by a fixed name. Only a hash and a rule count leave the host.
+FIREWALL_FILES = (("ufw", "etc/ufw/user.rules"), ("ufw6", "etc/ufw/user6.rules"), ("ufw-conf", "etc/ufw/ufw.conf"),
+                  ("nftables", "etc/nftables.conf"), ("iptables", "etc/iptables/rules.v4"), ("ip6tables", "etc/iptables/rules.v6"))
+MAX_FIREWALL_FILE_BYTES = 1024 * 1024
+
+
+def _read_regular_file(path: Path, limit: int) -> bytes | None:
+    """File contents up to ``limit`` bytes; None for symlinks, non-files, unreadable or larger files."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        data = os.read(descriptor, limit + 1)
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
+    return data if len(data) <= limit else None
+
+
+def collect_firewall() -> dict[str, Any] | None:
+    """A fingerprint of the host's firewall configuration files; never their contents (which reveal the network layout).
+
+    This sees configuration, not the live ruleset: reading that needs CAP_NET_ADMIN, which could also change
+    the firewall, so the collector doesn't have it. Returns None if no known firewall file exists.
+    """
+    files: list[dict[str, Any]] = []
+    ufw_enabled: bool | None = None
+    for name, relative in FIREWALL_FILES:
+        data = _read_regular_file(HOST_ROOT / relative, MAX_FIREWALL_FILE_BYTES)
+        if data is None:
+            continue
+        text = data.decode("utf-8", errors="replace")
+        lines = [line.strip() for line in text.splitlines()]
+        if name == "ufw-conf":
+            for line in lines:
+                if line.upper().startswith("ENABLED="):
+                    ufw_enabled = line.split("=", 1)[1].strip().lower() == "yes"
+            rules = 0
+        elif name in ("nftables",):
+            rules = sum(1 for line in lines if line and not line.startswith("#"))
+        else:
+            rules = sum(1 for line in lines if line.startswith("-A "))
+        files.append({"name": name, "sha": hashlib.sha256(data).hexdigest()[:16], "rules": rules})
+    return {"files": files, "ufw_enabled": ufw_enabled} if files else None
 
 
 # Filesystems worth reporting: anything backed by a block device, plus these pooled/network ones.
@@ -257,7 +506,7 @@ def collect_host() -> tuple[dict[str, Any], dict[str, Any]]:
         loads = os.getloadavg()
     except (AttributeError, OSError):
         loads = (0.0, 0.0, 0.0)
-    sent, received = _network_totals()
+    network = _network_totals()
     uptime = float((HOST_PROC / "uptime").read_text().split()[0])
     host = {
         "cpu_utilization_pct": cpu_pct,
@@ -265,10 +514,13 @@ def collect_host() -> tuple[dict[str, Any], dict[str, Any]]:
         **memory,
         "disk_usage_pct": round(disk_pct, 2),
         "disk_inodes_pct": round(inode_pct, 2) if inode_pct is not None else None,
-        "net_bytes_sent_mb": round(sent / MiB, 3),
-        "net_bytes_recv_mb": round(received / MiB, 3),
+        "net_bytes_sent_mb": round(network[0] / MiB, 3) if network else None,
+        "net_bytes_recv_mb": round(network[1] / MiB, 3) if network else None,
         "system_uptime_seconds": round(uptime, 1),
         "mounts": collect_mounts(),
+        "listeners": collect_listeners(),
+        "firewall": collect_firewall(),
+        **collect_connectivity(),
         **collect_system(),
     }
     server = {

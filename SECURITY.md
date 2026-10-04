@@ -166,6 +166,31 @@ What the collector deliberately does not ask Docker for: `/info`, `/events`, log
 write. Checking registries for newer images would need outbound network access and is tracked
 separately (#38) as an opt-in, isolated component rather than part of the collector or proxy.
 
+## Network checks
+
+The collector's network checks are passive or opt-in, and add no privileges:
+
+- **Listening ports** are read from the host's own network tables (`/proc/1/net`, the host's view; a
+  container's own `/proc/net` would show only the container's sockets). Only protocol, port and scope
+  (loopback, all interfaces, one address) are collected. Process names are not, because matching sockets
+  to other users' processes needs privileges the collector doesn't have. Short-lived programs using
+  random high ports (loopback ones and all UDP ones) are ignored.
+- **Firewall configuration** is read from a fixed list of files (`/etc/ufw/*.rules`, `ufw.conf`,
+  `nftables.conf`, `iptables/rules.v4` and `rules.v6`), never following symlinks and never reading more than
+  1 MB. Only a short hash and a rule count leave the host, because the rules themselves reveal your
+  network layout. This sees configuration, not the live ruleset: reading that needs `CAP_NET_ADMIN`,
+  which can also change the firewall, so the collector doesn't have it.
+- **The internet check is off by default.** When enabled it only opens a TCP connection and looks the
+  name up, sending nothing. Its targets come from the collector's own environment
+  (`HOMELAB_CONNECTIVITY_TARGETS`), never from the dashboard, so a compromised dashboard can't point
+  probes at anything. Targets are limited to five hostnames or IPv4 addresses, and a probe cannot delay
+  a check-in beyond a fixed deadline.
+- **Unreadable never means closed.** If any network table can't be read, or is too large to read
+  completely, the listener report is unknown rather than partial, so it can't make ports look closed.
+  Reports are validated again by the backend and capped, and events are capped per check-in and per hour.
+- **Visibility.** Like all monitoring data, the list of listening ports and firewall state is visible to
+  every signed-in account. Keep registration closed on a public dashboard.
+
 ## Other exposure to be aware of
 
 - The collector mounts the host filesystem read-only at `/hostfs` to read disk usage and a few

@@ -4,7 +4,7 @@ Vexion ships with an automated test suite. This page explains how to run it, wha
 covers (and what it doesn't), and what every single test is for, so you can decide
 whether a failure matters before you upgrade or change your setup.
 
-- **413 test cases** from 234 test functions (some functions run once per input).
+- **507 test cases** from 292 test functions (some functions run once per input).
 - **About 15 to 20 seconds** to run. No Docker, PostgreSQL, Redis, network or root access needed.
 - **Safe to run next to a live install.** The tests use a throwaway in-memory database
   and fakes; they never touch your running containers or your data. (Two collector
@@ -35,7 +35,7 @@ pytest
 A healthy run ends with a line like:
 
 ```text
-413 passed, 3 warnings in 17.0s
+507 passed, 3 warnings in 17.0s
 ```
 
 The warnings are harmless notices from the libraries (FastAPI deprecating the
@@ -131,6 +131,7 @@ docker compose logs --tail 20 collector        # "Sent host metrics and N contai
 | [`test_docker_proxy.py`](#test_docker_proxypy) | 91 | The read-only Docker proxy: what it allows, refuses and hides. |
 | [`test_enrollment.py`](#test_enrollmentpy) | 10 | Enrollment keys, collector credentials and offline-server detection. |
 | [`test_health_checks.py`](#test_health_checkspy) | 4 | The assistant's fixed health checks and the critical-only webhook. |
+| [`test_network_checks.py`](#test_network_checkspy) | 94 | The host's real network totals, listening-port inventory, optional internet check, firewall fingerprints, and the validation of all of it. |
 | [`test_pending_collectors.py`](#test_pending_collectorspy) | 28 | Adding servers: approval, join tokens, strict mode, re-pairing safety. |
 | [`test_rules.py`](#test_rulespy) | 20 | Alert thresholds: sustained breaches, per-mount disks, settings validation. |
 | [`test_system_checks.py`](#test_system_checkspy) | 17 | Reboot, OOM, kernel-fault, clock and pending-reboot detection, and the System row's event list. |
@@ -398,6 +399,116 @@ tested hardest (91 cases). If any of these fail, do not run the proxy until it i
 | `test_container_health_reports_unhealthy_container` | The container check marks the result critical and names an unhealthy container. |
 | `test_unknown_check_is_rejected` | Asking for any check that isn't one of the fixed ones raises an error. |
 | `test_daily_checkup_alerts_only_for_critical_findings` | The daily check-up notifies the webhook only when something is critical. |
+
+### test_network_checks.py
+
+Network checks: the host's real traffic totals, which ports it listens on, whether it can
+reach the internet, and whether its firewall configuration changed. The collector parts read
+`/proc` and files, so most tests build a fake host in a temporary folder and feed the
+parsers odd, huge or hostile content.
+
+**Host network totals (collector)**
+
+| Test | What it checks |
+|---|---|
+| `test_network_totals_come_from_the_hosts_physical_interfaces` | Totals come from the host's real network cards only. The collector container's own interface is never used, and Docker's virtual interfaces are skipped so traffic isn't counted twice. |
+| `test_without_sysfs_virtual_interfaces_are_skipped_by_name` | If the hardware list isn't visible, loopback, bridge and virtual interfaces are skipped by name. |
+| `test_inside_a_container_an_unreadable_host_table_is_unknown_not_the_containers_own` | If the host's table can't be read, the totals are *unknown* instead of silently reporting the container's own traffic as the host's. |
+| `test_only_a_collector_on_the_host_itself_may_fall_back_to_proc_net` | Only a collector running directly on the host may fall back to its own network view. |
+| `test_garbage_and_oversized_network_tables_are_survived` | Malformed lines are skipped, and an oversized table is refused. |
+
+**Listening ports (collector)**
+
+| Test | What it checks |
+|---|---|
+| `test_listeners_are_read_with_their_scope` | Listening ports are read for TCP and UDP, IPv4 and IPv6, and classified as loopback only, all interfaces or one address; ordinary connections and connected UDP sockets are not listeners. |
+| `test_the_same_port_on_ipv4_and_ipv6_is_one_listener` | The same port on IPv4 and IPv6 counts once. |
+| `test_ephemeral_ports_are_skipped_but_exposed_high_tcp_ports_are_not` *(9 inputs)* | Random high ports used by programs talking out (loopback ones, and all UDP ones) are skipped, while high TCP ports reachable from other machines (such as Docker's random published ports) are kept. The collector and backend apply the same rule. |
+| `test_missing_or_garbage_tables_are_unknown_or_ignored` | Nothing readable means *unknown*; junk lines and impossible ports are ignored. |
+| `test_one_unreadable_table_makes_the_whole_answer_unknown_not_partial` | If any one of the four tables can't be read, the whole answer is unknown, so a partial picture can never look like closed ports. |
+| `test_a_table_longer_than_the_cap_is_unknown_because_a_truncated_read_could_fake_closed_ports` | A table over the line limit is treated as unknown, not truncated. |
+| `test_a_busy_hosts_connection_table_does_not_hide_its_listeners` | Thousands of ordinary connections don't hide the real listeners, and the table is streamed rather than loaded into memory. |
+| `test_a_container_never_reports_its_own_sockets_as_the_hosts` | A collector in a container never mistakes the container's own sockets for the host's. |
+| `test_the_listener_report_is_capped` | At most 512 listeners are reported. |
+
+**Internet check (collector, off by default)**
+
+| Test | What it checks |
+|---|---|
+| `test_connectivity_is_off_unless_targets_are_configured` | With no targets configured the check does nothing and sends no data. |
+| `test_valid_targets_are_parsed_deduplicated_and_capped` *(3 inputs)* | `host:port` targets (hostname or IPv4) are accepted, deduplicated and capped at 5. |
+| `test_malformed_targets_are_ignored` *(19 inputs)* | URLs, spaces, shell characters, bad ports, IPv6 literals, mistyped IPs, usernames, paths and over-long names are all ignored. |
+| `test_results_are_summarised` *(5 inputs)* | The results become ok, degraded, DNS failing or down. |
+| `test_a_reachable_target_reports_ok_with_its_latency` | Reachable targets report ok and the typical connection time. |
+| `test_unresolvable_names_are_reported_as_dns_failure` | Names that don't resolve are reported as a DNS failure, not as the internet being down. |
+| `test_a_hung_probe_cannot_stall_the_check_in` | A probe that hangs cannot delay the collector's report beyond a fixed deadline. |
+| `test_probes_only_connect_and_never_send_data` | The probes open a connection and send nothing. |
+
+**Firewall files (collector)**
+
+| Test | What it checks |
+|---|---|
+| `test_firewall_files_are_reduced_to_a_hash_a_rule_count_and_the_ufw_flag` | Each known firewall file is reduced to a short hash and a rule count, plus whether ufw is enabled. |
+| `test_the_firewall_report_never_contains_the_rules_themselves` | No rule text, address or comment ever appears in what is reported. |
+| `test_ufw_disabled_is_reported_and_changes_the_fingerprint` | Turning ufw off is visible, and changes the fingerprint. |
+| `test_no_known_firewall_file_means_none` | No firewall files means no report. |
+| `test_symlinked_oversized_and_binary_firewall_files_are_handled_safely` | Symlinks are not followed, files over 1 MB are skipped, and binary content doesn't crash anything. |
+
+**Validation and state (backend)**
+
+| Test | What it checks |
+|---|---|
+| `test_a_listener_report_must_be_a_list` *(5 inputs)* | Anything but a list is rejected. |
+| `test_listener_entries_are_validated_deduplicated_and_filtered` | Unknown protocols and scopes, bad or non-integer ports, junk entries and ephemeral ports are dropped, and duplicates merged. |
+| `test_the_listener_list_is_capped` | The backend accepts at most 512 listeners per report. |
+| `test_firewall_reports_are_validated` | Only known file names with a proper 16-hex-character hash and a sane rule count are accepted; the ufw flag must be a real boolean. |
+
+**Listening-port changes and incidents (backend)**
+
+| Test | What it checks |
+|---|---|
+| `test_the_first_listener_report_is_only_a_baseline` | The first report creates no events. |
+| `test_a_new_exposed_listener_is_recorded_and_raises_a_warning` | A new port reachable from other machines is recorded and raises a warning incident. |
+| `test_a_new_loopback_listener_is_an_event_without_an_incident` | A new loopback-only port is recorded, but raises no incident. |
+| `test_a_closed_listener_is_recorded_and_clears_its_incident` | A closed port is recorded and clears its incident. |
+| `test_the_listener_incident_clears_with_the_event_window` | The incident clears by itself after the event window. |
+| `test_unchanged_listeners_create_no_events_or_duplicate_rows` | Unchanged listeners create nothing and never duplicate stored rows. |
+| `test_an_empty_or_missing_listener_report_never_looks_like_everything_closed` | An empty list, a missing field or garbage is ignored rather than read as every port closing. |
+| `test_a_burst_of_new_listeners_is_capped_with_one_notice` | A burst of new ports records at most 10 events per check-in plus one notice. |
+| `test_sustained_port_flapping_is_capped_per_hour` | Ports opening and closing constantly cannot flood the database. |
+| `test_listener_state_is_removed_with_the_server` | Deleting a server removes its stored listeners and firewall fingerprints. |
+
+**Firewall changes and incidents (backend)**
+
+| Test | What it checks |
+|---|---|
+| `test_the_first_firewall_report_is_only_a_baseline` | The first report creates no events. |
+| `test_unchanged_firewall_files_report_nothing` | Unchanged files report nothing. |
+| `test_changed_rules_are_informational_and_fewer_rules_are_a_warning` | Changed rules are informational; a drop in the rule count is a warning. |
+| `test_disabling_ufw_is_a_warning_and_enabling_it_is_informational` | Turning ufw off is a warning; turning it on is informational. |
+| `test_a_firewall_file_disappearing_is_a_warning_and_one_appearing_is_informational` | A firewall file vanishing is a warning; a new one appearing is informational. |
+| `test_all_firewall_files_vanishing_is_noticed` | If every firewall file disappears, that is noticed. |
+| `test_missing_or_malformed_firewall_reports_are_ignored` | Missing or malformed reports are ignored. |
+| `test_the_firewall_incident_clears_with_the_event_window` | The firewall incident clears after the event window. |
+
+**Internet incidents (backend)**
+
+| Test | What it checks |
+|---|---|
+| `test_sustained_internet_loss_warns_and_recovery_clears` | The internet being down for several check-ins in a row raises a warning that clears on recovery. |
+| `test_sustained_dns_failure_is_its_own_warning` | A sustained DNS failure is reported separately. |
+| `test_degraded_unchecked_and_malformed_internet_status_never_alerts` | Partly reachable, unchecked and malformed statuses never raise an incident. |
+| `test_internet_latency_must_be_a_sane_number` | Absurd latency values are dropped. |
+
+**Dashboard data and limits (backend)**
+
+| Test | What it checks |
+|---|---|
+| `test_the_overview_shows_listeners_firewall_and_network_events` | The dashboard receives the listeners, firewall fingerprints, events and internet status. |
+| `test_network_events_have_their_own_list_and_do_not_crowd_the_other_rows` | Network events appear in the Network row and cannot push reboots or container changes out of theirs. |
+| `test_the_network_lists_are_bounded` | The dashboard's listener list is capped at 200 and the event list at 15. |
+| `test_network_events_follow_the_normal_retention` | Old network events are deleted with the other old data. |
+| `test_crafted_event_keys_cannot_raise_incidents_for_closed_or_loopback_ports` | Malformed or misleading stored event keys cannot raise an incident for a port that isn't open or isn't exposed. |
 
 ### test_pending_collectors.py
 

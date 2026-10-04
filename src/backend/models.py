@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -183,6 +183,9 @@ class HostMetric(Base):
     docker_status: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     docker_reason: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     docker_latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Whether the host can reach the internet (ok | degraded | dns_failed | down); None when the check is off.
+    internet_status: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    internet_latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
 
 class SystemEvent(Base):
@@ -213,6 +216,36 @@ class MountMetric(Base):
     used_gb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     used_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     inodes_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+
+class ListenerState(Base):
+    """A port the host is listening on, as last seen. One row per listener, so comparing check-ins needs no history."""
+
+    __tablename__ = "listener_states"
+    __table_args__ = (UniqueConstraint("server_id", "proto", "port", "scope"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), index=True, nullable=False)
+    proto: Mapped[str] = mapped_column(String(8), nullable=False)  # tcp | udp
+    port: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)  # loopback | any | specific
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class FirewallState(Base):
+    """Fingerprint of one firewall configuration file as last seen: a hash and a rule count, never the rules."""
+
+    __tablename__ = "firewall_states"
+    __table_args__ = (UniqueConstraint("server_id", "name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(16), nullable=False)
+    sha: Mapped[str] = mapped_column(String(16), nullable=False)
+    rules: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    enabled: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)  # only meaningful for ufw-conf
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
 class ContainerMetric(Base):

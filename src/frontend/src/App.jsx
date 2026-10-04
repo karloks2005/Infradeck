@@ -737,6 +737,63 @@ function SystemSection({ server, open, onToggle }) {
   )
 }
 
+const NETWORK_EVENT_LABELS = { port_opened: 'Port opened', port_closed: 'Port closed', firewall_changed: 'Firewall', firewall_weakened: 'Firewall', network_notice: 'Notice' }
+const NETWORK_EVENT_CLASSES = { port_opened: 'text-amber-300', port_closed: 'text-[#9aa0a6]', firewall_changed: 'text-sky-300', firewall_weakened: 'text-red-300', network_notice: 'text-[#9aa0a6]' }
+const LISTENER_SCOPE_LABELS = { loopback: 'loopback only', any: 'all interfaces', specific: 'one address' }
+const INTERNET_LABELS = { ok: ['reachable', 'ok'], degraded: ['partly reachable', 'warn'], dns_failed: ['DNS failing', 'warn'], down: ['down', 'warn'] }
+
+function networkChips(server) {
+  const host = server.host
+  const network = server.network || { listeners: [], firewall: [], events: [] }
+  const internet = INTERNET_LABELS[host.internet_status]
+  const exposed = network.listeners.filter((listener) => listener.scope !== 'loopback').length
+  const ufw = network.firewall.find((file) => file.name === 'ufw-conf')
+  const ruleFiles = network.firewall.filter((file) => file.name !== 'ufw-conf' && file.rules > 0)
+  const firewall = [ufw ? (ufw.enabled === true ? 'ufw enabled' : ufw.enabled === false ? 'ufw disabled' : null) : null, ...ruleFiles.map((file) => `${file.label.split(' ')[0]} ${file.rules} rules`)].filter(Boolean)
+  return [
+    ['Internet', internet ? internet[0] : 'not checked', internet ? internet[1] : 'unknown'],
+    ['Listening', network.listeners.length ? `${network.listeners.length} ports · ${exposed} exposed` : 'unknown', network.listeners.length ? 'ok' : 'unknown'],
+    ['Firewall', firewall.length ? firewall.join(' · ') : 'no config found', ufw?.enabled === false ? 'warn' : firewall.length ? 'ok' : 'unknown'],
+  ]
+}
+
+function NetworkSection({ server, open, onToggle }) {
+  const network = server.network || { listeners: [], firewall: [], events: [] }
+  const chips = networkChips(server)
+  const exposed = network.listeners.filter((listener) => listener.scope !== 'loopback')
+  const local = network.listeners.filter((listener) => listener.scope === 'loopback')
+  const listenerLine = (listener) => <li key={`${listener.proto}-${listener.port}-${listener.scope}`} className="whitespace-nowrap rounded-md bg-white/5 px-2 py-1 font-mono text-xs text-[#cfcfcf]" title={LISTENER_SCOPE_LABELS[listener.scope]}>{listener.proto}/{listener.port}</li>
+  return (
+    <div className="mt-4 rounded-xl border border-neutral-800">
+      <button type="button" onClick={onToggle} aria-expanded={open} className="flex w-full flex-wrap items-center gap-x-4 gap-y-1 rounded-xl px-3 py-2.5 text-left text-sm transition hover:bg-white/3">
+        <Chevron open={open} />
+        <span className="text-white">Network</span>
+        {chips.map(([label, value, tone]) => <span key={label} className="whitespace-nowrap text-xs text-[#7f8589]">{label} <span className={`font-medium ${CHIP_CLASSES[tone]}`}>{value}</span></span>)}
+      </button>
+      {open && (
+        <div className="space-y-4 border-t border-neutral-800 px-3 py-3">
+          {network.listeners.length > 0 && <div>
+            <div className="mb-2 text-xs uppercase tracking-[0.2em] text-[#7f8589]">Listening ports</div>
+            {exposed.length > 0 && <div className="mb-2"><div className="mb-1 text-xs text-amber-300">Reachable from other machines ({exposed.length})</div><ul className="flex flex-wrap gap-1.5">{exposed.map(listenerLine)}</ul></div>}
+            {local.length > 0 && <div><div className="mb-1 text-xs text-[#7f8589]">This machine only ({local.length})</div><ul className="flex flex-wrap gap-1.5">{local.map(listenerLine)}</ul></div>}
+          </div>}
+          <div>
+            <div className="mb-2 text-xs uppercase tracking-[0.2em] text-[#7f8589]">Recent changes · 7 days</div>
+            {network.events.length ? <ul className="space-y-1.5 text-sm">{network.events.map((event, index) => (
+              <li key={`${event.time}-${event.kind}-${index}`} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                <span className="w-24 shrink-0 text-xs text-[#7f8589]" title={new Date(event.time).toLocaleString()}>{formatAgo(event.time)}</span>
+                <span className={`w-24 shrink-0 text-xs font-medium ${NETWORK_EVENT_CLASSES[event.kind] || 'text-[#cfcfcf]'}`}>{NETWORK_EVENT_LABELS[event.kind] || event.kind}</span>
+                <span className="min-w-0 flex-1 basis-60 break-words text-[#bcbcbc]">{event.detail}</span>
+              </li>
+            ))}</ul> : <p className="text-sm text-[#9aa0a6]">No new listeners or firewall changes in the last 7 days.</p>}
+          </div>
+          <p className="text-xs text-[#7f8589]">The firewall chip reads configuration files, not the live ruleset. The internet check is off unless <code>HOMELAB_CONNECTIVITY_TARGETS</code> is set on that machine's collector.</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 const HEALTH_CLASSES = { healthy: 'text-[#7f8589]', unhealthy: 'text-red-300', starting: 'text-amber-300' }
 
 const ALERT_STYLES = {
@@ -801,6 +858,7 @@ const refresh = async () => {
   const [collapsedServers, toggleServer, setCollapsedServers] = useStoredIdSet('homelab.collapsedServers')
   const [openContainerLists, toggleContainerList] = useIdSet()
   const [openSystemLists, toggleSystemList] = useIdSet()
+  const [openNetworkLists, toggleNetworkList] = useIdSet()
   const allCollapsed = servers.length > 0 && servers.every((server) => collapsedServers.has(server.id))
   const dashboardHost = servers.find((server) => server.is_dashboard_host)
   const dashboardHostId = dashboardHost?.id
@@ -902,6 +960,7 @@ const refresh = async () => {
                 {metric && <StorageBars mounts={mounts} thresholds={overview.disk_thresholds} mountThresholds={overview.mount_thresholds} />}
                 {metric?.docker_status === 'unreachable' && <DockerNotice host={metric} />}
                 {metric && <SystemSection server={server} open={openSystemLists.has(server.id)} onToggle={() => toggleSystemList(server.id)} />}
+                {metric && <NetworkSection server={server} open={openNetworkLists.has(server.id)} onToggle={() => toggleNetworkList(server.id)} />}
                 {server.containers.length > 0 && <ContainerSection server={server} open={openContainerLists.has(server.id)} onToggle={() => toggleContainerList(server.id)} />}
                 <div className="mt-3 text-xs text-[#7f8589]">Last check: {server.last_seen_at ? new Date(server.last_seen_at).toLocaleString() : 'Never'}</div>
               </>}

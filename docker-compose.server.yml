@@ -94,6 +94,8 @@ services:
       # on the dashboard. An optional enrollment key skips that approval.
       HOMELAB_ENROLL_KEY: ${HOMELAB_ENROLL_KEY:-}
       HOMELAB_SERVER_NAME: ${HOMELAB_SERVER_NAME:-}
+      # Optional internet check, off when empty: comma-separated host:port targets this collector tries to reach.
+      HOMELAB_CONNECTIVITY_TARGETS: ${HOMELAB_CONNECTIVITY_TARGETS:-}
       # Docker data comes through the read-only proxy; the collector has no Docker socket.
       HOMELAB_DOCKER_HOST: /run/docker-proxy/docker.sock
       HOMELAB_CHECK_INTERVAL_SECONDS: ${HOMELAB_CHECK_INTERVAL_SECONDS:-60}

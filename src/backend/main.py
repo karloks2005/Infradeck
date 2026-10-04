@@ -23,7 +23,7 @@ from sqlalchemy import case, func, inspect, text
 from .alerts import CONTAINER_RULE_PREFIX, CRITICAL, SERVER_OFFLINE_RULE, SEVERITIES, active_rule_keys, raise_alert, resolve_alerts, sync_alerts
 from .auth import authenticate_user, get_recent_logs, get_user_from_session, logout_user, record_audit_log, register_user
 from .db import SessionLocal, check_database, get_db
-from .models import AppSetting, AuditLog, Base, ChatMessage, ContainerMetric, Conversation, EnrollmentKey, HostMetric, IncidentAlert, JoinToken, MountMetric, PendingCollector, Server, SystemEvent, User
+from .models import AppSetting, AuditLog, Base, ChatMessage, ContainerMetric, Conversation, EnrollmentKey, FirewallState, HostMetric, IncidentAlert, JoinToken, ListenerState, MountMetric, PendingCollector, Server, SystemEvent, User
 
 from .db import engine
 from .config import (
@@ -44,7 +44,7 @@ from .config import (
     SESSION_COOKIE_SECURE,
     SESSION_TTL_SECONDS,
 )
-from .rules import DEFAULT_THRESHOLDS, HOST_RULE_PREFIX, container_rules, host_rules, validate_thresholds, detect_system_events, system_rules, SYSTEM_RULE_PREFIX, validate_mount_thresholds, validate_helper_events, REBOOT_DETAILS, REBOOT_KEY_PREFIX, detect_container_events, memory_trend_rules, CONTAINER_EVENT_KINDS, MAX_CONTAINER_EVENTS_PER_CHECKIN, MAX_CONTAINER_EVENTS_PER_HOUR, TREND_RULE_PREFIX
+from .rules import DEFAULT_THRESHOLDS, HOST_RULE_PREFIX, container_rules, host_rules, validate_thresholds, detect_system_events, system_rules, SYSTEM_RULE_PREFIX, validate_mount_thresholds, validate_helper_events, REBOOT_DETAILS, REBOOT_KEY_PREFIX, detect_container_events, memory_trend_rules, CONTAINER_EVENT_KINDS, MAX_CONTAINER_EVENTS_PER_CHECKIN, MAX_CONTAINER_EVENTS_PER_HOUR, TREND_RULE_PREFIX, NETWORK_EVENT_KINDS, NETWORK_RULE_PREFIX, MAX_NETWORK_EVENTS_PER_CHECKIN, MAX_NETWORK_EVENTS_PER_HOUR, INTERNET_STATUSES, LISTENER_SCOPES, FIREWALL_LABELS, detect_listener_changes, detect_firewall_changes, network_rules, validate_listeners, validate_firewall
 from .rate_limit import enforce_ip_limit, enforce_login_limit, enforce_register_limit, reset_limits
 from ..agent.service import delete_agent_conversation, send_agent_message
 
@@ -196,6 +196,7 @@ def startup_event():
                 ("boot_id", "VARCHAR(64)"), ("oom_kill_total", "INTEGER"), ("kernel_tainted", "INTEGER"),
                 ("ntp_synced", "BOOLEAN"), ("reboot_required", "BOOLEAN"), ("last_shutdown", "VARCHAR(16)"),
                 ("docker_status", "VARCHAR(16)"), ("docker_reason", "VARCHAR(16)"), ("docker_latency_ms", "INTEGER"),
+                ("internet_status", "VARCHAR(16)"), ("internet_latency_ms", "INTEGER"),
             ):
                 connection.execute(text(f"ALTER TABLE host_metrics ADD COLUMN IF NOT EXISTS {column} {column_type}"))
             for column, column_type in (("exit_code", "INTEGER"), ("oom_killed", "BOOLEAN"), ("finished_at", "TIMESTAMP WITH TIME ZONE"), ("image_id", "VARCHAR(80)")):
@@ -550,7 +551,7 @@ def recent_system_events(db, since: datetime) -> dict[int, list[dict]]:
     OOM kills out of the list. Every other kind stays one row per occurrence.
     """
     result: dict[int, list[dict]] = {}
-    for event in db.query(SystemEvent).filter(SystemEvent.time >= since, SystemEvent.kind != "kernel_error", SystemEvent.kind.notin_(CONTAINER_EVENT_KINDS)).order_by(SystemEvent.time.desc()):
+    for event in db.query(SystemEvent).filter(SystemEvent.time >= since, SystemEvent.kind != "kernel_error", SystemEvent.kind.notin_(CONTAINER_EVENT_KINDS + NETWORK_EVENT_KINDS)).order_by(SystemEvent.time.desc()):
         rows = result.setdefault(event.server_id, [])
         if len(rows) < SYSTEM_EVENTS_SHOWN:
             rows.append({"time": event.time.isoformat(), "first_time": event.time.isoformat(), "kind": event.kind, "detail": event.detail, "count": 1})
@@ -586,6 +587,20 @@ def recent_container_events(db, since: datetime) -> dict[int, list[dict]]:
     return result
 
 
+NETWORK_EVENTS_SHOWN = 15
+LISTENERS_SHOWN = 200
+
+
+def recent_network_events(db, since: datetime) -> dict[int, list[dict]]:
+    """Each server's recent network changes (ports opened or closed, firewall changes), newest first."""
+    result: dict[int, list[dict]] = {}
+    for event in db.query(SystemEvent).filter(SystemEvent.time >= since, SystemEvent.kind.in_(NETWORK_EVENT_KINDS)).order_by(SystemEvent.time.desc()):
+        rows = result.setdefault(event.server_id, [])
+        if len(rows) < NETWORK_EVENTS_SHOWN:
+            rows.append({"time": event.time.isoformat(), "kind": event.kind, "detail": event.detail})
+    return result
+
+
 @app.get("/monitoring/overview")
 def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     # Servers belong to the install: everyone signed in can view them, only admins manage them.
@@ -596,6 +611,14 @@ def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_C
     since = datetime.now(timezone.utc) - timedelta(days=7)
     events = recent_system_events(db, since)
     container_events = recent_container_events(db, since)
+    network_events = recent_network_events(db, since)
+    listeners: dict[int, list[dict]] = {}
+    for row in db.query(ListenerState).order_by(ListenerState.port, ListenerState.proto):
+        if len(listeners.setdefault(row.server_id, [])) < LISTENERS_SHOWN:
+            listeners[row.server_id].append({"proto": row.proto, "port": row.port, "scope": row.scope, "first_seen": row.first_seen.isoformat()})
+    firewalls: dict[int, list[dict]] = {}
+    for row in db.query(FirewallState).order_by(FirewallState.name):
+        firewalls.setdefault(row.server_id, []).append({"name": row.name, "label": FIREWALL_LABELS.get(row.name, row.name), "rules": row.rules, "enabled": row.enabled, "updated_at": row.updated_at.isoformat()})
     result = []
     for server in servers:
         metric = db.query(HostMetric).filter(HostMetric.server_id == server.id).order_by(HostMetric.time.desc()).first()
@@ -607,7 +630,8 @@ def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_C
             "check_interval_seconds": server.check_interval_seconds, "is_dashboard_host": server.is_dashboard_host,
             "active_alert_count": alert_counts.get(server.id, 0),
             "last_seen_at": server.last_seen_at.isoformat() if server.last_seen_at else None,
-            "host": ({key: getattr(metric, key) for key in ("time", "cpu_utilization_pct", "load_1m", "load_5m", "load_15m", "ram_used_gb", "ram_available_gb", "ram_pct", "swap_pct", "disk_usage_pct", "disk_inodes_pct", "net_bytes_sent_mb", "net_bytes_recv_mb", "system_uptime_seconds", "oom_kill_total", "kernel_tainted", "ntp_synced", "reboot_required", "last_shutdown", "docker_status", "docker_reason", "docker_latency_ms")} if metric else None),
+            "host": ({key: getattr(metric, key) for key in ("time", "cpu_utilization_pct", "load_1m", "load_5m", "load_15m", "ram_used_gb", "ram_available_gb", "ram_pct", "swap_pct", "disk_usage_pct", "disk_inodes_pct", "net_bytes_sent_mb", "net_bytes_recv_mb", "system_uptime_seconds", "oom_kill_total", "kernel_tainted", "ntp_synced", "reboot_required", "last_shutdown", "docker_status", "docker_reason", "docker_latency_ms", "internet_status", "internet_latency_ms")} if metric else None),
+            "network": {"listeners": listeners.get(server.id, []), "firewall": firewalls.get(server.id, []), "events": network_events.get(server.id, [])},
             "container_events": container_events.get(server.id, []),
             "system_events": events.get(server.id, []),
             "mounts": [{key: getattr(m, key) for key in ("mount", "fs_type", "total_gb", "used_gb", "used_pct", "inodes_pct")} for m in mounts],
@@ -1002,6 +1026,8 @@ def delete_monitored_server(server_id: int, session_id: Annotated[str | None, Co
     db.query(ContainerMetric).filter(ContainerMetric.server_id == server.id).delete(synchronize_session=False)
     db.query(MountMetric).filter(MountMetric.server_id == server.id).delete(synchronize_session=False)
     db.query(SystemEvent).filter(SystemEvent.server_id == server.id).delete(synchronize_session=False)
+    db.query(ListenerState).filter(ListenerState.server_id == server.id).delete(synchronize_session=False)
+    db.query(FirewallState).filter(FirewallState.server_id == server.id).delete(synchronize_session=False)
     db.query(IncidentAlert).filter(IncidentAlert.server_id == server.id).delete(synchronize_session=False)
     db.query(PendingCollector).filter(PendingCollector.approved_server_id == server.id).delete(synchronize_session=False)
     db.delete(server)
@@ -1086,18 +1112,64 @@ def _clean_container(raw, now: datetime) -> dict | None:
     return clean
 
 
-def record_container_events(db, server_id: int, events: list[tuple[str, str, str]], now: datetime) -> None:
-    """Store container changes, with hard caps so churn (CI containers coming and going) can't flood the table."""
+def record_capped_events(db, server_id: int, events: list[tuple[str, str, str]], kinds: tuple[str, ...], notice_kind: str, subject: str, now: datetime,
+                         per_check_in: int, per_hour: int) -> None:
+    """Store (kind, detail, key) events with hard caps, so churn can't flood the table.
+
+    At most ``per_check_in`` are stored per call and ``per_hour`` per server and category; anything beyond
+    that is summarised by a single notice per hour.
+    """
     if not events:
         return
     since = now - timedelta(hours=1)
-    recent = db.query(func.count(SystemEvent.id)).filter(SystemEvent.server_id == server_id, SystemEvent.kind.in_(CONTAINER_EVENT_KINDS), SystemEvent.time >= since).scalar() or 0
-    allowed = events[:max(0, min(MAX_CONTAINER_EVENTS_PER_CHECKIN, MAX_CONTAINER_EVENTS_PER_HOUR - recent))]
-    for kind, detail, name in allowed:
-        db.add(SystemEvent(server_id=server_id, time=now, kind=kind, detail=detail[:512], event_key=name[:128]))
+    recent = db.query(func.count(SystemEvent.id)).filter(SystemEvent.server_id == server_id, SystemEvent.kind.in_(kinds), SystemEvent.time >= since).scalar() or 0
+    allowed = events[:max(0, min(per_check_in, per_hour - recent))]
+    for kind, detail, key in allowed:
+        db.add(SystemEvent(server_id=server_id, time=now, kind=kind, detail=detail[:512], event_key=key[:128]))
     dropped = len(events) - len(allowed)
-    if dropped and not db.query(SystemEvent.id).filter(SystemEvent.server_id == server_id, SystemEvent.kind == "container_notice", SystemEvent.time >= since).first():
-        db.add(SystemEvent(server_id=server_id, time=now, kind="container_notice", detail=f"{dropped} more container changes were not recorded (too many at once)"))
+    if dropped and not db.query(SystemEvent.id).filter(SystemEvent.server_id == server_id, SystemEvent.kind == notice_kind, SystemEvent.time >= since).first():
+        db.add(SystemEvent(server_id=server_id, time=now, kind=notice_kind, detail=f"{dropped} more {subject} were not recorded (too many at once)"))
+
+
+def record_container_events(db, server_id: int, events: list[tuple[str, str, str]], now: datetime) -> None:
+    record_capped_events(db, server_id, events, CONTAINER_EVENT_KINDS, "container_notice", "container changes", now, MAX_CONTAINER_EVENTS_PER_CHECKIN, MAX_CONTAINER_EVENTS_PER_HOUR)
+
+
+def sync_listeners(db, server_id: int, listeners: list[tuple[str, int, str]] | None, now: datetime) -> list[tuple[str, str, str]]:
+    """Update the known listeners from a validated report and return what changed.
+
+    The first report is a silent baseline. An empty report is treated as unknown rather than as "everything
+    closed", since a host always listens on something and an empty list means the table couldn't be read.
+    """
+    if not listeners:
+        return []
+    current = set(listeners)
+    known = {(row.proto, row.port, row.scope): row for row in db.query(ListenerState).filter(ListenerState.server_id == server_id)}
+    events = detect_listener_changes(known, current)
+    for key in sorted(current - known.keys()):
+        db.add(ListenerState(server_id=server_id, proto=key[0], port=key[1], scope=key[2], first_seen=now, last_seen=now))
+    for key in known.keys() - current:
+        db.delete(known[key])
+    for key in current & known.keys():
+        known[key].last_seen = now
+    return events
+
+
+def sync_firewall(db, server_id: int, firewall: dict, now: datetime) -> list[tuple[str, str, str]]:
+    """Update the stored firewall fingerprints from a validated report and return what changed (see detect_firewall_changes)."""
+    known = {row.name: row for row in db.query(FirewallState).filter(FirewallState.server_id == server_id)}
+    events = detect_firewall_changes(known, firewall)
+    for name, (sha, count) in firewall["files"].items():
+        enabled = firewall["ufw_enabled"] if name == "ufw-conf" else None
+        if name in known:
+            row = known[name]
+            if (row.sha, row.rules, row.enabled) != (sha, count, enabled):
+                row.sha, row.rules, row.enabled, row.updated_at = sha, count, enabled, now
+        else:
+            db.add(FirewallState(server_id=server_id, name=name, sha=sha, rules=count, enabled=enabled, updated_at=now))
+    for name in known.keys() - firewall["files"].keys():
+        db.delete(known[name])
+    return events
 
 
 def _clean_system_fields(fields: dict) -> None:
@@ -1113,6 +1185,10 @@ def _clean_system_fields(fields: dict) -> None:
         fields["docker_reason"] = None
     if "docker_latency_ms" in fields:
         fields["docker_latency_ms"] = _whole_number(fields["docker_latency_ms"], 0, 600_000)
+    if "internet_status" in fields and fields["internet_status"] not in INTERNET_STATUSES:
+        fields["internet_status"] = None
+    if "internet_latency_ms" in fields:
+        fields["internet_latency_ms"] = _whole_number(fields["internet_latency_ms"], 0, 600_000)
     if "boot_id" in fields:
         fields["boot_id"] = fields["boot_id"][:64] if isinstance(fields["boot_id"], str) and fields["boot_id"] else None
 
@@ -1159,10 +1235,18 @@ def ingest_metrics(payload: MetricsIngestRequest, authorization: Annotated[str |
     record_container_events(db, server.id, detect_container_events(previous_containers, containers), now)
     for container in containers:
         db.add(ContainerMetric(server_id=server.id, time=now, **container))
+    # Listening ports and firewall files: compare with what was seen last time (collectors that don't send them are skipped).
+    network_events: list[tuple[str, str, str]] = []
+    if "listeners" in payload.host:
+        network_events += sync_listeners(db, server.id, validate_listeners(payload.host["listeners"]), now)
+    if "firewall" in payload.host and (firewall := validate_firewall(payload.host["firewall"])) is not None:
+        network_events += sync_firewall(db, server.id, firewall, now)
+    record_capped_events(db, server.id, network_events, NETWORK_EVENT_KINDS, "network_notice", "network changes", now, MAX_NETWORK_EVENTS_PER_CHECKIN, MAX_NETWORK_EVENTS_PER_HOUR)
     db.flush()  # the rules read this check-in back from the history tables
     thresholds = get_alert_thresholds(db)
     sync_alerts(db, server.id, HOST_RULE_PREFIX, host_rules(db, server, thresholds, active_rule_keys(db, server.id, HOST_RULE_PREFIX), get_mount_thresholds(db)))
     sync_alerts(db, server.id, SYSTEM_RULE_PREFIX, system_rules(db, server, thresholds, now, active_rule_keys(db, server.id, SYSTEM_RULE_PREFIX)))
+    sync_alerts(db, server.id, NETWORK_RULE_PREFIX, network_rules(db, server, thresholds, now))
     # The collector sends no containers when Docker is unreachable; keep container alerts as they are rather than resolving them all.
     if containers:
         sync_alerts(db, server.id, CONTAINER_RULE_PREFIX, container_rules(db, server.id, containers, thresholds, now))
