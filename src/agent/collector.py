@@ -18,6 +18,7 @@ import http.client
 import json
 import os
 import platform
+import re
 import socket
 import time
 import urllib.error
@@ -342,22 +343,58 @@ def _docker_request(socket_path: str, endpoint: str) -> Any:
     return json.loads(body or b"null")
 
 
-def collect_containers(socket_path: str | None = None) -> list[dict[str, Any]]:
+_IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
+_DOCKER_TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
+# Containers that have stopped (or are between restarts) carry a meaningful exit status.
+_STOPPED = {"exited", "dead", "restarting"}
+
+
+def _docker_time(value: Any) -> str | None:
+    """Docker's nanosecond timestamp cut to whole seconds, or None for the "never" value (year 1)."""
+    match = _DOCKER_TIME.match(value) if isinstance(value, str) else None
+    return f"{match.group(0)}Z" if match and int(match.group(0)[:4]) >= 2000 else None
+
+
+def _docker_failure_reason(error: BaseException) -> str:
+    """A coarse, fixed-vocabulary reason, never the raw error text."""
+    if isinstance(error, TimeoutError):
+        return "timeout"
+    if isinstance(error, ConnectionRefusedError):
+        return "refused"
+    if isinstance(error, FileNotFoundError):
+        return "missing"
+    if isinstance(error, PermissionError):
+        return "denied"
+    return "error"
+
+
+def collect_containers(socket_path: str | None = None, info: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Every container with its state and usage. ``info`` receives how long listing them took."""
     # The read-only proxy is preferred: it keeps the Docker socket, which is root on the host, out of this container.
     socket_path = socket_path or os.getenv("HOMELAB_DOCKER_HOST") or os.getenv("DOCKER_SOCKET_PATH", "/var/run/docker.sock")
     if not Path(socket_path).exists():
         return []
+    listing_started = time.monotonic()
     containers = _docker_request(socket_path, "/containers/json?all=1")
+    if info is not None:
+        info["latency_ms"] = int((time.monotonic() - listing_started) * 1000)
     result = []
     for item in containers:
         container_id = item.get("Id", "")
         if not container_id:
             continue
-        detail = _docker_request(socket_path, f"/containers/{container_id}/json")
+        try:
+            detail = _docker_request(socket_path, f"/containers/{container_id}/json")
+        except (OSError, ValueError, http.client.HTTPException):
+            # A container removed between listing and inspecting it must not fail the whole collection.
+            continue
         state = detail.get("State") or {}
         status = state.get("Status") or item.get("State") or "unknown"
         health = (state.get("Health") or {}).get("Status")
         usage_stats = _container_usage(socket_path, container_id) if status == "running" else {}
+        stopped = str(status).lower() in _STOPPED
+        exit_code = state.get("ExitCode")
+        image_id = detail.get("Image")
         result.append({
             "container_id": container_id,
             "name": (detail.get("Name") or (item.get("Names") or [container_id[:12]])[0]).lstrip("/"),
@@ -367,9 +404,38 @@ def collect_containers(socket_path: str | None = None) -> list[dict[str, Any]]:
             "healthcheck_status": health,
             "started_at": state.get("StartedAt") if status == "running" else None,
             "ports": _format_ports((detail.get("NetworkSettings") or {}).get("Ports")),
+            "exit_code": exit_code if stopped and isinstance(exit_code, int) and not isinstance(exit_code, bool) and -1 <= exit_code <= 65535 else None,
+            "oom_killed": state.get("OOMKilled") if stopped and isinstance(state.get("OOMKilled"), bool) else None,
+            "finished_at": _docker_time(state.get("FinishedAt")) if stopped else None,
+            "image_id": image_id if isinstance(image_id, str) and _IMAGE_ID.fullmatch(image_id) else None,
             **usage_stats,
         })
+    if containers and not result:
+        # Listing worked but nothing could be inspected: the daemon is failing, not empty.
+        raise OSError("no container could be inspected")
     return result
+
+
+def collect_docker(socket_path: str | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Containers plus a verdict on the Docker API: ``ok``, ``unreachable`` or ``not_configured``.
+
+    "No Docker on this host" is not an error, and an empty list is not proof of a problem, so the
+    backend only alerts on ``unreachable`` for a host that had Docker working before.
+    """
+    explicit = socket_path or os.getenv("HOMELAB_DOCKER_HOST")
+    target = explicit or os.getenv("DOCKER_SOCKET_PATH", "/var/run/docker.sock")
+    if not Path(target).exists():
+        # A proxy that is configured but missing is a failure; a host that simply has no Docker socket is not.
+        if explicit:
+            return [], {"docker_status": "unreachable", "docker_reason": "missing", "docker_latency_ms": None}
+        return [], {"docker_status": "not_configured", "docker_reason": None, "docker_latency_ms": None}
+    info: dict[str, Any] = {}
+    try:
+        containers = collect_containers(target, info)
+    except (OSError, ValueError, http.client.HTTPException) as error:
+        print(f"Docker metrics unavailable ({type(error).__name__}); sending host metrics only", flush=True)
+        return [], {"docker_status": "unreachable", "docker_reason": _docker_failure_reason(error), "docker_latency_ms": info.get("latency_ms")}
+    return containers, {"docker_status": "ok", "docker_reason": None, "docker_latency_ms": info.get("latency_ms")}
 
 
 def _format_ports(ports: dict[str, Any] | None) -> str | None:
@@ -571,11 +637,8 @@ def run_collector() -> None:
         started = time.monotonic()
         try:
             server, host = collect_host()
-            try:
-                containers = collect_containers()
-            except (OSError, ValueError, http.client.HTTPException) as docker_error:
-                containers = []
-                print(f"Docker metrics unavailable ({type(docker_error).__name__}); sending host metrics only", flush=True)
+            containers, docker = collect_docker()
+            host.update(docker)
             response = send_payload(api_url, server_id, token, {"server": server, "host": host, "containers": containers})
             interval = max(15, int(response.get("interval_seconds", interval)))
             print(f"Sent host metrics and {len(containers)} container records; next check in {interval}s", flush=True)

@@ -4,8 +4,8 @@ Vexion ships with an automated test suite. This page explains how to run it, wha
 covers (and what it doesn't), and what every single test is for, so you can decide
 whether a failure matters before you upgrade or change your setup.
 
-- **302 test cases** from 179 test functions (some functions run once per input).
-- **About 15 seconds** to run. No Docker, PostgreSQL, Redis, network or root access needed.
+- **413 test cases** from 234 test functions (some functions run once per input).
+- **About 15 to 20 seconds** to run. No Docker, PostgreSQL, Redis, network or root access needed.
 - **Safe to run next to a live install.** The tests use a throwaway in-memory database
   and fakes; they never touch your running containers or your data. (Two collector
   tests read this machine's `/proc` and root filesystem, read-only.)
@@ -35,7 +35,7 @@ pytest
 A healthy run ends with a line like:
 
 ```text
-302 passed, 3 warnings in 14.1s
+413 passed, 3 warnings in 17.0s
 ```
 
 The warnings are harmless notices from the libraries (FastAPI deprecating the
@@ -126,6 +126,7 @@ docker compose logs --tail 20 collector        # "Sent host metrics and N contai
 | [`test_collector_mounts.py`](#test_collector_mountspy) | 1 | Which filesystems the collector reports. |
 | [`test_container_detail.py`](#test_container_detailpy) | 5 | Per-container details and parsing of Docker's stats. |
 | [`test_conversations.py`](#test_conversationspy) | 1 | Deleting one assistant conversation leaves the others alone. |
+| [`test_container_checks.py`](#test_container_checkspy) | 111 | Docker health, container exit codes, inventory and image changes, memory-leak trends, and the validation of everything a collector sends about containers. |
 | [`test_dashboard_host.py`](#test_dashboard_hostpy) | 8 | The "this machine" logic, history charts, container list and incident counts. |
 | [`test_docker_proxy.py`](#test_docker_proxypy) | 91 | The read-only Docker proxy: what it allows, refuses and hides. |
 | [`test_enrollment.py`](#test_enrollmentpy) | 10 | Enrollment keys, collector credentials and offline-server detection. |
@@ -184,7 +185,7 @@ The incident engine and the container rules.
 | `test_unhealthy_container_alerts_once_and_resolves` | A container whose Docker healthcheck fails opens one critical incident, however many check-ins repeat it, and it closes when the container is healthy again. |
 | `test_restart_loop_alerts_once_when_count_climbs` | A container whose restart count keeps rising within the window opens a restart-loop incident that reports how many restarts happened. |
 | `test_restart_loop_ignores_old_restarts_and_status_alone` | A large restart count from long ago, or a single "restarting" sample, is not treated as a loop. |
-| `test_removed_container_alert_resolves_when_others_report` | If a container disappears and other containers still report, its incident resolves. |
+| `test_removed_container_alert_resolves_when_others_report` | If an unhealthy container disappears and others still report, its unhealthy incident resolves and only the informational "no longer present" notice remains. |
 | `test_empty_container_list_keeps_container_alerts` | If a check-in has no containers at all (Docker unreachable), existing container incidents stay open instead of being wrongly closed. |
 | `test_container_sync_leaves_other_rules_alone` | Updating container incidents never touches other incidents, such as "server offline". |
 | `test_overview_lists_critical_first_with_hostname_and_true_count` | The dashboard's incident list shows the most severe first, includes the server name, and reports the true total even when the list is capped. |
@@ -245,6 +246,102 @@ Accounts, passwords, first-run protection and the cross-site check.
 |---|---|
 | `test_conversation_records_are_independent_for_safe_deletion` | Deleting one assistant conversation removes only its own messages and audit entries and leaves other conversations untouched. |
 
+### test_container_checks.py
+
+Container-level checks: Docker health, how containers ended, what appeared or
+disappeared, image changes, and memory-leak trends. A large part of this file tests the
+validation of container data, because everything a collector reports is untrusted input.
+
+**Docker health (collector side)**
+
+| Test | What it checks |
+|---|---|
+| `test_a_host_without_docker_is_not_configured_not_broken` | A host with no Docker socket is reported as *not configured*, not as a failure. |
+| `test_a_configured_but_missing_proxy_socket_is_unreachable` | If the Docker proxy is configured but its socket is missing, that is a failure (reason *missing*). |
+| `test_a_stale_socket_nobody_listens_on_is_reported_as_refused` | A socket file left behind by a stopped proxy is reported as *refused*. |
+| `test_failures_map_to_a_fixed_vocabulary_never_raw_text` *(7 inputs)* | Errors become one of five fixed reasons (timeout, refused, missing, denied, error); raw error text is never sent. |
+| `test_a_working_daemon_reports_ok_with_its_latency` | A working Docker reports `ok` and how long listing containers took. |
+| `test_a_daemon_error_during_listing_is_unreachable` | A Docker error while listing containers is reported as unreachable, with no containers. |
+| `test_one_container_vanishing_mid_collection_does_not_fail_the_rest` | A container removed between listing and inspecting is skipped without failing the others. |
+| `test_when_nothing_can_be_inspected_the_daemon_is_failing_not_empty` | If containers are listed but none can be inspected, Docker is treated as failing rather than empty. |
+
+**Exit status and image ID (collector side)**
+
+| Test | What it checks |
+|---|---|
+| `test_a_stopped_container_reports_how_it_ended` | A stopped container reports its exit code, whether it was out-of-memory killed, when it finished (to the second) and its image ID. |
+| `test_a_running_container_does_not_report_a_stale_exit_status` | A running container never reports the exit status of an earlier run. |
+| `test_malformed_exit_details_become_unknown` *(10 inputs)* | Strings, booleans, out-of-range or fractional exit codes, a non-boolean OOM flag and impossible finish times all become *unknown*. |
+| `test_only_a_well_formed_image_id_is_passed_on` *(8 inputs)* | Only a real `sha256:` plus 64 hex characters image ID is passed on; tags, short or malformed values are dropped. |
+
+**Docker health incidents (backend side)**
+
+| Test | What it checks |
+|---|---|
+| `test_docker_unreachable_alerts_only_after_it_worked_and_only_when_sustained` | A critical incident opens after Docker worked before and then fails several check-ins in a row, and resolves when it recovers. |
+| `test_a_host_that_never_had_working_docker_never_alerts` | A host that never had working Docker, or has none, never gets an incident. |
+| `test_an_open_docker_alert_survives_the_purge_of_the_samples_that_proved_it_worked` | An open incident stays open even after retention deletes the old samples that showed Docker once worked. |
+| `test_slow_docker_warns_when_sustained_and_clears_when_fast` | Slow container listings over the threshold, several times in a row, raise a warning that clears when Docker is fast again. |
+| `test_missing_docker_data_from_old_collectors_never_alerts` | Collectors that send no Docker status never trigger Docker incidents. |
+| `test_malformed_docker_fields_are_dropped` | Unknown status values, free-text reasons and absurd latencies are discarded. |
+
+**Exit-code incidents (backend side)**
+
+| Test | What it checks |
+|---|---|
+| `test_stopped_containers_are_classified_by_how_they_ended` *(5 inputs)* | Exit code 1 and 127 give a warning (127 explained as "command not found"), 137 and 143 an informational notice (usually a deliberate stop), and an out-of-memory kill is critical. |
+| `test_clean_exits_unknown_and_running_containers_never_alert` *(5 inputs)* | Clean exits (0), unknown exit codes or times, and running or merely created containers never raise an incident. |
+| `test_an_old_exit_is_not_an_incident_and_a_restart_clears_it` | An exit older than the event window raises nothing, and a container that runs again clears its incident. |
+
+**What a collector may send about containers**
+
+| Test | What it checks |
+|---|---|
+| `test_unusable_container_records_are_dropped` *(11 inputs)* | Records that are not objects, or lack a usable ID or status, are dropped. |
+| `test_container_text_is_made_printable_and_bounded` | Control characters are replaced and every text field is trimmed and capped (names at 128 characters). |
+| `test_a_missing_name_falls_back_to_the_container_id` | A container without a name is shown by the start of its ID. |
+| `test_numeric_fields_must_be_real_in_range_numbers` *(9 inputs)* | Strings, booleans, NaN, infinity, negative or absurdly large values become *unknown* instead of being stored. |
+| `test_sane_numbers_pass_through` | Normal values are stored unchanged. |
+| `test_finish_times_must_be_exact_recent_utc_timestamps` *(9 inputs)* | Only exact UTC timestamps between the year 2000 and a few minutes from now are accepted. |
+| `test_a_valid_finish_time_becomes_an_aware_datetime` | A valid finish time is stored as a timezone-aware date. |
+| `test_unknown_fields_are_not_passed_to_the_database` | Extra fields (including attempts to set `id`, `server_id` or `time`) are ignored. |
+| `test_the_api_schema_already_refuses_container_entries_that_are_not_objects` | The API itself rejects container lists with non-object entries. |
+| `test_hostile_container_records_never_break_ingest_or_other_data` | Odd records are cleaned or dropped, and the host's own numbers in the same check-in are still recorded. |
+| `test_no_more_than_500_containers_are_accepted_per_check_in` | At most 500 containers are stored per check-in. |
+| `test_the_longest_container_name_still_fits_every_incident_key` | Even the longest allowed name keeps every incident key within the database limit, so a crafted name cannot make check-ins fail. |
+
+**Inventory changes and image drift**
+
+| Test | What it checks |
+|---|---|
+| `test_the_first_check_in_is_only_a_baseline` | The first report creates no events. |
+| `test_new_and_missing_containers_are_recorded` | Containers that appeared or disappeared since the last check-in are recorded. |
+| `test_a_removed_container_opens_an_informational_incident_that_clears_with_the_window` | A removed container opens an informational incident that clears after the event window. |
+| `test_a_container_that_comes_back_clears_its_removal_incident` | A container that returns clears its removal incident. |
+| `test_containers_are_matched_by_name_so_recreation_is_not_a_change` | Recreating a container (new ID, same name, same image) is not reported. |
+| `test_an_empty_list_never_looks_like_everything_vanished_or_reappeared` | An empty list (Docker unreachable) neither removes everything nor makes everything look new when it returns. |
+| `test_a_changed_image_is_recorded_and_raises_an_informational_incident` | A container that comes up on a different image build is recorded with the short IDs, and raises an informational incident. |
+| `test_the_same_image_or_an_unknown_one_is_not_a_change` | The same image, or an unknown image ID on either side, is not a change. |
+| `test_a_burst_of_changes_is_capped_per_check_in_with_one_notice` | A burst of changes records at most 10 events per check-in plus a single notice. |
+| `test_sustained_churn_is_capped_per_hour` | Containers constantly coming and going cannot flood the database: events are capped per hour with one notice. |
+| `test_container_changes_have_their_own_list_and_do_not_crowd_the_system_row` | Container changes appear in the Containers section, not in the System row, so they cannot push reboots out of it. |
+| `test_the_container_change_list_is_bounded` | The dashboard's container-change list is capped at 15 rows. |
+| `test_container_events_follow_the_normal_retention` | Container change events are deleted with the other old data after the retention period. |
+
+**Memory-leak trends**
+
+| Test | What it checks |
+|---|---|
+| `test_steady_growth_is_flagged_as_a_possible_leak` | A container whose memory rises steadily over the window gets a warning with the rate and, when a memory limit is set, the time until it is reached. |
+| `test_flat_noisy_and_sawtooth_memory_is_not_a_leak` | Flat, noisy or repeatedly rising-and-falling memory is not flagged. |
+| `test_a_restart_or_recreation_in_the_window_resets_the_trend` | A restart or recreation inside the window disqualifies the trend, since it resets memory. |
+| `test_too_little_history_or_a_slow_or_proportionally_small_rise_is_not_flagged` | Missing data, a rise below the MB-per-hour minimum, or a tiny proportional rise on a large container are not flagged. |
+| `test_containers_that_are_not_running_now_are_not_analysed` | Containers that are not running now are skipped. |
+| `test_the_flag_clears_when_the_growth_stops` | The warning clears on the next hourly analysis once growth stops. |
+| `test_analysis_is_bounded_to_100_containers_per_server` | At most 100 containers per server are analysed. |
+| `test_a_fit_needs_distinct_points` | The straight-line fit refuses degenerate input and computes slope and fit quality correctly. |
+| `test_the_new_thresholds_have_safe_defaults_and_are_validated` | The new thresholds (slow Docker, leak window, rate and growth) have safe defaults, and out-of-range, fractional, text or boolean values are rejected. |
+
 ### test_dashboard_host.py
 
 | Test | What it checks |
@@ -268,7 +365,7 @@ tested hardest (91 cases). If any of these fail, do not run the proxy until it i
 | `test_the_three_read_requests_are_allowed` *(5 inputs)* | The exact requests the collector needs (list containers, inspect one, one stats snapshot) are allowed. |
 | `test_only_get_is_allowed` *(8 inputs)* | Every method except GET (POST, PUT, DELETE, PATCH, HEAD, OPTIONS, lowercase `get`, CONNECT) is refused. |
 | `test_everything_else_is_refused` *(63 inputs)* | Everything outside the allow-list is refused: other endpoints (`/info`, images, exec, start, kill, export, archive, logs), extra or changed query strings, path traversal, encoded or padded paths, injected line breaks, odd container IDs. |
-| `test_inspect_output_drops_environment_and_everything_unneeded` | The container description is cut down to the needed fields; environment variables (often secrets), mounts, labels and host configuration never leave the proxy. |
+| `test_inspect_output_drops_environment_and_everything_unneeded` | The container description is cut down to the needed fields (including exit code, out-of-memory flag, finish time and image ID); environment variables (often secrets), mounts, labels, host configuration and Docker's free-text error message never leave the proxy. |
 | `test_list_and_stats_output_are_cut_down` | The same filtering applies to the container list and stats. |
 | `test_unexpected_upstream_shapes_do_not_crash_the_filters` *(7 inputs)* | Strange or malformed answers from Docker don't crash the proxy. |
 | `test_collector_works_through_the_proxy_and_never_sees_secrets` | End to end: the real collector gets correct container data through the proxy and no secret reaches it. |

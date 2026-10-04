@@ -12,9 +12,9 @@ CID = "a" * 64
 SECRET = "SUPER_SECRET_TOKEN_123"
 
 INSPECT = {
-    "Id": CID, "Name": "/web", "RestartCount": 2, "Image": "sha256:abc",
+    "Id": CID, "Name": "/web", "RestartCount": 2, "Image": "sha256:" + "ab" * 32,
     "Config": {"Image": "nginx:1", "Env": [f"DB_PASSWORD={SECRET}"], "Labels": {"k": "v"}, "Cmd": ["nginx"]},
-    "State": {"Status": "running", "StartedAt": "2026-01-01T00:00:00Z", "Pid": 99, "Health": {"Status": "healthy", "Log": [{"Output": SECRET}]}},
+    "State": {"Status": "running", "StartedAt": "2026-01-01T00:00:00Z", "Pid": 99, "ExitCode": 137, "OOMKilled": True, "FinishedAt": "2026-01-02T03:04:05.123456789Z", "Error": f"failed: {SECRET}", "Health": {"Status": "healthy", "Log": [{"Output": SECRET}]}},
     "NetworkSettings": {"Ports": {"80/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8080"}]}, "SecondaryIPAddresses": None, "Networks": {"x": {"Gateway": "1"}}},
     "Mounts": [{"Source": "/etc/shadow"}], "HostConfig": {"Privileged": True}, "GraphDriver": {"Data": {}},
 }
@@ -66,8 +66,8 @@ def test_inspect_output_drops_environment_and_everything_unneeded():
 
     assert SECRET not in json.dumps(result)
     assert result == {
-        "Id": CID, "Name": "/web", "RestartCount": 2, "Config": {"Image": "nginx:1"},
-        "State": {"Status": "running", "StartedAt": "2026-01-01T00:00:00Z", "Health": {"Status": "healthy"}},
+        "Id": CID, "Name": "/web", "RestartCount": 2, "Image": "sha256:" + "ab" * 32, "Config": {"Image": "nginx:1"},
+        "State": {"Status": "running", "StartedAt": "2026-01-01T00:00:00Z", "ExitCode": 137, "OOMKilled": True, "FinishedAt": "2026-01-02T03:04:05.123456789Z", "Health": {"Status": "healthy"}},
         "NetworkSettings": {"Ports": {"80/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8080"}]}},
     }
 

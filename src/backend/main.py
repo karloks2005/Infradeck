@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import hashlib
 import secrets
@@ -43,7 +44,7 @@ from .config import (
     SESSION_COOKIE_SECURE,
     SESSION_TTL_SECONDS,
 )
-from .rules import DEFAULT_THRESHOLDS, HOST_RULE_PREFIX, container_rules, host_rules, validate_thresholds, detect_system_events, system_rules, SYSTEM_RULE_PREFIX, validate_mount_thresholds, validate_helper_events, REBOOT_DETAILS, REBOOT_KEY_PREFIX
+from .rules import DEFAULT_THRESHOLDS, HOST_RULE_PREFIX, container_rules, host_rules, validate_thresholds, detect_system_events, system_rules, SYSTEM_RULE_PREFIX, validate_mount_thresholds, validate_helper_events, REBOOT_DETAILS, REBOOT_KEY_PREFIX, detect_container_events, memory_trend_rules, CONTAINER_EVENT_KINDS, MAX_CONTAINER_EVENTS_PER_CHECKIN, MAX_CONTAINER_EVENTS_PER_HOUR, TREND_RULE_PREFIX
 from .rate_limit import enforce_ip_limit, enforce_login_limit, enforce_register_limit, reset_limits
 from ..agent.service import delete_agent_conversation, send_agent_message
 
@@ -194,8 +195,11 @@ def startup_event():
             for column, column_type in (
                 ("boot_id", "VARCHAR(64)"), ("oom_kill_total", "INTEGER"), ("kernel_tainted", "INTEGER"),
                 ("ntp_synced", "BOOLEAN"), ("reboot_required", "BOOLEAN"), ("last_shutdown", "VARCHAR(16)"),
+                ("docker_status", "VARCHAR(16)"), ("docker_reason", "VARCHAR(16)"), ("docker_latency_ms", "INTEGER"),
             ):
                 connection.execute(text(f"ALTER TABLE host_metrics ADD COLUMN IF NOT EXISTS {column} {column_type}"))
+            for column, column_type in (("exit_code", "INTEGER"), ("oom_killed", "BOOLEAN"), ("finished_at", "TIMESTAMP WITH TIME ZONE"), ("image_id", "VARCHAR(80)")):
+                connection.execute(text(f"ALTER TABLE container_metrics ADD COLUMN IF NOT EXISTS {column} {column_type}"))
             connection.execute(text("ALTER TABLE system_events ADD COLUMN IF NOT EXISTS event_key VARCHAR(128)"))
             connection.execute(text("ALTER TABLE pending_collectors ADD COLUMN IF NOT EXISTS join_token_id INTEGER REFERENCES join_tokens(id) ON DELETE SET NULL"))
             connection.execute(text("CREATE INDEX IF NOT EXISTS ix_system_events_event_key ON system_events (event_key)"))
@@ -546,7 +550,7 @@ def recent_system_events(db, since: datetime) -> dict[int, list[dict]]:
     OOM kills out of the list. Every other kind stays one row per occurrence.
     """
     result: dict[int, list[dict]] = {}
-    for event in db.query(SystemEvent).filter(SystemEvent.time >= since, SystemEvent.kind != "kernel_error").order_by(SystemEvent.time.desc()):
+    for event in db.query(SystemEvent).filter(SystemEvent.time >= since, SystemEvent.kind != "kernel_error", SystemEvent.kind.notin_(CONTAINER_EVENT_KINDS)).order_by(SystemEvent.time.desc()):
         rows = result.setdefault(event.server_id, [])
         if len(rows) < SYSTEM_EVENTS_SHOWN:
             rows.append({"time": event.time.isoformat(), "first_time": event.time.isoformat(), "kind": event.kind, "detail": event.detail, "count": 1})
@@ -566,6 +570,22 @@ def recent_system_events(db, since: datetime) -> dict[int, list[dict]]:
     return result
 
 
+CONTAINER_EVENTS_SHOWN = 15
+
+
+def recent_container_events(db, since: datetime) -> dict[int, list[dict]]:
+    """Each server's recent container changes (appeared, removed, image changed), newest first.
+
+    Kept apart from the System row so a burst of container churn can't push reboots or OOM kills out of it.
+    """
+    result: dict[int, list[dict]] = {}
+    for event in db.query(SystemEvent).filter(SystemEvent.time >= since, SystemEvent.kind.in_(CONTAINER_EVENT_KINDS)).order_by(SystemEvent.time.desc()):
+        rows = result.setdefault(event.server_id, [])
+        if len(rows) < CONTAINER_EVENTS_SHOWN:
+            rows.append({"time": event.time.isoformat(), "kind": event.kind, "detail": event.detail})
+    return result
+
+
 @app.get("/monitoring/overview")
 def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     # Servers belong to the install: everyone signed in can view them, only admins manage them.
@@ -575,6 +595,7 @@ def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_C
     alert_counts = dict(db.query(IncidentAlert.server_id, func.count()).filter(IncidentAlert.status == "active").group_by(IncidentAlert.server_id).all())
     since = datetime.now(timezone.utc) - timedelta(days=7)
     events = recent_system_events(db, since)
+    container_events = recent_container_events(db, since)
     result = []
     for server in servers:
         metric = db.query(HostMetric).filter(HostMetric.server_id == server.id).order_by(HostMetric.time.desc()).first()
@@ -586,10 +607,11 @@ def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_C
             "check_interval_seconds": server.check_interval_seconds, "is_dashboard_host": server.is_dashboard_host,
             "active_alert_count": alert_counts.get(server.id, 0),
             "last_seen_at": server.last_seen_at.isoformat() if server.last_seen_at else None,
-            "host": ({key: getattr(metric, key) for key in ("time", "cpu_utilization_pct", "load_1m", "load_5m", "load_15m", "ram_used_gb", "ram_available_gb", "ram_pct", "swap_pct", "disk_usage_pct", "disk_inodes_pct", "net_bytes_sent_mb", "net_bytes_recv_mb", "system_uptime_seconds", "oom_kill_total", "kernel_tainted", "ntp_synced", "reboot_required", "last_shutdown")} if metric else None),
+            "host": ({key: getattr(metric, key) for key in ("time", "cpu_utilization_pct", "load_1m", "load_5m", "load_15m", "ram_used_gb", "ram_available_gb", "ram_pct", "swap_pct", "disk_usage_pct", "disk_inodes_pct", "net_bytes_sent_mb", "net_bytes_recv_mb", "system_uptime_seconds", "oom_kill_total", "kernel_tainted", "ntp_synced", "reboot_required", "last_shutdown", "docker_status", "docker_reason", "docker_latency_ms")} if metric else None),
+            "container_events": container_events.get(server.id, []),
             "system_events": events.get(server.id, []),
             "mounts": [{key: getattr(m, key) for key in ("mount", "fs_type", "total_gb", "used_gb", "used_pct", "inodes_pct")} for m in mounts],
-            "containers": [{"container_id": c.container_id, "name": c.name, "image": c.image, "status": c.status, "restart_count": c.restart_count, "cpu_pct": c.cpu_pct, "memory_used_mb": c.memory_used_mb, "memory_pct": c.memory_pct, "healthcheck_status": c.healthcheck_status, "time": c.time.isoformat()} for c in latest.values()],
+            "containers": [{"container_id": c.container_id, "name": c.name, "image": c.image, "status": c.status, "restart_count": c.restart_count, "cpu_pct": c.cpu_pct, "memory_used_mb": c.memory_used_mb, "memory_pct": c.memory_pct, "healthcheck_status": c.healthcheck_status, "exit_code": c.exit_code, "oom_killed": c.oom_killed, "finished_at": c.finished_at.isoformat() if c.finished_at else None, "time": c.time.isoformat()} for c in latest.values()],
         })
     active_alerts = db.query(IncidentAlert).filter(IncidentAlert.status == "active")
     # Most severe first, then newest.
@@ -930,6 +952,15 @@ def mark_offline_servers(db, now: datetime | None = None) -> int:
 METRICS_PURGE_INTERVAL_SECONDS = 3600
 
 
+def analyze_memory_trends(db, now: datetime | None = None) -> None:
+    """Hourly: flag containers whose memory climbs steadily, and clear flags that no longer hold."""
+    now = now or datetime.now(timezone.utc)
+    thresholds = get_alert_thresholds(db)
+    for server in db.query(Server).all():
+        sync_alerts(db, server.id, TREND_RULE_PREFIX, memory_trend_rules(db, server.id, thresholds, now), now)
+    db.commit()
+
+
 def _offline_watch_loop() -> None:
     last_metrics_purge: float | None = None
     while True:
@@ -940,6 +971,7 @@ def _offline_watch_loop() -> None:
             purge_stale_pending(db)
             if last_metrics_purge is None or time.monotonic() - last_metrics_purge >= METRICS_PURGE_INTERVAL_SECONDS:
                 purge_old_metrics(db)
+                analyze_memory_trends(db)
                 last_metrics_purge = time.monotonic()
         except Exception as exc:  # keep the watcher alive through transient DB errors
             print(f"Offline watch failed: {type(exc).__name__}: {exc}", flush=True)
@@ -1002,6 +1034,72 @@ def record_helper_events(db, server_id: int, raw, now: datetime) -> None:
             db.add(SystemEvent(server_id=server_id, time=time, kind=kind, detail=detail, event_key=key))
 
 
+DOCKER_STATUSES = {"ok", "unreachable", "not_configured"}
+DOCKER_REASON_CODES = {"timeout", "refused", "missing", "denied", "error"}
+MAX_CONTAINERS_PER_CHECKIN = 500
+# Names end up inside incident keys (255 characters, with a prefix and suffix), so they are kept well under that.
+MAX_CONTAINER_NAME = 128
+_IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
+_CONTAINER_FLOATS = ("cpu_pct", "memory_used_mb", "memory_pct", "memory_limit_mb", "net_rx_mb", "net_tx_mb", "block_read_mb", "block_write_mb")
+_CONTAINER_TEXT = {"image": 255, "started_at": 64, "ports": 512, "healthcheck_status": 64}
+
+
+def _printable(text: str, limit: int) -> str:
+    """Trim surrounding whitespace, replace control characters, and cap the length."""
+    return "".join(char if char.isprintable() else "?" for char in text.strip())[:limit].strip()
+
+
+def _whole_number(value, low: int, high: int) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and low <= value <= high else None
+
+
+def _clean_container(raw, now: datetime) -> dict | None:
+    """One container record reduced to known fields of the right type and size, or None if unusable.
+
+    Everything here comes from a collector, so nothing is trusted: text is made printable and bounded,
+    numbers are range-checked, and anything unexpected becomes None (unknown, which never alerts).
+    """
+    if not isinstance(raw, dict) or not isinstance(raw.get("container_id"), str) or not isinstance(raw.get("status"), str):
+        return None
+    container_id, status = _printable(raw["container_id"], 128), _printable(raw["status"], 64).lower()
+    if not container_id or not status:
+        return None
+    name = raw.get("name")
+    clean: dict = {"container_id": container_id, "status": status, "name": (_printable(name, MAX_CONTAINER_NAME) if isinstance(name, str) else "") or container_id[:12]}
+    for key, limit in _CONTAINER_TEXT.items():
+        clean[key] = (_printable(raw[key], limit) or None) if isinstance(raw.get(key), str) else None
+    clean["restart_count"] = _whole_number(raw.get("restart_count"), 0, 10**9) or 0
+    clean["pids"] = _whole_number(raw.get("pids"), 0, 10**9)
+    for key in _CONTAINER_FLOATS:
+        value = raw.get(key)
+        clean[key] = float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and 0 <= value <= 1e12 else None
+    clean["exit_code"] = _whole_number(raw.get("exit_code"), -1, 65535)
+    clean["oom_killed"] = raw["oom_killed"] if isinstance(raw.get("oom_killed"), bool) else None
+    clean["image_id"] = raw["image_id"] if isinstance(raw.get("image_id"), str) and _IMAGE_ID.fullmatch(raw["image_id"]) else None
+    clean["finished_at"] = None
+    if isinstance(raw.get("finished_at"), str):
+        try:
+            finished = datetime.strptime(raw["finished_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            clean["finished_at"] = finished if datetime(2000, 1, 1, tzinfo=timezone.utc) <= finished <= now + timedelta(minutes=5) else None
+        except ValueError:
+            pass
+    return clean
+
+
+def record_container_events(db, server_id: int, events: list[tuple[str, str, str]], now: datetime) -> None:
+    """Store container changes, with hard caps so churn (CI containers coming and going) can't flood the table."""
+    if not events:
+        return
+    since = now - timedelta(hours=1)
+    recent = db.query(func.count(SystemEvent.id)).filter(SystemEvent.server_id == server_id, SystemEvent.kind.in_(CONTAINER_EVENT_KINDS), SystemEvent.time >= since).scalar() or 0
+    allowed = events[:max(0, min(MAX_CONTAINER_EVENTS_PER_CHECKIN, MAX_CONTAINER_EVENTS_PER_HOUR - recent))]
+    for kind, detail, name in allowed:
+        db.add(SystemEvent(server_id=server_id, time=now, kind=kind, detail=detail[:512], event_key=name[:128]))
+    dropped = len(events) - len(allowed)
+    if dropped and not db.query(SystemEvent.id).filter(SystemEvent.server_id == server_id, SystemEvent.kind == "container_notice", SystemEvent.time >= since).first():
+        db.add(SystemEvent(server_id=server_id, time=now, kind="container_notice", detail=f"{dropped} more container changes were not recorded (too many at once)"))
+
+
 def _clean_system_fields(fields: dict) -> None:
     """Drop system-state values of the wrong type; a collector reports None when it can't tell."""
     for key, kind in (("oom_kill_total", int), ("kernel_tainted", int), ("ntp_synced", bool), ("reboot_required", bool)):
@@ -1009,6 +1107,12 @@ def _clean_system_fields(fields: dict) -> None:
             fields[key] = None
     if "last_shutdown" in fields and fields["last_shutdown"] not in {"clean", "unclean", "unknown"}:
         fields["last_shutdown"] = None
+    if "docker_status" in fields and fields["docker_status"] not in DOCKER_STATUSES:
+        fields["docker_status"] = None
+    if "docker_reason" in fields and fields["docker_reason"] not in DOCKER_REASON_CODES:
+        fields["docker_reason"] = None
+    if "docker_latency_ms" in fields:
+        fields["docker_latency_ms"] = _whole_number(fields["docker_latency_ms"], 0, 600_000)
     if "boot_id" in fields:
         fields["boot_id"] = fields["boot_id"][:64] if isinstance(fields["boot_id"], str) and fields["boot_id"] else None
 
@@ -1049,14 +1153,16 @@ def ingest_metrics(payload: MetricsIngestRequest, authorization: Annotated[str |
         if isinstance(mount, dict) and isinstance(mount.get("mount"), str) and mount["mount"]:
             allowed = {k: v for k, v in mount.items() if k in MountMetric.__table__.columns.keys() and k not in {"id", "server_id", "time"}}
             db.add(MountMetric(server_id=server.id, time=now, **allowed))
-    containers = [c for c in payload.containers if c.get("container_id") and c.get("status")]
+    containers = [clean for clean in (_clean_container(raw, now) for raw in payload.containers[:MAX_CONTAINERS_PER_CHECKIN]) if clean]
+    # Compare with the previous check-in before this one's rows exist.
+    previous_containers = latest_containers(db, server.id, previous.time) if previous else []
+    record_container_events(db, server.id, detect_container_events(previous_containers, containers), now)
     for container in containers:
-        allowed = {k: v for k, v in container.items() if k in ContainerMetric.__table__.columns.keys() and k not in {"id", "server_id", "time"}}
-        db.add(ContainerMetric(server_id=server.id, time=now, **allowed))
+        db.add(ContainerMetric(server_id=server.id, time=now, **container))
     db.flush()  # the rules read this check-in back from the history tables
     thresholds = get_alert_thresholds(db)
     sync_alerts(db, server.id, HOST_RULE_PREFIX, host_rules(db, server, thresholds, active_rule_keys(db, server.id, HOST_RULE_PREFIX), get_mount_thresholds(db)))
-    sync_alerts(db, server.id, SYSTEM_RULE_PREFIX, system_rules(db, server, thresholds, now))
+    sync_alerts(db, server.id, SYSTEM_RULE_PREFIX, system_rules(db, server, thresholds, now, active_rule_keys(db, server.id, SYSTEM_RULE_PREFIX)))
     # The collector sends no containers when Docker is unreachable; keep container alerts as they are rather than resolving them all.
     if containers:
         sync_alerts(db, server.id, CONTAINER_RULE_PREFIX, container_rules(db, server.id, containers, thresholds, now))

@@ -178,6 +178,11 @@ class HostMetric(Base):
     reboot_required: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     # How the previous boot ended (clean | unclean | unknown), from the optional system helper.
     last_shutdown: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    # Whether the collector could reach the Docker API (ok | unreachable | not_configured), why not, and how long
+    # listing the containers took. Lets "Docker is down" be told apart from "there are no containers".
+    docker_status: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    docker_reason: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    docker_latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
 
 class SystemEvent(Base):
@@ -232,6 +237,11 @@ class ContainerMetric(Base):
     started_at: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     ports: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     healthcheck_status: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # How a stopped container ended, and the ID of the image it runs (to notice it changing).
+    exit_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    oom_killed: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    image_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     time: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True, nullable=False)
 
 

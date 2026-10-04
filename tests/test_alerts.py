@@ -91,7 +91,8 @@ def test_removed_container_alert_resolves_when_others_report(db):
     _ingest(db, [_container("web", health="unhealthy"), _container("db")])
     _ingest(db, [_container("db")])
 
-    assert _active(db) == []
+    # The unhealthy incident is gone with the container; what remains is only the informational removal notice.
+    assert [(alert.rule_key, alert.severity) for alert in _active(db)] == [("container:web:removed", alerts.INFO)]
 
 
 def test_empty_container_list_keeps_container_alerts(db):

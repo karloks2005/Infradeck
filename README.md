@@ -26,14 +26,18 @@ for what every component can touch and the limits of each protection.
 - **Container details**: containers sit in a collapsible list per server, sorted by
   name, with problems (unhealthy, restarting, stopped) shown even when it's closed.
   Open a container to see CPU, memory used/limit, processes, network and disk I/O,
-  uptime, ports, health status and CPU/memory history.
+  uptime, ports, health status and CPU/memory history. Stopped containers show how
+  they ended (exit code, or "out of memory"), and a **Recent changes** list shows
+  containers that appeared, disappeared or came up on a different image.
 - **System health per server**: reboots, OOM-killer activity, kernel fault flags,
   clock synchronisation and pending reboots, plus (with the optional system helper)
   whether the last shutdown was clean and which process the OOM killer stopped.
 - **Incidents with sensible alert rules**: disk (with per-mount overrides), inodes,
   memory, swap, load per CPU core, container restart loops, failing healthchecks,
-  reboots and crashes, OOM kills, kernel faults, unsynchronised clocks and servers
-  that stop reporting. One incident per problem, opened only after a sustained
+  reboots and crashes, OOM kills, kernel faults, unsynchronised clocks, an
+  unreachable or slow Docker daemon, containers that crash or are killed for running
+  out of memory, containers that vanish or change image, possible memory leaks, and
+  servers that stop reporting. One incident per problem, opened only after a sustained
   breach where that makes sense and resolved automatically when it clears.
   Thresholds are editable by admins.
 - **Add servers with one command and one click**: click **Connect a server**, run
@@ -420,12 +424,28 @@ stops firing.
 | 5-minute load per CPU core | 1.5× / 2× | warning / critical |
 | Container restart loop | 3 restarts within 30 minutes | critical |
 | Container healthcheck `unhealthy` | – | critical |
+| Container exited with an error | within 60 minutes of exiting | warning |
+| Container killed by the kernel for running out of memory | within 60 minutes | critical |
+| Container stopped by a signal (exit 137 or 143, usually `docker stop`) | within 60 minutes | info |
+| Container no longer present | stays open 60 minutes | info |
+| Container running a different image build | stays open 60 minutes | info |
+| Possible memory leak (steady climb over 12 hours) | 10 MB/h and 20% growth | warning |
+| Docker unreachable (after it worked before) | 3 check-ins in a row | critical |
+| Docker slow to list containers | over 2000 ms, 3 check-ins in a row | warning |
 | Server stopped reporting | 3 missed check-ins | critical |
 | Host rebooted | stays open 60 minutes | info (critical after an unclean shutdown) |
 | OOM killer fired | stays open 60 minutes | warning (critical at 3 or more) |
 | Kernel fault flags (machine check, bad page, oops, warning, soft lockup) | – | warning, clears on reboot |
 | Clock not synchronised | 3 check-ins in a row | warning |
 | Reboot required | – | info |
+
+Container exits, removals and image changes are noticed by comparing each check-in
+with the previous one, matching containers **by name** (Compose recreates them with
+new IDs). Nothing is reported on a server's first check-in or when Docker was
+unreachable (an empty list is not proof that everything vanished), and churn is
+capped so containers that come and go constantly can't flood the database. A leak is
+only flagged when hourly memory averages rise along a straight line without a
+restart; caches and warm-up can look similar, so treat it as a prompt to look.
 
 Host rules (disk, inodes, memory, swap, load) open an incident only after
 **3 check-ins in a row** breach the threshold, so a brief spike is ignored. An
@@ -436,7 +456,9 @@ the same number of check-ins.
 <diagram - Incident lifecycle for a host rule as a timeline of check-ins: value crosses the warning threshold → after 3 check-ins in a row a WARNING incident opens → stays over critical for 3 check-ins → escalates to CRITICAL → drops under warning → RESOLVED; show a single spike that opens nothing>
 
 Admins can change every threshold, the number of check-ins in a row, how long
-reboot and OOM incidents stay open, and **per-mount disk thresholds** under
+event incidents (reboots, OOM kills, container exits, removals and image changes)
+stay open, the slow-Docker limit, the memory-leak window and sensitivity, and
+**per-mount disk thresholds** under
 **Admin → Alerts**. A per-mount override replaces the default disk thresholds for
 that mount path on every server. Changes apply from each server's next check-in
 and are recorded in the audit log.
@@ -564,7 +586,9 @@ from the backend's response to each report.
 - **Collector privileges.** In the Compose installs the collector has no Docker
   socket, drops all capabilities and has a read-only filesystem. Only the Docker
   proxy mounts the socket; it has no network, answers three read-only requests and
-  strips environment variables from what it returns. The collector still mounts `/`
+  strips environment variables, labels, mounts and error text from what it returns.
+  Everything a collector reports about containers is validated again by the backend
+  (types, ranges, lengths, counts) before it is stored. The collector still mounts `/`
   read-only; without capabilities it can't read other users' private files through it.
 - **Collector endpoints are not public.** On the server stack the public listener
   returns 404 for register, poll, enroll and ingest; they exist only on the
@@ -668,9 +692,10 @@ Tables are created on backend startup (`Base.metadata.create_all`), and new
 columns are added with `ALTER TABLE ... IF NOT EXISTS` in the startup hook in
 `src/backend/main.py`. Each check-in stores one row in `host_metrics` (which also
 carries the boot ID, OOM counter, kernel flags, clock state and last shutdown), one
-per filesystem in `mount_metrics` and one per container in `container_metrics`, all
-with the same timestamp. `system_events` holds reboots, OOM kills and kernel
-messages, `join_tokens` the hashed single-use tokens, and per-mount disk
+per filesystem in `mount_metrics` and one per container in `container_metrics` (which
+also records the exit code, out-of-memory flag, finish time and image ID), all with the
+same timestamp. `system_events` holds reboots, OOM kills, kernel messages and container
+changes (appeared, removed, image changed), `join_tokens` the hashed single-use tokens, and per-mount disk
 thresholds live in `app_settings`. `docker/postgres/init/01_create_users.sql` initialises
 the `users` table on a fresh volume.
 

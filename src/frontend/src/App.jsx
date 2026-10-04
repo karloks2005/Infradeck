@@ -631,6 +631,14 @@ function Chevron({ open, className = '' }) {
 const CONTAINER_SEARCH_MIN = 10
 const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })
 
+const CONTAINER_EVENT_LABELS = { container_added: 'Added', container_removed: 'Removed', image_changed: 'Image change', container_notice: 'Notice' }
+const CONTAINER_EVENT_CLASSES = { container_added: 'text-emerald-300', container_removed: 'text-amber-300', image_changed: 'text-sky-300', container_notice: 'text-[#9aa0a6]' }
+
+function DockerNotice({ host }) {
+  const reasons = { timeout: 'it did not answer in time', refused: 'the connection was refused', missing: 'its socket is missing', denied: 'access was denied', error: 'it returned an error' }
+  return <div className="mt-4 rounded-xl border border-amber-400/30 bg-amber-400/5 px-3 py-2.5 text-sm text-amber-200">Docker is unreachable{host.docker_reason ? `: ${reasons[host.docker_reason] || reasons.error}` : ''}. Container data is not updating until it is back.</div>
+}
+
 function ContainerSection({ server, open, onToggle }) {
   const [query, setQuery] = useState('')
   const containers = [...server.containers].sort(byName)
@@ -656,6 +664,18 @@ function ContainerSection({ server, open, onToggle }) {
         <div className="border-t border-neutral-800 px-3 pb-2">
           {containers.length > CONTAINER_SEARCH_MIN && <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter by name or image" aria-label={`Filter containers on ${server.hostname}`} className="mt-3 w-full rounded-lg border border-neutral-800 bg-[#0d1013] px-3 py-1.5 text-sm text-[#cfcfcf] outline-none focus:border-white/30" />}
           {shown.length ? <ContainerTable serverId={server.id} containers={shown} /> : <p className="py-3 text-sm text-[#9aa0a6]">No containers match “{query.trim()}”.</p>}
+          {server.container_events?.length > 0 && (
+            <div className="mt-2 border-t border-neutral-800 pt-3">
+              <div className="mb-2 text-xs uppercase tracking-[0.2em] text-[#7f8589]">Recent changes · 7 days</div>
+              <ul className="space-y-1.5 pb-1 text-sm">{server.container_events.map((event, index) => (
+                <li key={`${event.time}-${event.kind}-${index}`} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                  <span className="w-24 shrink-0 text-xs text-[#7f8589]" title={new Date(event.time).toLocaleString()}>{formatAgo(event.time)}</span>
+                  <span className={`w-24 shrink-0 text-xs font-medium ${CONTAINER_EVENT_CLASSES[event.kind] || 'text-[#cfcfcf]'}`}>{CONTAINER_EVENT_LABELS[event.kind] || event.kind}</span>
+                  <span className="min-w-0 flex-1 basis-60 break-words text-[#bcbcbc]">{event.detail}</span>
+                </li>
+              ))}</ul>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -880,6 +900,7 @@ const refresh = async () => {
               {!collapsed && <>
                 {metric ? <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">{[['CPU', metric.cpu_utilization_pct, '%'], ['RAM', metric.ram_pct, '%'], [fullest ? `Disk · ${fullest.mount}` : 'Disk', fullest?.used_pct, '%'], ['Load (1m)', metric.load_1m, '']].map(([label, value, unit]) => <div key={label} className="rounded-xl bg-[#171b1f] p-3"><div className="truncate text-xs text-[#9aa0a6]" title={label}>{label}</div><div className="mt-1 text-xl font-semibold text-white">{value == null ? '—' : `${Number(value).toFixed(1)}${unit}`}</div></div>)}</div> : <div className="mt-4 rounded-xl bg-[#171b1f] p-4 text-sm text-[#9aa0a6]">Collector has not sent a measurement yet.</div>}
                 {metric && <StorageBars mounts={mounts} thresholds={overview.disk_thresholds} mountThresholds={overview.mount_thresholds} />}
+                {metric?.docker_status === 'unreachable' && <DockerNotice host={metric} />}
                 {metric && <SystemSection server={server} open={openSystemLists.has(server.id)} onToggle={() => toggleSystemList(server.id)} />}
                 {server.containers.length > 0 && <ContainerSection server={server} open={openContainerLists.has(server.id)} onToggle={() => toggleContainerList(server.id)} />}
                 <div className="mt-3 text-xs text-[#7f8589]">Last check: {server.last_seen_at ? new Date(server.last_seen_at).toLocaleString() : 'Never'}</div>
@@ -1148,7 +1169,8 @@ function formatUptime(startedAt) {
 }
 
 function ContainerStatus({ container }) {
-  return <span className="whitespace-nowrap"><span className={container.status === 'running' ? 'text-emerald-300' : container.status === 'restarting' ? 'text-red-300' : 'text-amber-300'}>{container.status}</span>{container.healthcheck_status && <span className={HEALTH_CLASSES[container.healthcheck_status] || 'text-[#7f8589]'}> · {container.healthcheck_status}</span>}</span>
+  const stopped = container.status === 'exited' || container.status === 'dead'
+  return <span className="whitespace-nowrap"><span className={container.status === 'running' ? 'text-emerald-300' : container.status === 'restarting' ? 'text-red-300' : 'text-amber-300'}>{container.status}</span>{stopped && container.exit_code != null && <span className={container.oom_killed ? 'text-red-300' : container.exit_code === 0 ? 'text-[#7f8589]' : 'text-amber-300'}> · {container.oom_killed ? 'out of memory' : `code ${container.exit_code}`}</span>}{container.healthcheck_status && <span className={HEALTH_CLASSES[container.healthcheck_status] || 'text-[#7f8589]'}> · {container.healthcheck_status}</span>}</span>
 }
 
 const formatContainerCpu = (c) => (c.cpu_pct == null ? '—' : `${c.cpu_pct}%`)
@@ -1887,9 +1909,21 @@ function IncidentThresholdsSection() {
           </span>
         </div>
         <label className="flex flex-col gap-3 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:py-2.5">
-          <span><span className="text-[#bcbcbc]">Reboot and OOM-kill incidents</span><span className="block text-xs text-[#7f8589]">Minutes an incident stays open after the event</span></span>
+          <span><span className="text-[#bcbcbc]">Event incidents</span><span className="block text-xs text-[#7f8589]">Minutes an incident stays open after a reboot, OOM kill, container exit, removal or image change</span></span>
           <ThresholdInput label="Event incident window in minutes" value={values?.event_window_minutes} step={1} onChange={set('event_window_minutes')} disabled={loading} />
         </label>
+        <label className="flex flex-col gap-3 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:py-2.5">
+          <span><span className="text-[#bcbcbc]">Slow Docker</span><span className="block text-xs text-[#7f8589]">Milliseconds to list containers before Docker counts as slow (sustained)</span></span>
+          <ThresholdInput label="Slow Docker threshold in milliseconds" value={values?.docker_slow_ms} step={100} onChange={set('docker_slow_ms')} disabled={loading} />
+        </label>
+        <div className="flex flex-col gap-3 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:py-2.5">
+          <span className="shrink-0"><span className="text-[#bcbcbc]">Possible memory leak</span><span className="block text-xs text-[#7f8589]">Warning when a container's memory climbs steadily</span></span>
+          <span className="flex flex-wrap items-center gap-2 text-xs text-[#9aa0a6]">
+            <ThresholdInput label="Leak window in hours" value={values?.leak_window_hours} step={1} onChange={set('leak_window_hours')} disabled={loading} />h, at least
+            <ThresholdInput label="Leak minimum MB per hour" value={values?.leak_min_mb_per_hour} step={1} onChange={set('leak_min_mb_per_hour')} disabled={loading} />MB/h and
+            <ThresholdInput label="Leak minimum growth percent" value={values?.leak_min_growth_pct} step={1} onChange={set('leak_min_growth_pct')} disabled={loading} />%
+          </span>
+        </div>
         <div className="rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-3 text-sm">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span><span className="text-[#bcbcbc]">Disk usage per mount</span><span className="block text-xs text-[#7f8589]">Replaces the default disk thresholds for that mount, on every server</span></span>

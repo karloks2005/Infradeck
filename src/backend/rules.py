@@ -15,6 +15,7 @@ from .models import ContainerMetric, HostMetric, MountMetric, SystemEvent
 
 HOST_RULE_PREFIX = "host:"
 SYSTEM_RULE_PREFIX = "system:"
+TREND_RULE_PREFIX = "trend:"
 
 DEFAULT_THRESHOLDS: dict[str, float | int] = {
     "disk_warning_pct": 85, "disk_critical_pct": 95,
@@ -25,8 +26,12 @@ DEFAULT_THRESHOLDS: dict[str, float | int] = {
     # How many check-ins in a row a host metric must breach before an alert opens.
     "sustained_checks": 3,
     "restart_loop_count": 3, "restart_loop_window_minutes": 30,
-    # How long a reboot or OOM kill keeps its alert open after it happened.
+    # How long a reboot, OOM kill, container exit, removal or image change keeps its incident open after it happened.
     "event_window_minutes": 60,
+    # Listing containers slower than this (sustained) means the Docker daemon is struggling.
+    "docker_slow_ms": 2000,
+    # A container whose memory climbs steadily is flagged as a possible leak; see memory_trend_rules.
+    "leak_window_hours": 12, "leak_min_mb_per_hour": 10, "leak_min_growth_pct": 20,
 }
 
 _LIMITS: dict[str, tuple[float, float]] = {
@@ -35,8 +40,9 @@ _LIMITS: dict[str, tuple[float, float]] = {
     "sustained_checks": (1, 20),
     "restart_loop_count": (1, 100), "restart_loop_window_minutes": (5, 1440),
     "event_window_minutes": (5, 1440),
+    "docker_slow_ms": (100, 60000), "leak_window_hours": (6, 72), "leak_min_mb_per_hour": (1, 10000),
 }
-_INTEGER_KEYS = {"sustained_checks", "restart_loop_count", "restart_loop_window_minutes", "event_window_minutes"}
+_INTEGER_KEYS = {"sustained_checks", "restart_loop_count", "restart_loop_window_minutes", "event_window_minutes", "docker_slow_ms", "leak_window_hours"}
 
 
 def validate_thresholds(values: dict, current: dict) -> dict:
@@ -235,7 +241,16 @@ def validate_helper_events(raw, now: datetime) -> list[tuple[str, datetime, str,
     return events
 
 
-def system_rules(db, server, thresholds: dict, now: datetime) -> dict[str, tuple[str, str, str]]:
+DOCKER_REASONS = {
+    "timeout": "the Docker API did not answer in time",
+    "refused": "the connection to the Docker API was refused",
+    "missing": "the Docker API socket does not exist",
+    "denied": "access to the Docker API was denied",
+    "error": "the Docker API returned an error",
+}
+
+
+def system_rules(db, server, thresholds: dict, now: datetime, active_keys: frozenset | set = frozenset()) -> dict[str, tuple[str, str, str]]:
     """Evaluate the system-state rules (reboots, OOM kills, kernel faults, clock sync, pending reboot)."""
     sustained = thresholds["sustained_checks"]
     samples = db.query(HostMetric).filter(HostMetric.server_id == server.id).order_by(HostMetric.time.desc(), HostMetric.id.desc()).limit(sustained).all()
@@ -264,9 +279,74 @@ def system_rules(db, server, thresholds: dict, now: datetime) -> dict[str, tuple
         firing[f"{SYSTEM_RULE_PREFIX}kernel"] = (WARNING, f"Kernel on {host} reported faults", f"The kernel has flagged: {', '.join(faults)}. Check dmesg on the host for details; the flag clears after a reboot.")
     if len(samples) >= sustained and all(sample.ntp_synced is False for sample in samples):
         firing[f"{SYSTEM_RULE_PREFIX}ntp"] = (WARNING, f"Clock on {host} is not synchronized", "The system clock is not synced to a time source. Drifting clocks break TLS, logs and scheduled jobs. Check that chrony, systemd-timesyncd or ntpd is running.")
+    if len(samples) >= sustained and all(sample.docker_status == "unreachable" for sample in samples):
+        key = f"{SYSTEM_RULE_PREFIX}docker_unreachable"
+        # A host that never had Docker working (or has none) isn't an incident; one that did and lost it is.
+        # An already-open alert stays open even after the samples that proved it worked have been purged.
+        if key in active_keys or db.query(HostMetric.id).filter(HostMetric.server_id == server.id, HostMetric.docker_status == "ok").first():
+            firing[key] = (CRITICAL, f"Docker is unreachable on {host}", f"Container data has stopped updating because {DOCKER_REASONS.get(latest.docker_reason, DOCKER_REASONS['error'])}. Check that the Docker daemon (and the docker-proxy container) is running.")
+    elif len(samples) >= sustained and all(sample.docker_status == "ok" and sample.docker_latency_ms is not None and sample.docker_latency_ms > thresholds["docker_slow_ms"] for sample in samples):
+        firing[f"{SYSTEM_RULE_PREFIX}docker_slow"] = (WARNING, f"Docker is responding slowly on {host}", f"Listing containers took {latest.docker_latency_ms} ms (limit {thresholds['docker_slow_ms']} ms) for several check-ins in a row. The daemon may be overloaded or the host starved of resources.")
     if latest.reboot_required:
         firing[f"{SYSTEM_RULE_PREFIX}reboot_required"] = (INFO, f"{host} needs a reboot", "Installed updates (often a new kernel) only take effect after a restart.")
     return firing
+
+
+CONTAINER_EVENT_KINDS = ("container_added", "container_removed", "image_changed", "container_notice")
+MAX_CONTAINER_EVENTS_PER_CHECKIN = 10
+MAX_CONTAINER_EVENTS_PER_HOUR = 40
+# What a stopped container's exit status usually means; 137 and 143 are what `docker stop` / `docker kill` produce.
+EXIT_HINTS = {1: "general error", 2: "misuse of a shell command", 126: "command not executable", 127: "command not found",
+              134: "aborted (SIGABRT)", 137: "killed (SIGKILL)", 139: "segmentation fault", 143: "terminated (SIGTERM)"}
+STOP_SIGNAL_CODES = {137, 143}
+
+
+def _short_image(image_id: str) -> str:
+    return image_id.removeprefix("sha256:")[:12]
+
+
+def detect_container_events(previous: list, containers: list[dict]) -> list[tuple[str, str, str]]:
+    """(kind, detail, container name) for what changed since the previous check-in.
+
+    Containers are matched by name, because Compose recreates them with new IDs. Nothing is reported on
+    the first check-in or when either list is empty: an empty list means Docker was unreachable, and
+    treating that as "everything vanished" would be a false alarm.
+    """
+    if not previous or not containers:
+        return []
+    before = {container.name: container for container in previous}
+    after = {container["name"]: container for container in containers}
+    events: list[tuple[str, str, str]] = []
+    for name in sorted(after.keys() - before.keys()):
+        image = (after[name].get("image") or "")[:60]
+        events.append(("container_added", f"Container {name} appeared" + (f" ({image})" if image else ""), name))
+    for name in sorted(before.keys() - after.keys()):
+        events.append(("container_removed", f"Container {name} is no longer present", name))
+    for name in sorted(after.keys() & before.keys()):
+        old, new = before[name].image_id, after[name].get("image_id")
+        if old and new and old != new:
+            events.append(("image_changed", f"Container {name} now runs a different image build ({_short_image(old)} to {_short_image(new)})", name))
+    return events
+
+
+def exit_rule(container: dict, thresholds: dict, now: datetime) -> tuple[str, str, str] | None:
+    """Classify a container that has stopped. Unknown values (old collectors, no timestamp) never alert."""
+    code, finished = container.get("exit_code"), container.get("finished_at")
+    if container.get("status") not in ("exited", "dead") or code is None or finished is None:
+        return None
+    oom = container.get("oom_killed") is True
+    if (code == 0 and not oom) or now - finished > timedelta(minutes=thresholds["event_window_minutes"]):
+        return None
+    name = container["name"]
+    hint = EXIT_HINTS.get(code)
+    detail = f"exit code {code}" + (f" ({hint})" if hint else "")
+    if oom:
+        return (CRITICAL, f"Container {name} was killed for running out of memory",
+                f"{name} stopped ({detail}) after the kernel killed it for exceeding its memory. Raise its memory limit or look for a leak.")
+    if code in STOP_SIGNAL_CODES:
+        return (INFO, f"Container {name} was stopped by a signal",
+                f"{name} ended with {detail}, which is what `docker stop` or `docker kill` produce, so this is usually deliberate. If it wasn't, check what stopped it.")
+    return (WARNING, f"Container {name} exited with an error", f"{name} stopped with {detail}. Check its logs for the reason.")
 
 
 def container_rules(db, server_id: int, containers: list[dict], thresholds: dict, now: datetime) -> dict[str, tuple[str, str, str]]:
@@ -286,6 +366,8 @@ def container_rules(db, server_id: int, containers: list[dict], thresholds: dict
     for container in containers:
         # Compose recreates containers with new IDs but the same name, so key alerts by name.
         name = container.get("name") or container["container_id"]
+        if exit_alert := exit_rule({**container, "name": name}, thresholds, now):
+            firing[f"{CONTAINER_RULE_PREFIX}{name}:exit"] = exit_alert
         restarts = int(container.get("restart_count") or 0) - earliest.get(container["container_id"], int(container.get("restart_count") or 0))
         if restarts >= thresholds["restart_loop_count"]:
             firing[f"{CONTAINER_RULE_PREFIX}{name}:restart_loop"] = (
@@ -297,4 +379,91 @@ def container_rules(db, server_id: int, containers: list[dict], thresholds: dict
                 CRITICAL, f"Container {name} is unhealthy",
                 f"The Docker HEALTHCHECK for {name} is failing. Inspect it with: docker inspect --format '{{{{json .State.Health}}}}' {name}",
             )
+    # Removals and image changes are noticed by comparing check-ins (see detect_container_events); the incident
+    # stays open for the event window and clears on its own.
+    present = {container.get("name") for container in containers}
+    since = now - timedelta(minutes=thresholds["event_window_minutes"])
+    for event in db.query(SystemEvent).filter(SystemEvent.server_id == server_id, SystemEvent.kind.in_(("container_removed", "image_changed")), SystemEvent.time >= since).order_by(SystemEvent.time.desc()):
+        name = event.event_key
+        if not name:
+            continue
+        if event.kind == "container_removed" and name not in present:
+            firing[f"{CONTAINER_RULE_PREFIX}{name}:removed"] = (INFO, f"Container {name} is no longer present", f"{name} disappeared from this server. If you removed it on purpose this clears by itself.")
+        elif event.kind == "image_changed" and name in present:
+            firing[f"{CONTAINER_RULE_PREFIX}{name}:image"] = (INFO, f"Container {name} is running a different image", f"{event.detail}. Expected after an update or rebuild; investigate if you didn't make one.")
+    return firing
+
+
+MAX_TREND_CONTAINERS = 100
+MAX_TREND_ROWS = 300_000
+MIN_SAMPLES_PER_BUCKET = 5
+MIN_TREND_FIT = 0.9
+
+
+def _linear_fit(points: list[tuple[float, float]]) -> tuple[float, float, float] | None:
+    """Least-squares (slope, intercept, R squared) for (x, y) points, or None if they don't define a line."""
+    n = len(points)
+    mean_x, mean_y = sum(x for x, _ in points) / n, sum(y for _, y in points) / n
+    spread = sum((x - mean_x) ** 2 for x, _ in points)
+    if not spread:
+        return None
+    slope = sum((x - mean_x) * (y - mean_y) for x, y in points) / spread
+    intercept = mean_y - slope * mean_x
+    total = sum((y - mean_y) ** 2 for _, y in points)
+    residual = sum((y - (intercept + slope * x)) ** 2 for x, y in points)
+    return slope, intercept, (1 - residual / total) if total else 0.0
+
+
+def memory_trend_rules(db, server_id: int, thresholds: dict, now: datetime) -> dict[str, tuple[str, str, str]]:
+    """Flag running containers whose memory climbs steadily as a possible leak.
+
+    Hourly averages over the window must be nearly complete, rise at least ``leak_min_mb_per_hour`` and
+    ``leak_min_growth_pct`` along a straight line (R squared at least 0.9), and the container must not
+    have restarted or been recreated in the window, since either resets its memory. Work is bounded:
+    at most 100 containers and 300,000 samples per server.
+    """
+    window = thresholds["leak_window_hours"]
+    since = now - timedelta(hours=window)
+    host_time = db.query(func.max(HostMetric.time)).filter(HostMetric.server_id == server_id).scalar()
+    if host_time is None:
+        return {}
+    current = {
+        row.name: row for row in db.query(ContainerMetric)
+        .filter(ContainerMetric.server_id == server_id, ContainerMetric.time == host_time, ContainerMetric.status == "running")
+        .order_by(ContainerMetric.name).limit(MAX_TREND_CONTAINERS)
+    }
+    if not current:
+        return {}
+    samples: dict[str, list] = {}
+    for name, time, used, restarts, container_id in (
+        db.query(ContainerMetric.name, ContainerMetric.time, ContainerMetric.memory_used_mb, ContainerMetric.restart_count, ContainerMetric.container_id)
+        .filter(ContainerMetric.server_id == server_id, ContainerMetric.time >= since, ContainerMetric.name.in_(list(current)), ContainerMetric.memory_used_mb.isnot(None))
+        .order_by(ContainerMetric.time).limit(MAX_TREND_ROWS)
+    ):
+        samples.setdefault(name, []).append((time if time.tzinfo else time.replace(tzinfo=timezone.utc), used, restarts, container_id))
+
+    firing: dict[str, tuple[str, str, str]] = {}
+    for name, rows in samples.items():
+        if len({row[2] for row in rows}) > 1 or len({row[3] for row in rows}) > 1:
+            continue  # restarted or recreated: memory was reset, so the trend means nothing
+        buckets: dict[int, list[float]] = {}
+        for time, used, _restarts, _id in rows:
+            buckets.setdefault(int((time - since).total_seconds() // 3600), []).append(used)
+        points = [(float(bucket), sum(values) / len(values)) for bucket, values in sorted(buckets.items()) if len(values) >= MIN_SAMPLES_PER_BUCKET]
+        if len(points) < max(4, round(window * 0.75)):
+            continue
+        fit = _linear_fit(points)
+        if not fit:
+            continue
+        slope, intercept, r_squared = fit
+        start, end = intercept + slope * points[0][0], intercept + slope * points[-1][0]
+        growth = (end - start) / max(start, 1.0) * 100
+        if slope < thresholds["leak_min_mb_per_hour"] or growth < thresholds["leak_min_growth_pct"] or r_squared < MIN_TREND_FIT:
+            continue
+        limit = current[name].memory_limit_mb
+        eta = f" At this rate it reaches its {limit:.0f} MB limit in about {(limit - end) / slope:.0f} hours." if limit and limit > end else ""
+        firing[f"{TREND_RULE_PREFIX}{name}:memory"] = (
+            WARNING, f"Container {name} may have a memory leak",
+            f"Memory use rose steadily by about {slope:.1f} MB per hour over the last {window} hours ({start:.0f} MB to {end:.0f} MB).{eta} Caches and warm-up can look like this too, so check whether it keeps growing.",
+        )
     return firing

@@ -56,9 +56,10 @@ def project_inspect(data: Any) -> dict[str, Any]:
     network = data.get("NetworkSettings") if isinstance(data.get("NetworkSettings"), dict) else {}
     config = data.get("Config") if isinstance(data.get("Config"), dict) else {}
     return {
-        **_pick(data, ("Id", "Name", "RestartCount")),
+        # Image is the ID of the image the container runs. State.Error is free text, so it stays out.
+        **_pick(data, ("Id", "Name", "RestartCount", "Image")),
         "Config": _pick(config, ("Image",)),
-        "State": {**_pick(state, ("Status", "StartedAt")), "Health": _pick(health, ("Status",))},
+        "State": {**_pick(state, ("Status", "StartedAt", "ExitCode", "OOMKilled", "FinishedAt")), "Health": _pick(health, ("Status",))},
         "NetworkSettings": _pick(network, ("Ports",)),
     }
 

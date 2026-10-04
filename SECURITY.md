@@ -55,8 +55,11 @@ compose files the collector **does not mount the socket**. A separate `docker-pr
   `GET /containers/<id>/stats?stream=false`. Everything else (other endpoints, other methods, extra
   query parameters, encoded or padded paths) gets a 403 and is logged. Matching is literal against the
   whole request target, with no decoding.
-- It cuts the answers down to the fields the collector uses. Container inspect output includes each
-  container's environment variables, which are often secrets; they never leave the proxy.
+- It cuts the answers down to a fixed list of fields. For container inspect that is the ID, name,
+  restart count, image name and ID, state, health, exit code, out-of-memory flag, start and finish
+  times, and published ports. Container inspect output includes each container's environment
+  variables (often secrets), labels, mounts and Docker's free-text error message; none of them leave
+  the proxy. Adding a field means changing the proxy and its tests on purpose.
 - It runs with all capabilities dropped, a read-only filesystem and `no-new-privileges`, with no
   network at all. It listens on a Unix socket (mode 0660) in a volume that only the collector shares.
 - It is one standard-library file, `src/agent/docker_proxy.py`, built from this repository. Review it
@@ -146,6 +149,22 @@ What this still depends on:
 - Anyone on your VPN can reach the gate. With a valid join token they can request to join, and an
   admin still has to approve them; ingest additionally needs a server's token.
 - Rotating a collector token means re-adding that server.
+
+## Container data is untrusted
+
+A compromised collector controls everything it reports about containers, so the backend never trusts
+it: each record is reduced to known fields of the right type (text made printable and capped, numbers
+range-checked, timestamps parsed strictly, image IDs matched against `sha256:` plus 64 hex characters),
+and anything unexpected becomes "unknown", which never raises an incident. At most 500 containers are
+accepted per check-in, names are capped at 128 characters so they can't break incident keys, and
+container changes (appeared, removed, image changed) are capped per check-in and per hour with a single
+notice, so churn can't flood the database. The hourly memory-trend analysis is bounded too (100
+containers and 300,000 samples per server). Container changes are shown in their own list so a burst of
+them can't push reboots or OOM kills out of the System row.
+
+What the collector deliberately does not ask Docker for: `/info`, `/events`, logs, images, exec or any
+write. Checking registries for newer images would need outbound network access and is tracked
+separately (#38) as an opt-in, isolated component rather than part of the collector or proxy.
 
 ## Other exposure to be aware of
 
