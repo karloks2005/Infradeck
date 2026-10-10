@@ -181,7 +181,7 @@ the public side at all.
 What this still depends on:
 
 - The backend trusts the `X-Collector-Via` header nginx sets. That is safe only while nothing
-  untrusted can reach the backend directly (port 8000 is not published in the server stack; don't
+  untrusted can reach the backend directly (the backend's port is not published in the server stack; don't
   add other containers to its network).
 - Anyone on your VPN can reach the gate. With a valid join token they can request to join, and an
   admin still has to approve them; ingest additionally needs a server's token.

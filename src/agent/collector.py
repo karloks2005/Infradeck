@@ -930,7 +930,7 @@ def resolve_credentials(api_url: str) -> tuple[int, str]:
 
 
 def run_collector() -> None:
-    api_url = os.getenv("HOMELAB_API_URL", "http://localhost:8000")
+    api_url = os.getenv("HOMELAB_API_URL", "http://localhost:8060")
     server_id, token = resolve_credentials(api_url)
     interval = max(15, int(os.getenv("HOMELAB_CHECK_INTERVAL_SECONDS", "60")))
     print(f"Collector started for server {server_id}; API={api_url}", flush=True)

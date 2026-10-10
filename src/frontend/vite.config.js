@@ -7,7 +7,8 @@ export default defineConfig({
   // Mirror the production nginx route so `npm run dev` also talks to /api.
   server: {
     proxy: {
-      '/api': { target: 'http://localhost:8000', rewrite: (path) => path.replace(/^\/api/, '') },
+      // 8060 is where the development stack publishes the backend (BACKEND_PORT in .env).
+      '/api': { target: process.env.BACKEND_URL || 'http://localhost:8060', rewrite: (path) => path.replace(/^\/api/, '') },
     },
   },
 })

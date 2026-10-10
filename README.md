@@ -95,8 +95,8 @@ flowchart LR
   (register, poll, enroll, ingest). It publishes one port on your **VPN address**
   and is not attached to Traefik's network.
 - The **backend** (FastAPI) stores metrics in PostgreSQL and sessions and rate
-  limits in Redis. Its own port is published on `127.0.0.1:8000` only in the
-  development stack.
+  limits in Redis. Its own port is published on `127.0.0.1:8060` only in the
+  development stack (change it with `BACKEND_PORT`).
 - **Collectors** only make outgoing requests. Monitored machines need no open
   ports, only a route to the collector gate.
 - The **Docker proxy** is the only container that mounts `/var/run/docker.sock`.
@@ -662,6 +662,7 @@ policy on, the account is asked to set up two-factor again at its next sign-in.
 | `SECRETS_KEY` | empty | Key that encrypts two-factor secrets. Required for two-factor sign-in and for the "require two-factor for admins" policy to be enforced. Generate with `python -m src.backend.secrets_box`; comma-separated keys allow rotation. |
 | `ADMIN_BOOTSTRAP_TOKEN` | generated at start | Setup token for the first account. Leave empty to have one generated and printed in the backend log until the first account exists. |
 | `FRONTEND_BIND` | `0.0.0.0` (dev), `127.0.0.1` (server file) | Interface for the dashboard's plain-HTTP port. |
+| `BACKEND_PORT` | `8060` | Development stack only: the host port (on `127.0.0.1`) where the backend is published for debugging. The server stack publishes no backend port. |
 | `FRONTEND_PORT` | `5173` | Dashboard port on the host. |
 | `DASHBOARD_DOMAIN` | *(required on a server)* | Domain of the dashboard, without `https://` (server file). |
 | `TRAEFIK_ENTRYPOINT` / `TRAEFIK_CERT_RESOLVER` / `TRAEFIK_NETWORK` / `TRAEFIK_ROUTER` | `websecure` / `letsencrypt` / `traefik_default` / `homelab` | Your Traefik names (server file). |
@@ -684,7 +685,7 @@ policy on, the account is asked to set up two-factor again at its next sign-in.
 
 | Variable | Default | Description |
 |---|---|---|
-| `HOMELAB_API_URL` | `http://localhost:8000` | Dashboard API address, e.g. `https://dashboard.example.com/api`. |
+| `HOMELAB_API_URL` | `http://localhost:8060` | Dashboard API address, e.g. `https://dashboard.example.com/api`. |
 | `HOMELAB_JOIN_TOKEN` | empty | Single-use token from **Connect a server**; required over the VPN listener. |
 | `HOMELAB_ENROLL_KEY` | empty | Join immediately instead of waiting for approval. |
 | `HOMELAB_SERVER_NAME` | host's `/etc/hostname` | Name shown on the dashboard. |
@@ -780,12 +781,12 @@ python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 docker run -d --name homelab-dev-redis -p 6379:6379 redis:7-alpine   # if Redis isn't running
 DATABASE_URL=sqlite:///./dev.db REDIS_URL=redis://localhost:6379/0 \
-  uvicorn src.backend.main:app --reload --host 0.0.0.0 --port 8000
+  uvicorn src.backend.main:app --reload --host 0.0.0.0 --port 8060
 ```
 
 ### Frontend dev server
 
-Node 20 (`.nvmrc`). The Vite dev server proxies `/api` to `localhost:8000`,
+Node 20 (`.nvmrc`). The Vite dev server proxies `/api` to `localhost:8060` (set `BACKEND_URL` to point it elsewhere),
 matching the production nginx setup.
 
 ```bash
