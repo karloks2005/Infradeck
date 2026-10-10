@@ -188,7 +188,12 @@ export function Heatmap({ title, subtitle, grid, unit = '%', color = '#7dd3fc', 
             <div className="mt-1 flex gap-1 pl-9 text-[10px] text-[#7f8589]">{[0, 6, 12, 18, 23].map((hour) => <span key={hour} style={{ position: 'relative', left: `${(hour / 24) * 100 - (hour === 23 ? 3 : 0)}%`, width: 0 }}>{hour}h</span>)}</div>
           </div>
         </div>
-        <div className="mt-2 text-xs text-[#9aa0a6]" role="status">{hover ? `${DAY_NAMES[hover.day]} ${hover.hour}:00 · ${hover.value === null ? 'no data' : `${hover.value.toFixed(1)}${unit} on average`}` : `Darker is busier, up to ${top.toFixed(0)}${unit}.`}</div>
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-[#9aa0a6]">
+          <span role="status">{hover ? `${DAY_NAMES[hover.day]} ${hover.hour}:00 · ${hover.value === null ? 'no data' : `${hover.value.toFixed(1)}${unit} on average`}` : `Brighter is busier, up to ${top.toFixed(0)}${unit}.`}</span>
+          <span aria-hidden="true" className="flex items-center gap-1.5">less
+            {[0, 0.25, 0.5, 0.75, 1].map((step) => <span key={step} className="h-3 w-5 rounded-[3px]" style={{ background: color, opacity: 0.15 + 0.85 * step }} />)}
+            more</span>
+        </div>
       </div>
     </ChartFrame>
   )
