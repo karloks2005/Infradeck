@@ -23,6 +23,11 @@ for what every component can touch and the limits of each protection.
   (root, data disks, NFS/SMB shares, ZFS pools).
 - **This machine at a glance**: live CPU, memory and disk charts for the machine
   running the dashboard, with the last 30 minutes of history.
+- **Statistics for any range**: a page with charts from the last hour to everything ever
+  recorded, per server (resources, distributions, busy hours, storage with a
+  "full in about N days" estimate, reliability), per container (cards and details) and for the
+  whole fleet (incidents over time, containers by state, availability, rankings). Long
+  ranges stay cheap because history is summarised into hourly, daily, weekly and monthly rows.
 - **Container details**: containers sit in a collapsible list per server, sorted by
   name, with problems (unhealthy, restarting, stopped) shown even when it's closed.
   Open a container to see CPU, memory used/limit, processes, network and disk I/O,
@@ -453,7 +458,21 @@ as a table.
 
 Short ranges come from the stored check-ins, longer ones from the summaries described under
 [Database schema](#database-schema), so a year of history costs about as much to load as an
-hour. CSV/JSON export of the charts is planned (Milestone 8 on GitHub).
+hour.
+
+What to know about the statistics:
+
+- **Time zones.** Charts for up to a day or two use your clock; day, week (Monday to Sunday) and
+  month points are aligned to UTC and labelled in UTC, because that is how they are summarised.
+- **Some figures are approximate**: distributions and the days-until-full estimate are worked out
+  in the browser from the points you are looking at, availability assumes each server's current
+  check interval, and the top containers show values from the latest check-in, not an average
+  over the range. The page says so where it matters.
+- **Pointer-only details.** Hover and touch tooltips don't work from the keyboard yet; every chart
+  has **View as table** as an alternative.
+- **Not built yet** (tracked in Milestone 8 on GitHub): CSV and JSON export, reboots per month, a
+  state timeline and restarts per day for containers, rankings over the chosen range, network
+  traffic charts, event markers on charts, and retention settings for the summaries.
 
 ## Alerts and incidents
 
@@ -584,7 +603,9 @@ standard-library Python.
   intervals, manage the enrollment key and open the **Admin** page.
 - **Admin** page settings that are connected today: alert thresholds (including
   per-mount disk thresholds), how long metrics are kept (default 30 days; older
-  host, container, disk and system-event samples are deleted hourly), and turning
+  check-in samples and system events are deleted hourly, but only after the check-ins have
+  been summarised; the summaries behind the Statistics page are not deleted yet, and a
+  retention setting for each level is planned), and turning
   chat with the assistant on or off. The other sections on the page show
   placeholder data and aren't saved yet.
 

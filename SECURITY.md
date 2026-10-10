@@ -228,6 +228,20 @@ The collector's network checks are passive or opt-in, and add no privileges:
 - **Visibility.** Like all monitoring data, the list of listening ports and firewall state is visible to
   every signed-in account. Keep registration closed on a public dashboard.
 
+## Statistics and history
+
+- **Who can see it.** Every signed-in account sees the same statistics as the dashboard, for every
+  server and container. As with the rest of the monitoring data, keep registration closed on a public
+  dashboard.
+- **Nothing new is collected.** The history is summarised from check-ins already stored (averages and
+  maximums per hour, day, week and month); deleting a server deletes its summaries too.
+- **Bounded requests.** The history and statistics endpoints take only a fixed list of ranges and a
+  whitelist of metric names, cap the number of points and rows they read, and cache fleet answers for a
+  minute under keys made only from validated values, so a request cannot make them do unbounded work or
+  fill the cache. Text from the server (container names, mount paths) is shown as text, never as HTML.
+- **Limits.** The summaries are not purged yet, so history grows slowly (about 2.5 MB per server with
+  8 containers at the planned retention); a retention setting for each level is planned.
+
 ## Other exposure to be aware of
 
 - The collector mounts the host filesystem read-only at `/hostfs` to read disk usage and a few
