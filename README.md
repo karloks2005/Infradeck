@@ -535,6 +535,10 @@ standard-library Python.
 - **Passwords must be at least 16 characters** (and at most 72 bytes). A few random
   words make a good passphrase. The rule applies to new accounts; existing
   accounts keep working with their current password.
+- **Account page** (sidebar → Account), for every user: change your password (needs
+  the current one; signs out your other devices), turn on **two-factor sign-in**,
+  and review or end your sessions (**Sign out everywhere else**). See
+  [Two-factor sign-in](#two-factor-sign-in).
 - Everyone signed in can see all servers, containers and incidents.
 - Only admins can add, approve, dismiss or delete servers, change check
   intervals, manage the enrollment key and open the **Admin** page.
@@ -543,6 +547,43 @@ standard-library Python.
   host, container, disk and system-event samples are deleted hourly), and turning
   chat with the assistant on or off. The other sections on the page show
   placeholder data and aren't saved yet.
+
+### Two-factor sign-in
+
+Two-factor uses a one-time code from any authenticator app (TOTP, the same standard
+as Google Authenticator, Aegis or a password manager).
+
+1. **Create a key once.** Secrets are stored encrypted, so the stack needs a key.
+   Generate one and put it in `.env` as `SECRETS_KEY` (see `example.env`):
+
+   ```bash
+   docker compose run --rm --no-deps backend python -m src.backend.secrets_box
+   ```
+
+   Back this key up with your other secrets. **If you lose it, authenticator codes
+   stop working** (recovery codes still do, and so does the reset command below).
+   To rotate it, put the new key first and keep the old one after a comma.
+2. **Turn it on** under Account → Two-factor sign-in. You get a setup key and an
+   `otpauth://` link to paste into your authenticator app (no QR code yet), confirm
+   with a code, and are shown **10 recovery codes once**. Each works one time.
+3. **Signing in** then asks for the code after the password. A recovery code can be
+   typed instead.
+
+**Admins must use it by default.** *Admin → Users → Require two-factor for admins* is
+**on**. An admin without two-factor can still sign in, but only to the Account page
+until they finish setting it up, so nobody is locked out. A member's two-factor is
+optional. The setting is only enforced when `SECRETS_KEY` is set; without it the
+backend prints a warning at start and the policy does nothing.
+
+**Locked out?** An admin who lost both the authenticator and the recovery codes can
+reset an account from the host:
+
+```bash
+docker compose exec backend python src/backend/reset_2fa.py someone@example.com
+```
+
+It turns two-factor off for that account and signs it out everywhere. With the
+policy on, the account is asked to set up two-factor again at its next sign-in.
 
 ## Configuration
 
@@ -557,6 +598,7 @@ standard-library Python.
 | `SESSION_COOKIE_SECURE` | `false` (dev), `true` (server file) | Send the login cookie over HTTPS only. |
 | `SESSION_TTL_SECONDS` | `86400` | Session lifetime. |
 | `ALLOW_REGISTRATION` | `true` (dev), `false` (server file) | Let anyone create an account. When `false`, only the first account can be created. |
+| `SECRETS_KEY` | empty | Key that encrypts two-factor secrets. Required for two-factor sign-in and for the "require two-factor for admins" policy to be enforced. Generate with `python -m src.backend.secrets_box`; comma-separated keys allow rotation. |
 | `ADMIN_BOOTSTRAP_TOKEN` | generated at start | Setup token for the first account. Leave empty to have one generated and printed in the backend log until the first account exists. |
 | `FRONTEND_BIND` | `0.0.0.0` (dev), `127.0.0.1` (server file) | Interface for the dashboard's plain-HTTP port. |
 | `FRONTEND_PORT` | `5173` | Dashboard port on the host. |
@@ -627,7 +669,9 @@ from the backend's response to each report.
   admin, then an admin's click. Re-pairing a machine that matches an existing
   server needs explicit confirmation.
 - **Fresh installs can't be claimed.** The first account needs a setup token.
-- **Accounts.** Passwords must be at least 16 characters. Every logged-in account
+- **Accounts.** Passwords must be at least 16 characters. Two-factor sign-in
+  (authenticator app plus single-use recovery codes) is available to everyone and
+  **required for admins by default**; secrets are encrypted with your `SECRETS_KEY`. Every logged-in account
   can see all monitoring data and use the assistant (your Gemini key) unless an
   admin turns chat off. Only admins can add, approve or remove servers. With
   `ALLOW_REGISTRATION=false` (the default in `docker-compose.server.yml`) only the
@@ -773,6 +817,11 @@ All paths are relative to `/api` when going through the frontend/nginx.
 |---|---|---|
 | `GET /health` | – | Database and Redis status. |
 | `POST /auth/register`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/me` | session cookie | Accounts and sessions. |
+| `POST /auth/login/2fa` | pending login token | Second step of sign-in: authenticator or recovery code. |
+| `GET /auth/2fa/status`, `POST /auth/2fa/setup`, `POST /auth/2fa/enable` | session (also the limited setup session) | Two-factor status, start and confirm setup. |
+| `POST /auth/2fa/disable`, `POST /auth/2fa/recovery-codes` | session + password + code | Turn two-factor off; replace the recovery codes. |
+| `POST /auth/password` | session + current password | Change password; signs out other sessions. |
+| `GET /auth/sessions`, `POST /auth/sessions/revoke-others`, `DELETE /auth/sessions/{id}` | session | List and end your own sessions. |
 | `GET /auth/config` | – | Whether registration is open and whether the first account still needs a setup token. |
 | `GET /monitoring/overview` | session | Servers (latest metrics, filesystems, containers from the latest check-in, open incident count), pending servers (admins), active incidents and disk thresholds. |
 | `GET /monitoring/servers/{id}/history` | session | CPU, memory and root disk samples (`?minutes=`, default 30, max 1440). |
@@ -784,7 +833,7 @@ All paths are relative to `/api` when going through the frontend/nginx.
 | `POST /monitoring/join-tokens` | admin | Create the single-use join token for **Connect a server** (shown once). |
 | `GET /monitoring/install-info` | admin | The collector address and images the panel uses. |
 | `GET` / `POST` / `DELETE /monitoring/enrollment-key` | admin | Show status / create or rotate / revoke the enrollment key. |
-| `GET` / `PUT /admin/settings` | admin | Metrics retention, chat on/off, alert thresholds and per-mount disk thresholds. |
+| `GET` / `PUT /admin/settings` | admin | Metrics retention, chat on/off, require two-factor for admins, alert thresholds and per-mount disk thresholds. |
 | `GET /agent/config` | session | Whether chat with the assistant is enabled. |
 | `POST /monitoring/collectors/register` | join token (rate limited) | Collector asks to join; returns a poll secret and pairing code. |
 | `POST /monitoring/collectors/register/poll` | poll secret | Collector checks approval; returns its token once approved. |

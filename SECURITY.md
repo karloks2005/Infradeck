@@ -100,6 +100,41 @@ stats) and nothing more through Docker.
   If something between the browser and nginx rewrites the `Host` header, add your dashboard's URL to
   `CORS_ORIGINS` (for example `https://dashboard.example.com`).
 
+## Two-factor sign-in and sessions
+
+- **TOTP and recovery codes.** Admins must use two-factor by default (*Admin → Users*). Codes are
+  standard 6-digit TOTP (RFC 6238) and accepted one 30-second period either side. A code can be used
+  once; replaying it, even inside its window, is refused. Ten recovery codes (80 bits each) are shown
+  once, stored only as SHA-256 hashes, and each works a single time.
+- **No session before the second step.** After a correct password the server returns only a short-lived
+  (5 minute) single-use token. A session and cookie exist only after a correct code. Wrong codes get one
+  generic answer and are counted per account (5 per 5 minutes, shared by every attempt, so starting the
+  password step again doesn't reset it) and per address.
+- **Secrets are encrypted.** The TOTP secret is stored encrypted (Fernet) with `SECRETS_KEY` from `.env`.
+  Without a valid key nothing is ever stored in plain text, two-factor can't be set up, and the
+  "require for admins" policy is *not enforced* (the backend prints a warning at start), so a missing
+  key can't lock anyone out. Losing the key makes authenticator codes unusable; recovery codes and the
+  reset command still work.
+- **Enrolment can't lock you out.** An admin without two-factor, while the policy is on, gets a limited
+  session that can reach only their profile, the two-factor setup and logout. Every other endpoint
+  refuses it by default.
+- **Sessions.** Session IDs are random and never shown to the browser's page; the Account page lists
+  sessions under separate public IDs. Changing the password or turning two-factor on or off signs out
+  the other sessions and issues a new session ID for the current one. A session ID isn't reused after a
+  privilege change.
+- **Reset.** `python src/backend/reset_2fa.py <email>`, run in the backend container, turns two-factor
+  off for an account and signs it out everywhere. It needs access to the host, which is the point.
+
+Known limits:
+
+- Anyone who knows an account's password can make five wrong code guesses per five minutes, which locks
+  that account's code step for the rest of the window (the same trade-off as the email lockout).
+- Sessions that existed before this feature was installed aren't in the per-user list; they expire at
+  the normal 24 hours (or on logout) and can't be ended from the Account page.
+- TOTP only. There are no passkeys or hardware keys yet, and the setup shows a key and link, not a QR code.
+- Recovery codes protect against a lost phone, not a lost `SECRETS_KEY` combined with a lost phone and
+  lost recovery codes; the host-side reset covers that.
+
 ## HTTP security headers
 
 The frontend's nginx sends these on every response: a Content-Security-Policy that allows only the

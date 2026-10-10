@@ -4,7 +4,7 @@ Vexion ships with an automated test suite. This page explains how to run it, wha
 covers (and what it doesn't), and what every single test is for, so you can decide
 whether a failure matters before you upgrade or change your setup.
 
-- **507 test cases** from 292 test functions (some functions run once per input).
+- **628 test cases** from 366 test functions (some functions run once per input).
 - **About 15 to 20 seconds** to run. No Docker, PostgreSQL, Redis, network or root access needed.
 - **Safe to run next to a live install.** The tests use a throwaway in-memory database
   and fakes; they never touch your running containers or your data. (Two collector
@@ -66,7 +66,7 @@ Each test builds just what it needs and checks one behaviour:
 
 - **A fresh in-memory SQLite database** per test (`DATABASE_URL=sqlite://`, set by the
   tests themselves). Your PostgreSQL is never used.
-- **A fake Redis.** The code is told Redis is "there", but nothing connects to one.
+- **A fake Redis** (`tests/fakes.py`). The code is told Redis is "there", but nothing connects to one.
 - **Faked system access.** Tests that read `/proc`, mounted filesystems, the Docker
   API, the kernel log or `wtmp` point the collector at temporary files or stubs, so
   results don't depend on the machine running them.
@@ -84,7 +84,9 @@ Because of this, the same tests pass on a laptop, a VPS or a Raspberry Pi.
 Being clear about the limits matters, especially for a security-focused project:
 
 - **The web interface** (React) has no automated tests. Build errors show up when you
-  run `docker compose up -d --build`; look at the dashboard after upgrading.
+  run `docker compose up -d --build`; look at the dashboard after upgrading. This
+  includes the Account page and the two-factor prompts: the endpoints behind them are
+  tested, the screens are not.
 - **Your deployment**: Compose files, Traefik labels, nginx configuration, your VPN,
   firewall rules and the collector gate are not exercised by the suite. They were
   checked by hand against a running stack when written, not by an automated test.
@@ -118,6 +120,7 @@ docker compose logs --tail 20 collector        # "Sent host metrics and N contai
 
 | File | Cases | Protects |
 |---|---|---|
+| [`test_account_security.py`](#test_account_securitypy) | 121 | Two-factor sign-in, recovery codes, encrypted secrets, sessions you can review and end, and password change. |
 | [`test_admin.py`](#test_adminpy) | 18 | Who may do what: admin-only actions, roles, retention cleanup, the chat on/off switch. |
 | [`test_agent_errors.py`](#test_agent_errorspy) | 2 | Helpful, non-leaking error messages from the AI assistant. |
 | [`test_agent_service.py`](#test_agent_servicepy) | 2 | The assistant can only run the fixed read-only checks. |
@@ -141,6 +144,88 @@ docker compose logs --tail 20 collector        # "Sent host metrics and N contai
 
 Each table row is one test function. Where a function is marked *(N inputs)* it runs
 once per input, which is why the totals above are larger than the number of rows.
+
+### test_account_security.py
+
+Two-factor sign-in, recovery codes, encrypted secrets, sessions and password change.
+If these fail, an account could be easier to take over, or an admin could be locked
+out of their own install.
+
+| Test | What it checks |
+|---|---|
+| `test_codes_match_the_rfc_6238_reference_vectors` *(6 inputs)* | The one-time code generator gives the exact answers published in the TOTP standard (RFC 6238), so it will match any authenticator app. |
+| `test_a_code_is_accepted_in_its_own_period_and_one_either_side_but_not_further` | A code works in its own 30-second period and one either side (clock drift), not further away. |
+| `test_a_code_cannot_be_used_twice_or_after_a_newer_one` | A code that was already used, or an older one, is refused. |
+| `test_malformed_codes_are_rejected` *(12 inputs)* | Empty, short, long, non-numeric, huge and non-string codes are refused without errors. |
+| `test_spaces_and_a_hyphen_in_a_typed_code_are_ignored` | `123 456` and `123-456` are accepted as `123456`. |
+| `test_new_secrets_are_random_and_authenticator_friendly` | Every secret is different and uses the base32 letters authenticator apps expect. |
+| `test_the_otpauth_link_names_the_account_and_issuer_safely` | The link you paste into an authenticator carries the account and "Vexion", with odd characters escaped. |
+| `test_recovery_codes_are_random_formatted_and_normalised` | Ten distinct recovery codes in `XXXX-XXXX-XXXX-XXXX` form; typing them in lower case or without hyphens still matches. |
+| `test_things_that_are_not_recovery_codes_are_refused` *(7 inputs)* | Wrong length, wrong characters and non-strings are not treated as recovery codes. |
+| `test_secrets_are_encrypted_and_round_trip` | A secret is encrypted with `SECRETS_KEY` and decrypts back; the stored text doesn't contain it. |
+| `test_without_a_key_nothing_can_be_stored` | With no `SECRETS_KEY`, nothing is stored (never in plain text). |
+| `test_an_invalid_key_is_refused_not_used` *(6 inputs)* | A malformed key is treated as no key at all. |
+| `test_a_wrong_key_or_tampered_value_cannot_be_decrypted` | Another key, or an edited stored value, fails to decrypt instead of returning garbage. |
+| `test_keys_can_be_rotated_by_listing_the_new_one_first` | Listing a new key first encrypts with it while values made with the old key still open. |
+| `test_session_ids_are_long_random_and_distinct` | Session IDs are long, random and never repeat. |
+| `test_a_session_is_indexed_under_its_user_and_shows_only_public_ids` | Each user's sessions are listed under opaque public IDs; the real session ID never appears. |
+| `test_expired_sessions_drop_out_of_the_list` | Sessions that expired no longer show up. |
+| `test_one_session_can_be_revoked_without_touching_the_others` | Ending one session leaves the user's others signed in. |
+| `test_a_user_cannot_revoke_or_see_someone_elses_session` | Another user's session can neither be seen nor ended. |
+| `test_malformed_public_ids_are_never_looked_up` *(8 inputs)* | Odd session identifiers are rejected before touching Redis. |
+| `test_all_other_sessions_can_be_revoked_keeping_the_current_one` | "Sign out everywhere else" keeps only the current session. |
+| `test_logging_out_removes_the_session_from_the_index` | Logging out also removes the session from the list. |
+| `test_logging_out_a_session_that_already_expired_is_still_fine` | Logging out with an expired session doesn't fail. |
+| `test_sessions_created_before_stages_existed_count_as_full` | Sessions from before this feature stay working as normal sessions. |
+| `test_limited_sessions_are_refused_unless_a_caller_opts_in` | A limited (set-up-only) session is refused by default; only the two-factor setup endpoints opt in. |
+| `test_every_route_that_needs_a_session_refuses_a_limited_one` | Sweeps every route that needs a sign-in and checks each refuses a limited session, except the short allowed list. |
+| `test_a_limited_session_is_refused_everywhere_except_the_two_factor_setup` | A limited session can reach only its own profile, two-factor setup and logout. |
+| `test_a_limited_session_cannot_disable_regenerate_or_change_the_password` | A limited session can't turn off two-factor, make new recovery codes or change the password. |
+| `test_signing_in_with_two_factor_needs_both_steps_and_creates_no_session_before_the_second` | After the password alone there is no cookie and no session; only a correct code creates one. |
+| `test_a_wrong_or_malformed_code_is_refused_with_one_generic_message` | Every kind of wrong code gets the same "Invalid code." answer. |
+| `test_a_wrong_code_during_sign_in_is_audited_without_the_code` | Failed codes are logged without recording what was typed. |
+| `test_a_pending_login_is_destroyed_after_five_wrong_codes` | Five wrong codes end that sign-in attempt; the right code no longer helps. |
+| `test_a_successful_second_step_resets_the_failure_count` | A good code clears the attempt count. |
+| `test_a_pending_login_token_is_single_use_and_unknown_tokens_are_refused` | A login token works once; invented ones are refused. |
+| `test_an_expired_pending_login_cannot_be_completed` | If the code isn't entered within five minutes, the password step has to be repeated. |
+| `test_guessing_across_many_pending_logins_locks_the_account_for_a_while` | Restarting the password step doesn't reset the guess count; five wrong codes in five minutes lock the account's code step. |
+| `test_the_per_address_limit_on_code_attempts_applies_too` | One IP address can't guess codes for many accounts. |
+| `test_hostile_second_step_bodies_are_rejected_before_any_work` *(7 inputs)* | Missing, oversized or wrong-typed fields are rejected right away. |
+| `test_unknown_emails_cost_the_same_work_as_wrong_passwords` | Sign-in does the same password work for unknown emails, so timing doesn't reveal which accounts exist. |
+| `test_a_member_signs_in_with_just_a_password` | Members without two-factor sign in as before. |
+| `test_the_code_from_the_enrollment_step_cannot_be_reused_to_sign_in` | The code used to switch two-factor on can't be used again straight away to sign in. |
+| `test_a_wrong_code_does_not_enable_two_factor` | A wrong confirmation code leaves two-factor off. |
+| `test_enabling_without_starting_setup_is_refused` | Confirming a code without first requesting a secret is refused. |
+| `test_setting_up_again_before_confirming_replaces_the_pending_secret` | Starting setup twice gives a new secret; the abandoned one is useless. |
+| `test_setup_is_refused_while_two_factor_is_already_on` | You can't replace a working secret without turning two-factor off first. |
+| `test_the_secret_is_stored_encrypted_and_recovery_codes_only_as_hashes` | In the database the secret is encrypted and recovery codes are hashes; neither is readable. |
+| `test_secrets_never_appear_in_api_responses` | After setup is done, no response includes the secret or the recovery codes again. |
+| `test_recovery_codes_work_once_and_the_count_drops` | A recovery code signs you in once; the remaining count goes down. |
+| `test_regenerating_recovery_codes_replaces_the_old_ones` | Making new codes (needs password and a code) invalidates all old ones. |
+| `test_turning_two_factor_off_needs_the_password_and_a_code_and_ends_other_sessions` | Turning two-factor off needs the password plus a code, and signs out other sessions. |
+| `test_if_the_key_is_lost_totp_codes_stop_working_but_recovery_codes_still_do` | If `SECRETS_KEY` is lost, authenticator codes fail but recovery codes still get you in. |
+| `test_when_no_key_is_configured_two_factor_is_not_enforced_and_cannot_be_set_up` | Without a key the "require 2FA" policy isn't enforced (no lock-out) and setup says why it can't proceed. |
+| `test_the_policy_can_be_turned_off_and_defaults_to_on` | "Require two-factor for admins" is on by default and an admin can switch it off. |
+| `test_admins_can_change_the_policy_and_it_is_audited` | Policy changes are admin-only and recorded in the log. |
+| `test_the_policy_only_applies_to_administrators` | Members are never forced to enrol. |
+| `test_an_admin_without_two_factor_gets_a_limited_session_when_it_is_required` | An admin who hasn't enrolled can sign in, but only to set up two-factor. |
+| `test_enrolling_upgrades_the_session_and_rotates_its_id` | Finishing enrolment turns the limited session into a full one with a new ID. |
+| `test_the_first_account_on_a_fresh_install_must_enrol_when_the_policy_is_on` | The first admin lands on the two-factor setup straight after registering. |
+| `test_an_admin_cannot_turn_two_factor_off_while_the_policy_requires_it` | While the policy is on, an admin can't disable their own two-factor. |
+| `test_a_members_two_factor_is_optional_but_available` | A member can turn two-factor on and off. |
+| `test_a_reset_admin_is_asked_to_enrol_again_when_it_is_required` | After a command-line reset, the admin signs in with the password and is asked to enrol again. |
+| `test_resetting_two_factor_from_the_command_line_helper` | The reset command clears the secret and recovery codes and signs the account out everywhere. |
+| `test_the_reset_script_asks_for_exactly_one_email` | The reset command refuses missing or extra arguments. |
+| `test_bad_password_changes_are_refused_and_change_nothing` *(5 inputs)* | Wrong current password, short, over-long or unchanged new passwords are refused and nothing changes. |
+| `test_changing_the_password_signs_out_other_sessions_and_rotates_this_one` | After a password change, other devices are signed out and this one gets a new session ID. |
+| `test_password_change_attempts_are_rate_limited` | Repeated password-change attempts are rate limited. |
+| `test_the_account_page_lists_sessions_and_can_end_them` | The sessions list shows device, address and time, and ending one works. |
+| `test_sign_out_everywhere_else_keeps_only_this_session` | The endpoint behind "Sign out everywhere else" keeps the current session only. |
+| `test_ending_the_current_session_through_the_list_clears_the_cookie` | Ending your own session from the list signs you out and clears the cookie. |
+| `test_logout_ends_the_session_everywhere_and_the_cookie_is_cleared` | Logging out deletes the session on the server as well as the cookie. |
+| `test_malformed_session_ids_in_the_url_are_not_found` *(4 inputs)* | Odd identifiers in the session URL get "not found". |
+| `test_one_user_cannot_end_another_users_session_by_guessing_its_id` | Even a valid public ID can only be ended by the account that owns it. |
+| `test_cross_site_requests_to_the_new_endpoints_are_refused` | All the new state-changing endpoints reject requests from another site. |
 
 ### test_admin.py
 
@@ -198,7 +283,7 @@ Accounts, passwords, first-run protection and the cross-site check.
 | Test | What it checks |
 |---|---|
 | `test_register_user_creates_record_and_hashes_password` | Registering stores the account and a bcrypt hash, never the password itself. |
-| `test_authenticate_user_returns_session_for_valid_credentials` | Signing in with the right email and password returns a session. |
+| `test_valid_credentials_identify_the_user_and_open_a_session` | The right email and password identify the account and a session can then be opened for it. |
 | `test_record_audit_log_persists_database_entries` | Audit-log entries, including assistant events with steps and conversation IDs, are saved. |
 | `test_registration_closed_still_allows_first_account` | With registration switched off, the first account can still be created on an empty install; once an account exists, registration closes and a stranger is refused (403). |
 | `test_registration_open_by_default` | Registration is open when `ALLOW_REGISTRATION` is true. |

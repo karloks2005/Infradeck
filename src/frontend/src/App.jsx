@@ -47,6 +47,7 @@ function parseAgentMessage(text) {
 const navigation = [
   { label: 'Dashboard', to: '/', icon: '▣' },
   { label: 'Agent', to: '/agent', icon: '◷' },
+  { label: 'Account', to: '/account', icon: '◉' },
   { label: 'Admin', to: '/admin', icon: '⚙', adminOnly: true },
 ]
 
@@ -318,7 +319,15 @@ function LoginPage({ onLogin }) {
   const { enabled: registrationEnabled } = useRegistrationEnabled()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [pendingToken, setPendingToken] = useState(null)
+  const [code, setCode] = useState('')
   const [error, setError] = useState('')
+
+  const finish = (data) => {
+    const setupRequired = Boolean(data.setup_required)
+    onLogin({ id: data.user.id, name: data.user.name, email: data.user.email, role: data.user.role, setup_required: setupRequired })
+    navigate(setupRequired ? '/account' : '/')
+  }
 
   const handleSubmit = async (event) => {
     event.preventDefault()
@@ -329,17 +338,55 @@ function LoginPage({ onLogin }) {
         method: 'POST',
         body: JSON.stringify({ email, password }),
       })
-
-      onLogin({
-        id: data.user.id,
-        name: data.user.name,
-        email: data.user.email,
-        role: data.user.role,
-      })
-      navigate('/')
+      if (data.status === 'two_factor_required') {
+        setPassword('')
+        setPendingToken(data.pending_token)
+        return
+      }
+      finish(data)
     } catch (requestError) {
       setError(requestError.message || 'Invalid email or password.')
     }
+  }
+
+  const handleCode = async (event) => {
+    event.preventDefault()
+    setError('')
+    try {
+      finish(await apiRequest('/auth/login/2fa', { method: 'POST', body: JSON.stringify({ pending_token: pendingToken, code: code.trim() }) }))
+    } catch (requestError) {
+      setError(requestError.message || 'Invalid code.')
+      // An expired or used-up sign-in can't be retried; start again from the password.
+      if (requestError.status === 401 && /sign in again|expired/i.test(requestError.message || '')) { setPendingToken(null); setCode('') }
+    }
+  }
+
+  if (pendingToken) {
+    return (
+      <AuthCard title="Two-factor" subtitle="Second step">
+        <form onSubmit={handleCode} className="space-y-4">
+          <p className="text-sm text-[#bcbcbc]">Enter the 6-digit code from your authenticator app, or one of your recovery codes.</p>
+          <label className="block">
+            <span className="mb-2 block text-sm text-[#bcbcbc]">Code</span>
+            <input
+              type="text"
+              inputMode="text"
+              autoComplete="one-time-code"
+              autoFocus
+              maxLength={32}
+              value={code}
+              onChange={(event) => setCode(event.target.value)}
+              className="w-full rounded-2xl border border-neutral-700 bg-neutral-900/70 px-4 py-3 font-mono text-lg tracking-widest text-white outline-none transition focus:border-emerald-400"
+              placeholder="123456"
+              required
+            />
+          </label>
+          {error && <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</div>}
+          <button type="submit" className="flex w-full items-center justify-center rounded-2xl bg-linear-to-r from-white to-[#cfcfcf] px-4 py-3 font-medium text-slate-950 transition hover:brightness-110">Verify</button>
+          <button type="button" onClick={() => { setPendingToken(null); setCode(''); setError('') }} className="w-full py-2 text-sm text-[#9aa0a6] hover:text-white">Back to sign in</button>
+        </form>
+      </AuthCard>
+    )
   }
 
   return (
@@ -427,8 +474,9 @@ function RegisterPage({ onRegister }) {
         name: data.user.name,
         email: data.user.email,
         role: data.user.role,
+        setup_required: Boolean(data.setup_required),
       })
-      navigate('/')
+      navigate(data.setup_required ? '/account' : '/')
     } catch (requestError) {
       setError(requestError.message || 'Unable to create account right now.')
     }
@@ -1653,9 +1701,45 @@ function SaveButton() {
   )
 }
 
+function TwoFactorPolicySetting() {
+  const [state, setState] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState(null)
+
+  useEffect(() => {
+    apiRequest('/admin/settings', { method: 'GET' })
+      .then((data) => setState({ required: data.require_2fa_for_admins, configured: data.secrets_configured }))
+      .catch((error) => setMessage({ ok: false, text: error.message || 'Could not load the setting.' }))
+  }, [])
+
+  const change = async (next) => {
+    setSaving(true)
+    setMessage(null)
+    try {
+      const data = await apiRequest('/admin/settings', { method: 'PUT', body: JSON.stringify({ require_2fa_for_admins: next }) })
+      setState({ required: data.require_2fa_for_admins, configured: data.secrets_configured })
+      setMessage({ ok: true, text: data.require_2fa_for_admins ? 'Administrators must now use two-factor. Those without it are asked to set it up at their next sign-in.' : 'Two-factor is optional for administrators.' })
+    } catch (error) {
+      setMessage({ ok: false, text: error.message || 'Could not save the setting.' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <AdminSection title="Two-factor" description="Protects sign-in with a code from an authenticator app, on top of the password.">
+      <Toggle label="Require two-factor for administrators" description="An administrator without it can only reach the two-factor setup until it is done." checked={state?.required ?? false} onChange={change} disabled={state === null || saving} />
+      {state && !state.configured && <p className="mt-3 rounded-xl border border-amber-400/30 bg-amber-400/5 p-3 text-xs text-amber-200">SECRETS_KEY is not set on the server, so two-factor can't be set up and this is <strong>not being enforced</strong> yet. Set it in <code>.env</code> (see the README, Secrets at rest) and restart.</p>}
+      {message && <p className={`mt-3 text-xs ${message.ok ? 'text-emerald-300' : 'text-amber-200'}`}>{message.text}</p>}
+    </AdminSection>
+  )
+}
+
 function AdminUsersTab() {
   return (
     <div className="space-y-5">
+      <TwoFactorPolicySetting />
+
       <AdminSection title="Registration" description="Controls whether new people can create an account.">
         <Toggle label="Allow registration" description="When off, only the first account can be created. Replaces ALLOW_REGISTRATION in .env." />
       </AdminSection>
@@ -2160,8 +2244,219 @@ function RequireAuth({ user, children }) {
   if (!user) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />
   }
+  // An administrator who still has to set up two-factor can only use the account page.
+  if (user.setup_required && location.pathname !== '/account') {
+    return <Navigate to="/account" replace />
+  }
 
   return children
+}
+
+function SecretsBox({ children }) {
+  return <div className="rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 p-4">{children}</div>
+}
+
+function PasswordSection() {
+  const [form, setForm] = useState({ current: '', next: '', repeat: '' })
+  const [message, setMessage] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const set = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }))
+
+  const submit = async (event) => {
+    event.preventDefault()
+    setMessage(null)
+    if (form.next.length < MIN_PASSWORD_LENGTH) return setMessage({ ok: false, text: `The new password must be at least ${MIN_PASSWORD_LENGTH} characters.` })
+    if (form.next !== form.repeat) return setMessage({ ok: false, text: 'The two new passwords do not match.' })
+    setBusy(true)
+    try {
+      const data = await apiRequest('/auth/password', { method: 'POST', body: JSON.stringify({ current_password: form.current, new_password: form.next }) })
+      setForm({ current: '', next: '', repeat: '' })
+      setMessage({ ok: true, text: `Password changed. ${data.other_sessions_signed_out} other ${data.other_sessions_signed_out === 1 ? 'session was' : 'sessions were'} signed out.` })
+    } catch (error) {
+      setMessage({ ok: false, text: error.message || 'Could not change the password.' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <AdminSection title="Password" description={`At least ${MIN_PASSWORD_LENGTH} characters; a few random words make a good passphrase. Changing it signs you out everywhere else.`}>
+      <form onSubmit={submit} className="max-w-md space-y-3">
+        <input type="password" autoComplete="current-password" aria-label="Current password" placeholder="Current password" value={form.current} onChange={set('current')} className={inputClass} required />
+        <input type="password" autoComplete="new-password" aria-label="New password" placeholder={`New password (${MIN_PASSWORD_LENGTH}+ characters)`} value={form.next} onChange={set('next')} className={inputClass} required />
+        <input type="password" autoComplete="new-password" aria-label="Repeat the new password" placeholder="Repeat the new password" value={form.repeat} onChange={set('repeat')} className={inputClass} required />
+        <button type="submit" disabled={busy} className="rounded-2xl bg-linear-to-r from-white to-[#cfcfcf] px-4 py-2.5 text-sm font-medium text-[#0b0b0b] disabled:opacity-50">{busy ? 'Changing…' : 'Change password'}</button>
+        {message && <p className={`text-xs ${message.ok ? 'text-emerald-300' : 'text-amber-200'}`}>{message.text}</p>}
+      </form>
+    </AdminSection>
+  )
+}
+
+function RecoveryCodesPanel({ codes, onDone, doneLabel }) {
+  const [saved, setSaved] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(codes.join('\n')); setCopied(true); setTimeout(() => setCopied(false), 1500) } catch { setCopied(false) }
+  }
+  return (
+    <SecretsBox>
+      <div className="text-sm font-medium text-white">Save your recovery codes</div>
+      <p className="mt-1 text-xs text-[#9aa0a6]">Each code works once if you lose your authenticator. They are shown only now; store them somewhere safe, such as a password manager.</p>
+      <ul className="mt-3 grid grid-cols-1 gap-1.5 font-mono text-sm text-[#cfcfcf] sm:grid-cols-2">{codes.map((code) => <li key={code} className="rounded-lg bg-white/5 px-3 py-1.5">{code}</li>)}</ul>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <button type="button" onClick={copy} className={secondaryButtonClass}>{copied ? 'Copied' : 'Copy codes'}</button>
+        <label className="inline-flex items-center gap-2 text-xs text-[#bcbcbc]"><input type="checkbox" checked={saved} onChange={(event) => setSaved(event.target.checked)} className="h-4 w-4" />I have saved these codes</label>
+        <button type="button" disabled={!saved} onClick={onDone} className="rounded-xl bg-white px-3 py-1.5 text-xs font-medium text-slate-950 disabled:opacity-40">{doneLabel}</button>
+      </div>
+    </SecretsBox>
+  )
+}
+
+function TwoFactorSection({ status, reload, onEnrolled }) {
+  const [setup, setSetup] = useState(null)
+  const [code, setCode] = useState('')
+  const [codes, setCodes] = useState(null)
+  const [form, setForm] = useState({ password: '', code: '' })
+  const [action, setAction] = useState(null)
+  const [message, setMessage] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  const run = async (work) => {
+    setBusy(true)
+    setMessage(null)
+    try { await work() } catch (error) { setMessage({ ok: false, text: error.message || 'Something went wrong.' }) } finally { setBusy(false) }
+  }
+  const start = () => run(async () => setSetup(await apiRequest('/auth/2fa/setup', { method: 'POST' })))
+  const enable = (event) => { event.preventDefault(); run(async () => {
+    const data = await apiRequest('/auth/2fa/enable', { method: 'POST', body: JSON.stringify({ code: code.trim() }) })
+    setCodes(data.recovery_codes); setSetup(null); setCode('')
+    await reload()
+  }) }
+  const reauth = (path, onData) => (event) => { event.preventDefault(); run(async () => {
+    const data = await apiRequest(path, { method: 'POST', body: JSON.stringify({ password: form.password, code: form.code.trim() }) })
+    setForm({ password: '', code: '' }); setAction(null); onData(data)
+    await reload()
+  }) }
+  const secretText = setup ? setup.secret.match(/.{1,4}/g).join(' ') : ''
+
+  return (
+    <AdminSection title="Two-factor sign-in" description="A 6-digit code from an authenticator app (such as Aegis, Authy or Google Authenticator) is asked for after your password.">
+      {!status.available && <p className="rounded-xl border border-amber-400/30 bg-amber-400/5 p-3 text-sm text-amber-200">Two-factor can't be set up because the server has no <code>SECRETS_KEY</code>. An administrator needs to set one in <code>.env</code> (see the README, Secrets at rest).</p>}
+
+      {status.available && codes && <RecoveryCodesPanel codes={codes} doneLabel={status.setup_required || onEnrolled ? 'Continue' : 'Done'} onDone={() => { setCodes(null); if (onEnrolled) onEnrolled() }} />}
+
+      {status.available && !codes && !status.enabled && (
+        <div className="space-y-3">
+          {status.required && <p className="text-sm text-amber-200">Two-factor is required for administrators on this server.</p>}
+          {!setup && <button type="button" onClick={start} disabled={busy} className="rounded-2xl bg-linear-to-r from-white to-[#cfcfcf] px-4 py-2.5 text-sm font-medium text-[#0b0b0b] disabled:opacity-50">Set up two-factor</button>}
+          {setup && (
+            <SecretsBox>
+              <ol className="list-decimal space-y-3 pl-5 text-sm text-[#bcbcbc]">
+                <li>In your authenticator app, add an account and enter this key (time-based, 6 digits):
+                  <div className="mt-2 break-all rounded-lg bg-white/5 px-3 py-2 font-mono text-base tracking-wider text-white select-all">{secretText}</div>
+                  <a href={setup.otpauth_uri} className="mt-1 inline-block text-xs text-emerald-300 underline">or open it in an authenticator app on this device</a>
+                </li>
+                <li>Enter the code the app shows now to confirm:
+                  <form onSubmit={enable} className="mt-2 flex flex-wrap items-center gap-2">
+                    <input type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={8} aria-label="Code from the authenticator app" placeholder="123456" value={code} onChange={(event) => setCode(event.target.value)} className={`${inputClass} w-40 font-mono tracking-widest`} required />
+                    <button type="submit" disabled={busy} className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-slate-950 disabled:opacity-50">Turn on</button>
+                  </form>
+                </li>
+              </ol>
+            </SecretsBox>
+          )}
+        </div>
+      )}
+
+      {status.available && !codes && status.enabled && (
+        <div className="space-y-3">
+          <p className="text-sm text-emerald-300">Two-factor is on. <span className="text-[#9aa0a6]">{status.recovery_codes_left} recovery {status.recovery_codes_left === 1 ? 'code' : 'codes'} left.</span></p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => setAction(action === 'codes' ? null : 'codes')} className={secondaryButtonClass}>New recovery codes</button>
+            {!status.required && <button type="button" onClick={() => setAction(action === 'off' ? null : 'off')} className="min-h-10 sm:min-h-0 rounded-xl border border-red-400/30 bg-red-500/5 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/10">Turn off</button>}
+          </div>
+          {status.required && <p className="text-xs text-[#7f8589]">It can't be turned off while it is required for administrators.</p>}
+          {action && (
+            <form onSubmit={action === 'off' ? reauth('/auth/2fa/disable', () => setMessage({ ok: true, text: 'Two-factor is off. Your other sessions were signed out.' })) : reauth('/auth/2fa/recovery-codes', (data) => setCodes(data.recovery_codes))} className="max-w-md space-y-2">
+              <p className="text-xs text-[#9aa0a6]">Confirm with your password and a current code (or a recovery code).</p>
+              <input type="password" autoComplete="current-password" aria-label="Password" placeholder="Password" value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} className={inputClass} required />
+              <input type="text" autoComplete="one-time-code" aria-label="Code" placeholder="Code" maxLength={32} value={form.code} onChange={(event) => setForm((current) => ({ ...current, code: event.target.value }))} className={`${inputClass} font-mono`} required />
+              <button type="submit" disabled={busy} className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-slate-950 disabled:opacity-50">{action === 'off' ? 'Turn off two-factor' : 'Generate new codes'}</button>
+            </form>
+          )}
+        </div>
+      )}
+      {message && <p className={`mt-3 text-xs ${message.ok ? 'text-emerald-300' : 'text-amber-200'}`}>{message.text}</p>}
+    </AdminSection>
+  )
+}
+
+function SessionsSection() {
+  const [sessions, setSessions] = useState(null)
+  const [message, setMessage] = useState(null)
+  const load = () => apiRequest('/auth/sessions', { method: 'GET' }).then((data) => setSessions(data.sessions)).catch((error) => setMessage({ ok: false, text: error.message || 'Could not load the sessions.' }))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [])
+
+  const end = async (id) => {
+    setMessage(null)
+    try { await apiRequest(`/auth/sessions/${id}`, { method: 'DELETE' }); await load() } catch (error) { setMessage({ ok: false, text: error.message || 'Could not sign that session out.' }) }
+  }
+  const endOthers = async () => {
+    setMessage(null)
+    try {
+      const data = await apiRequest('/auth/sessions/revoke-others', { method: 'POST' })
+      setMessage({ ok: true, text: `Signed out ${data.signed_out} other ${data.signed_out === 1 ? 'session' : 'sessions'}.` })
+      await load()
+    } catch (error) { setMessage({ ok: false, text: error.message || 'Could not sign the other sessions out.' }) }
+  }
+
+  return (
+    <AdminSection title="Where you're signed in" description="Sign out any session you don't recognise." action={sessions?.length > 1 ? <button type="button" onClick={endOthers} className={secondaryButtonClass}>Sign out all others</button> : null}>
+      {sessions === null ? <p className="text-sm text-[#9aa0a6]">Loading…</p> : (
+        <ul className="space-y-2">{sessions.map((session) => (
+          <li key={session.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-3 text-sm">
+            <div className="min-w-0">
+              <div className="truncate text-white">{session.user_agent || 'Unknown browser'}{session.current && <span className="ml-2 rounded-full bg-emerald-400/15 px-2 py-0.5 text-[10px] font-semibold tracking-wider text-emerald-300">THIS SESSION</span>}</div>
+              <div className="text-xs text-[#9aa0a6]">{session.ip || 'unknown address'} · signed in {session.created_at ? formatDateTime(session.created_at) : 'earlier'}</div>
+            </div>
+            {!session.current && <button type="button" onClick={() => end(session.id)} className={secondaryButtonClass}>Sign out</button>}
+          </li>
+        ))}</ul>
+      )}
+      <p className="mt-3 text-xs text-[#7f8589]">Sessions that started before this feature was added don't appear here and expire on their own within a day.</p>
+      {message && <p className={`mt-3 text-xs ${message.ok ? 'text-emerald-300' : 'text-amber-200'}`}>{message.text}</p>}
+    </AdminSection>
+  )
+}
+
+function AccountPage({ user, onLogout, onUserChange }) {
+  const navigate = useNavigate()
+  const [status, setStatus] = useState(null)
+  const [error, setError] = useState('')
+  // Remember that this visit began as a required setup, so Continue leads on to the dashboard once it is done.
+  const wasRequired = useRef(false)
+  if (status?.setup_required) wasRequired.current = true
+  const reload = () => apiRequest('/auth/2fa/status', { method: 'GET' }).then((data) => { setStatus(data); onUserChange({ setup_required: data.setup_required, two_factor_enabled: data.enabled }) }).catch((requestError) => setError(requestError.message || 'Could not load your account.'))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { reload() }, [])
+
+  return (
+    <AppShell user={user} onLogout={onLogout}>
+      <div className="flex flex-col gap-5">
+        <header className="glass-panel rounded-[28px] p-5 md:p-6">
+          <div className="text-xs uppercase tracking-[0.22em] text-[#9aa0a6]">Your account</div>
+          <h1 className="mt-1 text-3xl font-semibold text-white">Account</h1>
+          <p className="mt-2 text-sm text-[#9aa0a6]">{user.name} · {user.email} · {user.role}</p>
+          {status?.setup_required && <div className="mt-4 rounded-xl border border-amber-400/30 bg-amber-400/5 p-3 text-sm text-amber-200">Two-factor is required for administrators. Set it up below to continue to the dashboard.</div>}
+          {error && <div className="mt-4 rounded-xl border border-amber-400/30 bg-amber-400/5 p-3 text-sm text-amber-200">{error}</div>}
+        </header>
+        {status && <TwoFactorSection status={status} reload={reload} onEnrolled={wasRequired.current ? () => navigate('/') : null} />}
+        {status && !status.setup_required && <PasswordSection />}
+        {status && !status.setup_required && <SessionsSection />}
+      </div>
+    </AppShell>
+  )
 }
 
 function App() {
@@ -2229,6 +2524,14 @@ function App() {
           element={
             <RequireAuth user={user}>
               <AgentPage user={user} onLogout={handleLogout} />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/account"
+          element={
+            <RequireAuth user={user}>
+              <AccountPage user={user} onLogout={handleLogout} onUserChange={(patch) => setUser((current) => (current ? { ...current, ...patch } : current))} />
             </RequireAuth>
           }
         />

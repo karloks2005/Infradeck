@@ -11,18 +11,8 @@ from sqlalchemy.orm import sessionmaker
 
 from src.backend import main, rules
 from src.backend.auth import register_user
+from tests.fakes import FakeRedis
 from src.backend.models import AppSetting, Base, ContainerMetric, HostMetric, PendingCollector, Server, User
-
-
-class FakeRedis:
-    def __init__(self):
-        self.store = {}
-
-    def set(self, key, value, ex=None):
-        self.store[key] = value
-
-    def get(self, key):
-        return self.store.get(key)
 
 
 @pytest.fixture
@@ -164,7 +154,7 @@ def test_admin_can_turn_agent_chat_off_and_on(fleet, monkeypatch):
 
     result = main.update_admin_settings(main.AdminSettingsRequest(agent_chat_enabled=False), session_id="s", db=fleet)
 
-    assert result == {"metrics_retention_days": main.DEFAULT_METRICS_RETENTION_DAYS, "agent_chat_enabled": False, "alert_thresholds": rules.DEFAULT_THRESHOLDS, "mount_thresholds": {}}
+    assert result == {"metrics_retention_days": main.DEFAULT_METRICS_RETENTION_DAYS, "agent_chat_enabled": False, "alert_thresholds": rules.DEFAULT_THRESHOLDS, "mount_thresholds": {}, "require_2fa_for_admins": True, "secrets_configured": False}
     _login_as(monkeypatch, 2)
     assert main.agent_config(session_id="s", db=fleet) == {"chat_enabled": False}
 

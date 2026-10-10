@@ -1,4 +1,5 @@
 bcrypt
+cryptography
 email-validator
 fastapi
 google-genai

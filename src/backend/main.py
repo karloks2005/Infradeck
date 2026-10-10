@@ -17,13 +17,18 @@ import redis
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import case, func, inspect, text
 
 from .alerts import CONTAINER_RULE_PREFIX, CRITICAL, SERVER_OFFLINE_RULE, SEVERITIES, active_rule_keys, raise_alert, resolve_alerts, sync_alerts
-from .auth import authenticate_user, get_recent_logs, get_user_from_session, logout_user, record_audit_log, register_user
+from . import secrets_box, totp
+from .auth import (
+    STAGE_ENROLLMENT, STAGE_FULL, count_pending_attempt, create_pending_two_factor, create_session, delete_pending_two_factor, delete_session, get_recent_logs,
+    get_session, get_user_from_session, hash_password, issue_recovery_codes, list_user_sessions, read_pending_two_factor, recovery_codes_left, record_audit_log,
+    register_user, revoke_other_sessions, revoke_user_session, validate_password, verify_credentials, verify_password, verify_second_factor,
+)
 from .db import SessionLocal, check_database, get_db
-from .models import AppSetting, AuditLog, Base, ChatMessage, ContainerMetric, Conversation, EnrollmentKey, FirewallState, HostMetric, IncidentAlert, JoinToken, ListenerState, MountMetric, PendingCollector, Server, SystemEvent, User
+from .models import AppSetting, AuditLog, Base, ChatMessage, ContainerMetric, Conversation, EnrollmentKey, FirewallState, HostMetric, IncidentAlert, JoinToken, ListenerState, MountMetric, PendingCollector, RecoveryCode, Server, SystemEvent, User
 
 from .db import engine
 from .config import (
@@ -45,7 +50,7 @@ from .config import (
     SESSION_TTL_SECONDS,
 )
 from .rules import DEFAULT_THRESHOLDS, HOST_RULE_PREFIX, container_rules, host_rules, validate_thresholds, detect_system_events, system_rules, SYSTEM_RULE_PREFIX, validate_mount_thresholds, validate_helper_events, REBOOT_DETAILS, REBOOT_KEY_PREFIX, detect_container_events, memory_trend_rules, CONTAINER_EVENT_KINDS, MAX_CONTAINER_EVENTS_PER_CHECKIN, MAX_CONTAINER_EVENTS_PER_HOUR, TREND_RULE_PREFIX, NETWORK_EVENT_KINDS, NETWORK_RULE_PREFIX, MAX_NETWORK_EVENTS_PER_CHECKIN, MAX_NETWORK_EVENTS_PER_HOUR, INTERNET_STATUSES, LISTENER_SCOPES, FIREWALL_LABELS, detect_listener_changes, detect_firewall_changes, network_rules, validate_listeners, validate_firewall
-from .rate_limit import enforce_ip_limit, enforce_login_limit, enforce_register_limit, reset_limits
+from .rate_limit import enforce_ip_limit, enforce_limit, enforce_login_limit, enforce_register_limit, reset_limits
 from ..agent.service import delete_agent_conversation, send_agent_message
 
 
@@ -60,6 +65,25 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+
+
+class TwoFactorLoginRequest(BaseModel):
+    pending_token: str = Field(max_length=100)
+    code: str = Field(max_length=64)
+
+
+class CodeRequest(BaseModel):
+    code: str = Field(max_length=64)
+
+
+class ReauthRequest(BaseModel):
+    password: str = Field(max_length=1024)
+    code: str = Field(max_length=64)
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(max_length=1024)
+    new_password: str = Field(max_length=1024)
 
 
 class AgentChatRequest(BaseModel):
@@ -100,6 +124,7 @@ class AdminSettingsRequest(BaseModel):
     # Both optional so the admin page can save one setting at a time.
     metrics_retention_days: int | None = None
     agent_chat_enabled: bool | None = None
+    require_2fa_for_admins: bool | None = None
     alert_thresholds: dict | None = None
     # Replaces all per-mount disk overrides: {mount: {disk_warning_pct, disk_critical_pct}}.
     mount_thresholds: dict | None = None
@@ -204,6 +229,8 @@ def startup_event():
             connection.execute(text("ALTER TABLE system_events ADD COLUMN IF NOT EXISTS event_key VARCHAR(128)"))
             connection.execute(text("ALTER TABLE pending_collectors ADD COLUMN IF NOT EXISTS join_token_id INTEGER REFERENCES join_tokens(id) ON DELETE SET NULL"))
             connection.execute(text("CREATE INDEX IF NOT EXISTS ix_system_events_event_key ON system_events (event_key)"))
+            for column, column_type in (("totp_secret_enc", "TEXT"), ("totp_enabled", "BOOLEAN NOT NULL DEFAULT FALSE"), ("totp_last_step", "INTEGER"), ("password_changed_at", "TIMESTAMP WITH TIME ZONE")):
+                connection.execute(text(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {column} {column_type}"))
             connection.execute(text("ALTER TABLE incident_alerts ADD COLUMN IF NOT EXISTS rule_key VARCHAR(255)"))
             connection.execute(text("ALTER TABLE incident_alerts ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP WITH TIME ZONE"))
             connection.execute(text("CREATE INDEX IF NOT EXISTS ix_incident_alerts_rule_key ON incident_alerts (rule_key)"))
@@ -227,6 +254,9 @@ def startup_event():
     db = SessionLocal()
     try:
         ensure_admin_exists(db)
+        if require_admin_two_factor(db) and not secrets_box.available():
+            print("SECURITY WARNING: two-factor is required for administrators, but SECRETS_KEY is missing or invalid, so it is NOT being enforced. "
+                  "Generate a key with `python -m src.backend.secrets_box` and set SECRETS_KEY in .env.", flush=True)
         setup_token = ensure_bootstrap_token(db)
         if setup_token:
             print(f"First-run setup token: {setup_token}  (needed to create the first account; shown again at every start until it exists)", flush=True)
@@ -311,23 +341,46 @@ def auth_register(payload: RegisterRequest, request: Request, response: Response
             name=payload.name,
             email=str(payload.email),
             password=payload.password,
+            admin_requires_two_factor=two_factor_enforced(db),
+            ip=_client_ip(request),
+            user_agent=request.headers.get("user-agent"),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if first_account:
         ensure_bootstrap_token(db)  # an account exists now: this removes the token
+    _set_session_cookie(response, result.pop("session_id"))
+    return result
+
+
+def _set_session_cookie(response: Response, session_id: str) -> None:
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
-        value=result["session_id"],
+        value=session_id,
         max_age=SESSION_TTL_SECONDS,
         httponly=True,
         secure=SESSION_COOKIE_SECURE,
         samesite="lax",
         path="/",
     )
-    result.pop("session_id", None)
-    return result
+
+
+def _user_payload(user: User, **extra) -> dict:
+    return {"id": user.id, "name": user.name, "email": user.email, "role": user.role, "is_active": user.is_active, **extra}
+
+
+def _complete_login(db, request: Request, response: Response, user: User, how: str = "") -> dict:
+    """Open the session after every required step has passed.
+
+    An administrator without two-factor, while it is required, gets an enrollment session: it can reach
+    the two-factor setup and nothing else until setup is done.
+    """
+    stage = STAGE_ENROLLMENT if user.role == "admin" and not user.totp_enabled and two_factor_enforced(db) else STAGE_FULL
+    session_id, _public_id = create_session(redis_client, user, stage=stage, ip=_client_ip(request), user_agent=request.headers.get("user-agent"))
+    _set_session_cookie(response, session_id)
+    record_audit_log(db, user_id=user.id, level="INFO", message=f"User signed in{how}", source="auth")
+    return {"user": _user_payload(user), "setup_required": stage == STAGE_ENROLLMENT}
 
 
 @app.post("/auth/login")
@@ -340,28 +393,64 @@ def auth_login(payload: LoginRequest, request: Request, response: Response, db=D
         window_seconds=LOGIN_RATE_WINDOW_SECONDS,
     )
     try:
-        result = authenticate_user(
-            db,
-            redis_client,
-            email=str(payload.email),
-            password=payload.password,
-        )
+        user = verify_credentials(db, email=str(payload.email), password=payload.password)
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     reset_limits(redis_client, *limit_keys)
+    if user.totp_enabled:
+        # No session exists until the second step passes; this token only carries the login between the steps.
+        return {"status": "two_factor_required", "pending_token": create_pending_two_factor(redis_client, user.id)}
+    return _complete_login(db, request, response, user)
 
-    response.set_cookie(
-        key=SESSION_COOKIE_NAME,
-        value=result["session_id"],
-        max_age=SESSION_TTL_SECONDS,
-        httponly=True,
-        secure=SESSION_COOKIE_SECURE,
-        samesite="lax",
-        path="/",
-    )
-    result.pop("session_id", None)
+
+def _second_factor_or_error(db, user: User, code: str) -> str:
+    """Verify a code for the user, with the shared brute-force limit. Raises 401 (or 429/503); returns "totp" or "recovery"."""
+    limit_key = enforce_limit(redis_client, scope="2fa-user", subject=user.id, limit=TWO_FACTOR_ATTEMPTS, window_seconds=TWO_FACTOR_WINDOW_SECONDS)
+    try:
+        method = verify_second_factor(db, user, code)
+    except secrets_box.SecretsUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Two-factor codes can't be checked on this server right now (a SECRETS_KEY problem). A recovery code still works.") from exc
+    if method is None:
+        record_audit_log(db, user_id=user.id, level="WARNING", message="A wrong two-factor code was entered", source="auth")
+        raise HTTPException(status_code=401, detail="Invalid code.")
+    reset_limits(redis_client, limit_key)
+    return method
+
+
+@app.post("/auth/login/2fa")
+def auth_login_two_factor(payload: TwoFactorLoginRequest, request: Request, response: Response, db=Depends(get_db)):
+    enforce_ip_limit(redis_client, scope="2fa-ip", ip_address=_client_ip(request), limit=20, window_seconds=TWO_FACTOR_WINDOW_SECONDS)
+    expired = HTTPException(status_code=401, detail="Sign-in expired. Please sign in again.")
+    user_id = read_pending_two_factor(redis_client, payload.pending_token)
+    if user_id is None:
+        raise expired
+    if not count_pending_attempt(redis_client, payload.pending_token):
+        raise HTTPException(status_code=401, detail="Too many wrong codes. Please sign in again.")
+    user = db.get(User, user_id)
+    if not user or not user.is_active or not user.totp_enabled:
+        raise expired
+    method = _second_factor_or_error(db, user, payload.code)
+    db.commit()  # the code that was just accepted is now spent
+    delete_pending_two_factor(redis_client, payload.pending_token)
+    if method == "recovery":
+        record_audit_log(db, user_id=user.id, level="WARNING", message="A two-factor recovery code was used to sign in", source="auth")
+    result = _complete_login(db, request, response, user, " with two-factor")
+    result["recovery_codes_left"] = recovery_codes_left(db, user)
     return result
+
+
+def _account_session(session_id, db, *, allow_limited: bool = False) -> tuple[dict, User]:
+    """The caller's session and account for the account endpoints. Enrollment sessions only where allowed."""
+    session = get_session(redis_client, session_id)
+    if not session:
+        raise HTTPException(status_code=401, detail="Session is invalid or expired.")
+    if session["stage"] != STAGE_FULL and not allow_limited:
+        raise HTTPException(status_code=403, detail="Finish setting up two-factor first.")
+    user = db.get(User, session["id"])
+    if not user or not user.is_active:
+        raise HTTPException(status_code=401, detail="Session is invalid or expired.")
+    return session, user
 
 
 @app.get("/auth/me")
@@ -369,14 +458,9 @@ def auth_me(
     session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
     db=Depends(get_db),
 ):
-    user = get_user_from_session(redis_client, session_id)
-    if not user:
-        raise HTTPException(status_code=401, detail="Session is invalid or expired.")
-    # Read role and status from the database so admin changes apply without a new login.
-    account = db.query(User).filter(User.id == user["id"]).first()
-    if not account or not account.is_active:
-        raise HTTPException(status_code=401, detail="Session is invalid or expired.")
-    return {"user": {**user, "name": account.name, "email": account.email, "role": account.role}}
+    session, account = _account_session(session_id, db, allow_limited=True)
+    # Role and status come from the database so admin changes apply without a new login.
+    return {"user": _user_payload(account, setup_required=session["stage"] != STAGE_FULL, two_factor_enabled=account.totp_enabled)}
 
 
 @app.post("/auth/logout")
@@ -384,14 +468,161 @@ def auth_logout(
     response: Response,
     session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
 ):
-    if logout_user(redis_client, session_id):
-        response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
-        return {"status": "ok"}
-    raise HTTPException(status_code=400, detail="No session id supplied.")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="No session id supplied.")
+    delete_session(redis_client, session_id)
+    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
+    return {"status": "ok"}
 
+
+@app.get("/auth/2fa/status")
+def two_factor_status(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    session, user = _account_session(session_id, db, allow_limited=True)
+    return {
+        "enabled": user.totp_enabled, "available": secrets_box.available(),
+        "required": user.role == "admin" and two_factor_enforced(db),
+        "recovery_codes_left": recovery_codes_left(db, user) if user.totp_enabled else 0,
+        "setup_required": session["stage"] != STAGE_FULL,
+    }
+
+
+@app.post("/auth/2fa/setup")
+def two_factor_setup(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    _session, user = _account_session(session_id, db, allow_limited=True)
+    if not secrets_box.available():
+        raise HTTPException(status_code=503, detail="Two-factor needs SECRETS_KEY to be configured on the server. See the README.")
+    if user.totp_enabled:
+        raise HTTPException(status_code=409, detail="Two-factor is already turned on. Turn it off first to set it up again.")
+    enforce_limit(redis_client, scope="2fa-setup", subject=user.id, limit=10, window_seconds=3600)
+    secret = totp.new_secret()
+    # Stored encrypted and inactive until a code from the app has been confirmed.
+    user.totp_secret_enc, user.totp_last_step = secrets_box.encrypt(secret), None
+    db.commit()
+    return {"secret": secret, "otpauth_uri": totp.otpauth_uri(secret, user.email)}
+
+
+@app.post("/auth/2fa/enable")
+def two_factor_enable(payload: CodeRequest, request: Request, response: Response, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    session, user = _account_session(session_id, db, allow_limited=True)
+    if user.totp_enabled:
+        raise HTTPException(status_code=409, detail="Two-factor is already turned on.")
+    if not user.totp_secret_enc:
+        raise HTTPException(status_code=400, detail="Start the setup first.")
+    limit_key = enforce_limit(redis_client, scope="2fa-user", subject=user.id, limit=TWO_FACTOR_ATTEMPTS, window_seconds=TWO_FACTOR_WINDOW_SECONDS)
+    try:
+        step = totp.verify(secrets_box.decrypt(user.totp_secret_enc), payload.code)
+    except secrets_box.SecretsUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Two-factor can't be set up on this server right now (a SECRETS_KEY problem).") from exc
+    if step is None:
+        raise HTTPException(status_code=400, detail="That code is not valid. Check the clock on your phone and try again.")
+    reset_limits(redis_client, limit_key)
+    user.totp_enabled, user.totp_last_step = True, step
+    codes = issue_recovery_codes(db, user)
+    db.commit()
+    record_audit_log(db, user_id=user.id, level="INFO", message="Two-factor was turned on", source="auth")
+    # A fresh session ID: this is the moment an enrollment session becomes a full one, and other sessions end.
+    new_session_id, new_public_id = create_session(redis_client, user, stage=STAGE_FULL, ip=_client_ip(request), user_agent=request.headers.get("user-agent"))
+    delete_session(redis_client, session_id)
+    revoke_other_sessions(redis_client, user.id, new_public_id)
+    _set_session_cookie(response, new_session_id)
+    return {"recovery_codes": codes, "setup_required": False}
+
+
+def _reauthenticate(db, user: User, password: str, code: str) -> None:
+    """Password plus a second-factor code, for changes to the two-factor setup. One generic error for either being wrong."""
+    wrong = HTTPException(status_code=401, detail="The password or the code is not correct.")
+    if not verify_password(user, password):
+        enforce_limit(redis_client, scope="2fa-user", subject=user.id, limit=TWO_FACTOR_ATTEMPTS, window_seconds=TWO_FACTOR_WINDOW_SECONDS)
+        record_audit_log(db, user_id=user.id, level="WARNING", message="A wrong password was entered while changing two-factor", source="auth")
+        raise wrong
+    try:
+        _second_factor_or_error(db, user, code)
+    except HTTPException as exc:
+        if exc.status_code == 401:
+            raise wrong from exc
+        raise
+
+
+@app.post("/auth/2fa/disable")
+def two_factor_disable(payload: ReauthRequest, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    session, user = _account_session(session_id, db)
+    if not user.totp_enabled:
+        raise HTTPException(status_code=409, detail="Two-factor is not turned on.")
+    if user.role == "admin" and two_factor_enforced(db):
+        raise HTTPException(status_code=403, detail="Two-factor is required for administrators on this server.")
+    _reauthenticate(db, user, payload.password, payload.code)
+    user.totp_enabled, user.totp_secret_enc, user.totp_last_step = False, None, None
+    db.query(RecoveryCode).filter(RecoveryCode.user_id == user.id).delete(synchronize_session=False)
+    db.commit()
+    revoked = revoke_other_sessions(redis_client, user.id, session["public_id"])
+    record_audit_log(db, user_id=user.id, level="WARNING", message=f"Two-factor was turned off ({revoked} other sessions signed out)", source="auth")
+    return {"status": "ok"}
+
+
+@app.post("/auth/2fa/recovery-codes")
+def two_factor_new_recovery_codes(payload: ReauthRequest, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    _session, user = _account_session(session_id, db)
+    if not user.totp_enabled:
+        raise HTTPException(status_code=409, detail="Two-factor is not turned on.")
+    _reauthenticate(db, user, payload.password, payload.code)
+    codes = issue_recovery_codes(db, user)
+    db.commit()
+    record_audit_log(db, user_id=user.id, level="INFO", message="Two-factor recovery codes were regenerated", source="auth")
+    return {"recovery_codes": codes}
+
+
+@app.post("/auth/password")
+def change_password(payload: PasswordChangeRequest, request: Request, response: Response, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    session, user = _account_session(session_id, db)
+    enforce_limit(redis_client, scope="pw-change", subject=user.id, limit=5, window_seconds=600)
+    if not verify_password(user, payload.current_password):
+        record_audit_log(db, user_id=user.id, level="WARNING", message="A wrong current password was entered while changing the password", source="auth")
+        raise HTTPException(status_code=400, detail="The current password is not correct.")
+    try:
+        validate_password(payload.new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if payload.new_password == payload.current_password:
+        raise HTTPException(status_code=400, detail="The new password must be different from the current one.")
+    user.password_hash, user.password_changed_at = hash_password(payload.new_password), datetime.now(timezone.utc)
+    db.commit()
+    # A fresh session ID for this browser, and every other session ends: whoever had the old password is out.
+    new_session_id, new_public_id = create_session(redis_client, user, stage=STAGE_FULL, ip=_client_ip(request), user_agent=request.headers.get("user-agent"))
+    delete_session(redis_client, session_id)
+    revoked = revoke_other_sessions(redis_client, user.id, new_public_id)
+    _set_session_cookie(response, new_session_id)
+    record_audit_log(db, user_id=user.id, level="INFO", message=f"Password was changed ({revoked} other sessions signed out)", source="auth")
+    return {"status": "ok", "other_sessions_signed_out": revoked}
+
+
+@app.get("/auth/sessions")
+def auth_sessions(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    session, user = _account_session(session_id, db)
+    return {"sessions": list_user_sessions(redis_client, user.id, session["public_id"])}
+
+
+@app.post("/auth/sessions/revoke-others")
+def auth_revoke_other_sessions(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    session, user = _account_session(session_id, db)
+    revoked = revoke_other_sessions(redis_client, user.id, session["public_id"])
+    record_audit_log(db, user_id=user.id, level="INFO", message=f"Signed out {revoked} other sessions", source="auth")
+    return {"signed_out": revoked}
+
+
+@app.delete("/auth/sessions/{public_id}")
+def auth_revoke_session(public_id: str, response: Response, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    session, user = _account_session(session_id, db)
+    if not revoke_user_session(redis_client, user.id, public_id):
+        raise HTTPException(status_code=404, detail="Session not found.")
+    if public_id == session["public_id"]:
+        response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
+    return {"status": "ok"}
 
 
 def _current_user(session_id, db):
+    session = get_session(redis_client, session_id)
+    if session and session["stage"] != STAGE_FULL:
+        raise HTTPException(status_code=403, detail="Finish setting up two-factor first.")
     user = get_user_from_session(redis_client, session_id)
     if not user:
         raise HTTPException(status_code=401, detail="Session is invalid or expired.")
@@ -428,6 +659,9 @@ MAX_METRICS_RETENTION_DAYS = 3650
 
 
 AGENT_CHAT_ENABLED_KEY = "agent_chat_enabled"
+REQUIRE_ADMIN_2FA_KEY = "require_admin_2fa"
+TWO_FACTOR_ATTEMPTS = 5
+TWO_FACTOR_WINDOW_SECONDS = 300
 ALERT_THRESHOLDS_KEY = "alert_thresholds"
 MOUNT_THRESHOLDS_KEY = "mount_thresholds"
 
@@ -446,6 +680,17 @@ def get_metrics_retention_days(db) -> int:
         return int(setting.value) if setting else DEFAULT_METRICS_RETENTION_DAYS
     except ValueError:
         return DEFAULT_METRICS_RETENTION_DAYS
+
+
+def require_admin_two_factor(db) -> bool:
+    """The admin setting: on unless an admin has turned it off."""
+    setting = db.get(AppSetting, REQUIRE_ADMIN_2FA_KEY)
+    return setting is None or setting.value == "true"
+
+
+def two_factor_enforced(db) -> bool:
+    """Whether admins are actually required to use two-factor: the setting is on and enrolment is possible (a key is configured)."""
+    return require_admin_two_factor(db) and secrets_box.available()
 
 
 def is_agent_chat_enabled(db) -> bool:
@@ -473,7 +718,7 @@ def get_mount_thresholds(db) -> dict:
 
 
 def _admin_settings(db) -> dict:
-    return {"metrics_retention_days": get_metrics_retention_days(db), "agent_chat_enabled": is_agent_chat_enabled(db), "alert_thresholds": get_alert_thresholds(db), "mount_thresholds": get_mount_thresholds(db)}
+    return {"metrics_retention_days": get_metrics_retention_days(db), "agent_chat_enabled": is_agent_chat_enabled(db), "alert_thresholds": get_alert_thresholds(db), "mount_thresholds": get_mount_thresholds(db), "require_2fa_for_admins": require_admin_two_factor(db), "secrets_configured": secrets_box.available()}
 
 
 def purge_old_metrics(db, now: datetime | None = None) -> int:
@@ -503,6 +748,9 @@ def update_admin_settings(payload: AdminSettingsRequest, session_id: Annotated[s
             raise HTTPException(status_code=400, detail=f"Retention must be between {MIN_METRICS_RETENTION_DAYS} and {MAX_METRICS_RETENTION_DAYS} days.")
         _set_setting(db, METRICS_RETENTION_KEY, str(days))
         changes.append(f"Changed metrics retention to {days} days")
+    if payload.require_2fa_for_admins is not None and payload.require_2fa_for_admins != require_admin_two_factor(db):
+        _set_setting(db, REQUIRE_ADMIN_2FA_KEY, "true" if payload.require_2fa_for_admins else "false")
+        changes.append(f"{'Required' if payload.require_2fa_for_admins else 'Stopped requiring'} two-factor for administrators")
     if payload.agent_chat_enabled is not None:
         _set_setting(db, AGENT_CHAT_ENABLED_KEY, "true" if payload.agent_chat_enabled else "false")
         changes.append(f"{'Enabled' if payload.agent_chat_enabled else 'Disabled'} chat with the agent")

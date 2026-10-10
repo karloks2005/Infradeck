@@ -49,6 +49,13 @@ def enforce_ip_limit(redis_client, *, scope: str, ip_address: str, limit: int, w
     return key
 
 
+def enforce_limit(redis_client, *, scope: str, subject: str, limit: int, window_seconds: int) -> str:
+    """Count an attempt for any subject (a user ID, a token) and refuse with 429 once the limit is passed."""
+    key = _key(scope, str(subject))
+    _record_attempt(redis_client, key, limit, window_seconds)
+    return key
+
+
 def reset_limits(redis_client, *keys: str) -> None:
     try:
         redis_client.delete(*keys)

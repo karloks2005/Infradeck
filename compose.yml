@@ -46,6 +46,8 @@ services:
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      # Key that encrypts stored secrets such as two-factor secrets (generate: docker compose run --rm backend python -m src.backend.secrets_box).
+      SECRETS_KEY: ${SECRETS_KEY:-}
       # Connect a server panel: images remote hosts install, and the address they reach this dashboard at.
       COLLECTOR_IMAGE: ${COLLECTOR_IMAGE:-}
       DOCKER_PROXY_IMAGE: ${DOCKER_PROXY_IMAGE:-}

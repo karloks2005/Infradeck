@@ -7,24 +7,9 @@ import bcrypt
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from src.backend.auth import authenticate_user, record_audit_log, register_user
+from src.backend.auth import create_session, record_audit_log, register_user, verify_credentials
+from tests.fakes import FakeRedis
 from src.backend.models import AuditLog, Base, User
-
-
-class FakeRedis:
-    def __init__(self):
-        self.store = {}
-
-    def set(self, key, value, ex=None):
-        self.store[key] = value
-        return True
-
-    def get(self, key):
-        return self.store.get(key)
-
-    def delete(self, key):
-        self.store.pop(key, None)
-        return True
 
 
 def test_register_user_creates_record_and_hashes_password():
@@ -48,30 +33,17 @@ def test_register_user_creates_record_and_hashes_password():
     assert session.query(User).first().password_hash != "correct-horse-battery-staple"
 
 
-def test_authenticate_user_returns_session_for_valid_credentials():
+def test_valid_credentials_identify_the_user_and_open_a_session():
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine)
-    session = Session()
+    session = sessionmaker(bind=engine)()
     redis = FakeRedis()
 
-    register_user(
-        db=session,
-        redis_client=redis,
-        name="Grace Hopper",
-        email="grace@example.com",
-        password="correct-horse-battery-staple",
-    )
+    register_user(db=session, redis_client=redis, name="Grace Hopper", email="grace@example.com", password="correct-horse-battery-staple")
+    user = verify_credentials(session, email="Grace@Example.com", password="correct-horse-battery-staple")
+    session_id, public_id = create_session(redis, user)
 
-    result = authenticate_user(
-        db=session,
-        redis_client=redis,
-        email="grace@example.com",
-        password="correct-horse-battery-staple",
-    )
-
-    assert result["user"]["email"] == "grace@example.com"
-    assert result["session_id"]
+    assert user.email == "grace@example.com" and session_id and public_id
 
 
 def test_record_audit_log_persists_database_entries():
@@ -164,32 +136,14 @@ def _fresh(monkeypatch, token=""):
     monkeypatch.setattr(main, "ALLOW_REGISTRATION", False)
     monkeypatch.setattr(main, "ADMIN_BOOTSTRAP_TOKEN", token)
     monkeypatch.setattr(main, "enforce_register_limit", lambda *a, **k: None)
-    monkeypatch.setattr(main, "redis_client", FakeRedisForRegister())
+    monkeypatch.setattr(main, "redis_client", FakeRedis())
     return main, session
-
-
-class FakeRedisForRegister:
-    def __init__(self):
-        self.store = {}
-
-    def setex(self, key, ttl, value):
-        self.store[key] = value
-
-    def set(self, key, value, *a, **k):
-        self.store[key] = value
-
-    def get(self, key):
-        return self.store.get(key)
-
-    def delete(self, *keys):
-        for key in keys:
-            self.store.pop(key, None)
 
 
 def _register(main, session, token, email="owner@example.com"):
     from types import SimpleNamespace
     from fastapi import Response
-    request = SimpleNamespace(client=SimpleNamespace(host="1.2.3.4"))
+    request = SimpleNamespace(client=SimpleNamespace(host="1.2.3.4"), headers={})
     return main.auth_register(main.RegisterRequest(name="Owner", email=email, password="correct-horse-battery-staple", bootstrap_token=token), request=request, response=Response(), db=session)
 
 
@@ -293,7 +247,7 @@ def test_existing_accounts_with_short_passwords_can_still_sign_in():
     session.add(User(name="Old", email="old@example.com", password_hash=bcrypt.hashpw(b"old6pw", bcrypt.gensalt()).decode(), role="admin"))
     session.commit()
 
-    assert authenticate_user(session, FakeRedis(), email="old@example.com", password="old6pw")["user"]["email"] == "old@example.com"
+    assert verify_credentials(session, email="old@example.com", password="old6pw").email == "old@example.com"
 
 
 def test_an_overlong_password_at_login_is_just_invalid_not_an_error_with_internals():
@@ -304,7 +258,7 @@ def test_an_overlong_password_at_login_is_just_invalid_not_an_error_with_interna
     session.commit()
 
     with pytest.raises(ValueError) as exc:
-        authenticate_user(session, FakeRedis(), email="u@example.com", password="x" * 200)
+        verify_credentials(session, email="u@example.com", password="x" * 200)
     assert str(exc.value) == "Invalid email or password."
 
 
