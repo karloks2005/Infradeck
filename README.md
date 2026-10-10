@@ -419,6 +419,42 @@ lists always start closed.
 
 <ui - Fleet section with every card collapsed to one line (status dot, name, This machine and incident badges, CPU/RAM/fullest disk) and the Collapse all / Expand all button>
 
+## Statistics
+
+**Statistics** in the navigation shows how one server behaved over time. Pick a server and a
+range (1 hour, 6 hours, 24 hours, 7 days, 30 days, 90 days, 1 year or all time) and you get
+CPU, memory, swap, load and root disk charts. Each chart is the average as a line with a
+lighter band up to the highest value, so a short spike stays visible even in a yearly view.
+Hover or touch a point for the exact time, average, highest value and number of check-ins, or
+use **View as table**. Gaps (a server that was offline) are drawn as gaps. A note under the
+cards says what each point is (for example "one per hour, from hourly summaries") and when
+the history starts. The selection is kept in the address, so a view can be bookmarked, and
+the range is remembered per browser. The short ranges refresh every 30 seconds, except
+while the tab is hidden.
+
+Under the charts, **Containers** shows every container of that server as a small card (status
+dot, health, restarts, CPU, memory against its limit), with search and sorting (problems first
+by default). Select a card for that container's CPU and memory over the chosen range, with its
+memory limit drawn as a dashed line, how much of the time it was not running, and how many
+times it restarted in the range. A container only reports CPU and memory while it runs.
+
+Further down a server's page: how its CPU and memory use were **distributed** (the share of the
+time in each 10% band), **when it is busy** (average CPU or memory by hour of the day and weekday
+over the last 30 days, in your time zone), **storage** (a chart per filesystem with an estimate
+such as "full in about 3 days" when there is a clear growth trend, and none otherwise), and
+**reliability** (how long Docker takes to list containers, and how long the collector takes).
+
+Choose **All servers** for the whole fleet: containers by state and open incidents by severity
+(donuts), incidents opened over time by severity (stacked columns), what the incidents were
+about, servers by disk usage, the containers using the most memory and CPU right now, and each
+server's availability. Availability is the share of expected check-ins that arrived; it is
+approximate because it assumes each server's current check interval. Every chart can be shown
+as a table.
+
+Short ranges come from the stored check-ins, longer ones from the summaries described under
+[Database schema](#database-schema), so a year of history costs about as much to load as an
+hour. CSV/JSON export of the charts is planned (Milestone 8 on GitHub).
+
 ## Alerts and incidents
 
 Rules run on every collector check-in. Each problem opens at most one incident
@@ -758,7 +794,8 @@ pip install -r requirements-dev.txt   # the app's requirements plus pytest
 pytest
 ```
 
-No Docker, PostgreSQL or Redis is needed; the suite takes about 15 seconds. See
+No Docker, PostgreSQL or Redis is needed; the suite takes about a minute and a half. The chart
+helpers have their own tests that need only Node 20 or newer: `cd src/frontend && node --test`. See
 [TESTS.md](TESTS.md) for how the tests work, what they don't cover, and what every
 test is for.
 
@@ -776,6 +813,21 @@ firewall changes); `listener_states` and `firewall_states` hold what was last se
 recovery codes (the encrypted two-factor secret lives on the `users` row), and per-mount disk
 thresholds live in `app_settings`. `docker/postgres/init/01_create_users.sql` initialises
 the `users` table on a fresh volume.
+
+**Summarised history.** A background job (it checks every minute and does nothing when it is up to date) turns the check-in
+samples into `host_rollups`, `mount_rollups` and `container_rollups`: one row per server, mount or container
+per hour, day, week (Monday to Sunday) and month, all in UTC, with the average and maximum of each metric.
+Each tier is built from the finer one when its period ends, a period without check-ins gets no row, and the
+purge never deletes samples that have not been summarised yet. Nothing displays these yet; they are the
+foundation for the long-range graphs and statistics.
+
+The metrics tables carry only the indexes their queries use: `time` (for the hourly purge) and
+`(server_id, time)`, or `(server_id, container_id, time)` for containers. Older databases are
+migrated at start: the new indexes are created and the redundant single-column ones are dropped,
+which can be repeated safely. Creating an index briefly blocks writes to that table (a few
+seconds for a table of millions of rows); on a very large install, create the indexes yourself
+first with `CREATE INDEX CONCURRENTLY IF NOT EXISTS <name> ON <table> (<columns>)` using the names
+in `src/backend/models.py`, and the start-up migration will skip them.
 
 ## Project layout
 
@@ -804,6 +856,9 @@ src/
   backend/                  API: auth, monitoring, enrollment, rate limits, models
     alerts.py               alert engine: one incident per rule, auto-resolve
     rules.py                alert rules and default thresholds
+    rollups.py              summarises check-ins into hourly/daily/weekly/monthly rollups
+    history.py              range-aware history behind the Statistics page
+    stats.py                fleet statistics: incidents over time, availability, busy-hours heatmap
     totp.py                 one-time codes and recovery codes (standard library only)
     secrets_box.py          encrypts stored secrets with SECRETS_KEY; also prints a new key
     reset_2fa.py            command-line two-factor reset for a locked-out account
@@ -813,7 +868,9 @@ src/
     system_helper.py        optional kernel-log / wtmp helper (standard library only)
     health_checks.py        read-only checks available to the assistant
     service.py, prompts.py  Gemini assistant
-  frontend/                 React + Tailwind dashboard (Vite)
+  frontend/                 React + Tailwind dashboard (Vite); charts.jsx and chartMath.js are the
+                            charts (distributions.jsx: columns, donut, bars, heatmap), StatisticsPage.jsx,
+                            FleetStatistics.jsx, ServerInsights.jsx and ContainerStatistics.jsx the page
 tests/                      pytest suite
 ```
 
@@ -832,7 +889,10 @@ All paths are relative to `/api` when going through the frontend/nginx.
 | `GET /auth/sessions`, `POST /auth/sessions/revoke-others`, `DELETE /auth/sessions/{id}` | session | List and end your own sessions. |
 | `GET /auth/config` | – | Whether registration is open and whether the first account still needs a setup token. |
 | `GET /monitoring/overview` | session | Servers (latest metrics, filesystems, containers from the latest check-in, open incident count), pending servers (admins), active incidents and disk thresholds. |
-| `GET /monitoring/servers/{id}/history` | session | CPU, memory and root disk samples (`?minutes=`, default 30, max 1440). |
+| `GET /monitoring/servers/{id}/history` | session | A server's metrics over time. With `?range=` (`1h`, `6h`, `24h`, `7d`, `30d`, `90d`, `1y`, `all`) it returns at most about 500 points from the right level of detail, each with average and maximum of the requested `metrics` (`cpu,ram,swap,load,disk,inodes,docker_ms,collect_ms`). Without `range`: CPU, memory and root disk samples (`?minutes=`, default 30, max 1440). |
+| `GET /stats/fleet` | session | Incidents opened per bucket and severity, by kind, open now, mean time to resolve, and per-server availability for `?range=`. Cached for a minute. |
+| `GET /stats/servers/{id}/heatmap` | session | Average `?metric=cpu\|ram` by hour of the day and weekday over the last 30 days, for `?offset=` minutes from UTC. |
+| `GET /monitoring/servers/{id}/mounts/history`, `GET /monitoring/servers/{id}/containers/{container_id}/history` | session | The same for one filesystem (`?mount=/data`) or one container. |
 | `GET /monitoring/servers/{id}/containers/{container_id}` | session | One container's latest stats and history (`?limit=`, max 500). |
 | `POST /monitoring/servers` | admin | Add a server manually; returns its collector token. |
 | `PATCH /monitoring/servers/{id}/interval` | admin | Set check interval (15–86400 s). |

@@ -10,25 +10,26 @@ import threading
 import time
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 import redis
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
+from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import case, func, inspect, text
 
 from .alerts import CONTAINER_RULE_PREFIX, CRITICAL, SERVER_OFFLINE_RULE, SEVERITIES, active_rule_keys, raise_alert, resolve_alerts, sync_alerts
-from . import secrets_box, totp
+from . import history as history_service, rollups, secrets_box, stats, totp
 from .auth import (
     STAGE_ENROLLMENT, STAGE_FULL, count_pending_attempt, create_pending_two_factor, create_session, delete_pending_two_factor, delete_session, get_recent_logs,
     get_session, get_user_from_session, hash_password, issue_recovery_codes, list_user_sessions, read_pending_two_factor, recovery_codes_left, record_audit_log,
     register_user, revoke_other_sessions, revoke_user_session, validate_password, verify_credentials, verify_password, verify_second_factor,
 )
 from .db import SessionLocal, check_database, get_db
-from .models import AppSetting, AuditLog, Base, ChatMessage, ContainerMetric, Conversation, EnrollmentKey, FirewallState, HostMetric, IncidentAlert, JoinToken, ListenerState, MountMetric, PendingCollector, RecoveryCode, Server, SystemEvent, User
+from .models import AppSetting, AuditLog, Base, ChatMessage, ContainerMetric, ContainerRollup, Conversation, EnrollmentKey, FirewallState, HostMetric, HostRollup, IncidentAlert, JoinToken, ListenerState, MountMetric, MountRollup, PendingCollector, RecoveryCode, Server, SystemEvent, User
 
 from .db import engine
 from .config import (
@@ -229,6 +230,22 @@ def startup_event():
             connection.execute(text("ALTER TABLE system_events ADD COLUMN IF NOT EXISTS event_key VARCHAR(128)"))
             connection.execute(text("ALTER TABLE pending_collectors ADD COLUMN IF NOT EXISTS join_token_id INTEGER REFERENCES join_tokens(id) ON DELETE SET NULL"))
             connection.execute(text("CREATE INDEX IF NOT EXISTS ix_system_events_event_key ON system_events (event_key)"))
+            # Composite indexes that match how the metrics tables are read, then the single-column ones they make
+            # redundant (and the pointless indexes on each table's own primary key). Safe to repeat. Creating an index
+            # briefly blocks writes to that table; on a very large table create them first by hand with CONCURRENTLY.
+            for table, name, columns in (
+                ("host_metrics", "ix_host_metrics_server_time", "server_id, time"),
+                ("mount_metrics", "ix_mount_metrics_server_time", "server_id, time"),
+                ("system_events", "ix_system_events_server_time", "server_id, time"),
+                ("container_metrics", "ix_container_metrics_server_container_time", "server_id, container_id, time"),
+            ):
+                connection.execute(text(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({columns})"))
+            for redundant in (
+                "ix_host_metrics_id", "ix_host_metrics_server_id", "ix_mount_metrics_id", "ix_mount_metrics_server_id",
+                "ix_system_events_id", "ix_system_events_server_id",
+                "ix_container_metrics_id", "ix_container_metrics_server_id", "ix_container_metrics_container_id",
+            ):
+                connection.execute(text(f"DROP INDEX IF EXISTS {redundant}"))
             for column, column_type in (("totp_secret_enc", "TEXT"), ("totp_enabled", "BOOLEAN NOT NULL DEFAULT FALSE"), ("totp_last_step", "INTEGER"), ("password_changed_at", "TIMESTAMP WITH TIME ZONE")):
                 connection.execute(text(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {column} {column_type}"))
             connection.execute(text("ALTER TABLE incident_alerts ADD COLUMN IF NOT EXISTS rule_key VARCHAR(255)"))
@@ -724,6 +741,10 @@ def _admin_settings(db) -> dict:
 def purge_old_metrics(db, now: datetime | None = None) -> int:
     """Delete host and container samples older than the retention period."""
     cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=get_metrics_retention_days(db))
+    # Check-in samples that haven't been summarised yet are never deleted, whatever the retention says.
+    summarised_until = rollups.hour_watermark(db)
+    if summarised_until is not None:
+        cutoff = min(cutoff, summarised_until)
     deleted = db.query(HostMetric).filter(HostMetric.time < cutoff).delete(synchronize_session=False)
     deleted += db.query(ContainerMetric).filter(ContainerMetric.time < cutoff).delete(synchronize_session=False)
     deleted += db.query(MountMetric).filter(MountMetric.time < cutoff).delete(synchronize_session=False)
@@ -914,15 +935,130 @@ def latest_containers(db, server_id: int, host_time: datetime | None) -> list[Co
 HISTORY_MAX_MINUTES = 24 * 60
 
 
+RangeName = Literal["1h", "6h", "24h", "7d", "30d", "90d", "1y", "all"]
+
+
+def _wanted_metrics(raw: str | None, allowed: dict, default: tuple[str, ...]) -> tuple[str, ...]:
+    """The metrics a history request asked for, from a comma-separated list; only known names are accepted."""
+    if raw is None:
+        return default
+    names = tuple(dict.fromkeys(name.strip() for name in raw.split(",")))
+    if not names or len(raw) > 200 or any(name not in allowed for name in names):
+        raise HTTPException(status_code=422, detail=f"metrics must be a comma-separated list of: {', '.join(allowed)}.")
+    return names
+
+
+def _history_response(db, spec, server: Server, key: str | None, range_name: str, wanted: tuple[str, ...]) -> dict:
+    result = history_service.history(db, spec, server.id, key, range_name, wanted, server.check_interval_seconds)
+    return {"server_id": server.id, **result}
+
+
 @app.get("/monitoring/servers/{server_id}/history")
-def server_history(server_id: int, minutes: int = 30, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
-    """CPU, memory and root disk usage of one server over the last ``minutes``, oldest first."""
+def server_history(
+    server_id: int, minutes: int = 30, range_name: Annotated[RangeName | None, Query(alias="range")] = None, metrics: str | None = None,
+    session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db),
+):
+    """A server's metrics over time.
+
+    With ``range`` (1h to all): at most about 500 points from the right level of detail, each with the average and
+    maximum of the requested ``metrics``. Without it: the original answer for the last ``minutes`` (CPU, memory and
+    root disk, oldest first), which the dashboard's live chart uses.
+    """
     _current_user(session_id, db)
-    if not db.query(Server).filter(Server.id == server_id).first():
+    server = db.query(Server).filter(Server.id == server_id).first()
+    if not server:
         raise HTTPException(status_code=404, detail="Server not found.")
+    if range_name is not None:
+        return _history_response(db, history_service.HOST, server, None, range_name, _wanted_metrics(metrics, history_service.HOST_METRICS, history_service.DEFAULT_HOST_METRICS))
     since = datetime.now(timezone.utc) - timedelta(minutes=max(1, min(minutes, HISTORY_MAX_MINUTES)))
     rows = db.query(HostMetric.time, HostMetric.cpu_utilization_pct, HostMetric.ram_pct, HostMetric.disk_usage_pct).filter(HostMetric.server_id == server_id, HostMetric.time >= since).order_by(HostMetric.time).all()
     return {"server_id": server_id, "samples": [{"time": row.time.isoformat(), "cpu": row.cpu_utilization_pct, "ram": row.ram_pct, "disk": row.disk_usage_pct} for row in rows]}
+
+
+STATS_CACHE_SECONDS = 60
+
+
+@app.get("/stats/fleet")
+def fleet_statistics(range_name: Annotated[RangeName, Query(alias="range")] = "24h", session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    """Incidents over time and per-server availability for the Statistics page's all-servers view."""
+    _current_user(session_id, db)
+    # Keyed only by the validated range, so a request can't create an unbounded number of cache entries.
+    cache_key = f"homelab:stats:fleet:{range_name}"
+    try:
+        cached = redis_client.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:  # a cache problem must never break the page
+        cached = None
+    result = stats.fleet_stats(db, range_name)
+    try:
+        redis_client.set(cache_key, json.dumps(result), ex=STATS_CACHE_SECONDS)
+    except Exception:
+        pass
+    return result
+
+
+@app.get("/stats/servers/{server_id}/heatmap")
+def server_heatmap(
+    server_id: int, metric: Literal["cpu", "ram"] = "cpu", offset: Annotated[int, Query(ge=-stats.MAX_OFFSET_MINUTES, le=stats.MAX_OFFSET_MINUTES)] = 0,
+    session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db),
+):
+    """When a server is busy: its average per hour of the day and weekday over the last 30 days."""
+    _current_user(session_id, db)
+    server = db.query(Server).filter(Server.id == server_id).first()
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found.")
+    # Only existing servers, known metrics and a bounded offset get this far, so the cache can't grow without limit.
+    cache_key = f"homelab:stats:heatmap:{server.id}:{metric}:{offset}"
+    try:
+        cached = redis_client.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        pass
+    result = stats.hour_weekday_heatmap(db, server, metric, offset)
+    try:
+        redis_client.set(cache_key, json.dumps(result), ex=STATS_CACHE_SECONDS)
+    except Exception:
+        pass
+    return result
+
+
+@app.get("/monitoring/servers/{server_id}/mounts/history")
+def mount_history(
+    server_id: int, mount: Annotated[str, Query(min_length=1, max_length=255)], range_name: Annotated[RangeName, Query(alias="range")] = "24h", metrics: str | None = None,
+    session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db),
+):
+    """One filesystem's usage over time (``mount`` is its path, for example ``/data``)."""
+    _current_user(session_id, db)
+    server = db.query(Server).filter(Server.id == server_id).first()
+    if not server or not mount.startswith("/"):
+        raise HTTPException(status_code=404, detail="Server or mount not found.")
+    wanted = _wanted_metrics(metrics, history_service.MOUNT_METRICS, ("used_pct", "used_gb", "total_gb"))
+    result = _history_response(db, history_service.MOUNT, server, mount, range_name, wanted)
+    if result["data_since"] is None:
+        raise HTTPException(status_code=404, detail="Server or mount not found.")
+    return {**result, "mount": mount}
+
+
+@app.get("/monitoring/servers/{server_id}/containers/{container_id}/history")
+def container_history(
+    server_id: int, container_id: Annotated[str, PathParam(min_length=1, max_length=128)], range_name: Annotated[RangeName, Query(alias="range")] = "24h", metrics: str | None = None,
+    session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db),
+):
+    """One container's CPU and memory over time."""
+    _current_user(session_id, db)
+    server = db.query(Server).filter(Server.id == server_id).first()
+    if not server:
+        raise HTTPException(status_code=404, detail="Server or container not found.")
+    wanted = _wanted_metrics(metrics, history_service.CONTAINER_METRICS, ("cpu", "memory_mb", "memory_pct", "memory_limit_mb"))
+    result = _history_response(db, history_service.CONTAINER, server, container_id, range_name, wanted)
+    if result["data_since"] is None:
+        raise HTTPException(status_code=404, detail="Server or container not found.")
+    name = db.query(ContainerMetric.name).filter(ContainerMetric.server_id == server.id, ContainerMetric.container_id == container_id).order_by(ContainerMetric.time.desc()).limit(1).scalar()
+    if name is None:
+        name = db.query(ContainerRollup.name).filter(ContainerRollup.server_id == server.id, ContainerRollup.container_id == container_id).order_by(ContainerRollup.bucket_start.desc()).limit(1).scalar()
+    return {**result, "container_id": container_id, "name": name}
 
 
 CONTAINER_DETAIL_FIELDS = (
@@ -1233,6 +1369,24 @@ def analyze_memory_trends(db, now: datetime | None = None) -> None:
     db.commit()
 
 
+def metrics_maintenance(db, purge_due: bool) -> bool:
+    """Summarise newly completed periods, then (when due) purge and analyse. True when the purge ran.
+
+    Summaries come first and the purge is skipped if they fail, so history is never deleted before it was kept.
+    """
+    try:
+        rollups.run_rollups(db)
+    except Exception as exc:
+        db.rollback()
+        print(f"Rollups failed: {type(exc).__name__}: {exc}", flush=True)
+        return False
+    if not purge_due:
+        return False
+    purge_old_metrics(db)
+    analyze_memory_trends(db)
+    return True
+
+
 def _offline_watch_loop() -> None:
     last_metrics_purge: float | None = None
     while True:
@@ -1241,9 +1395,8 @@ def _offline_watch_loop() -> None:
         try:
             mark_offline_servers(db)
             purge_stale_pending(db)
-            if last_metrics_purge is None or time.monotonic() - last_metrics_purge >= METRICS_PURGE_INTERVAL_SECONDS:
-                purge_old_metrics(db)
-                analyze_memory_trends(db)
+            purge_due = last_metrics_purge is None or time.monotonic() - last_metrics_purge >= METRICS_PURGE_INTERVAL_SECONDS
+            if metrics_maintenance(db, purge_due):
                 last_metrics_purge = time.monotonic()
         except Exception as exc:  # keep the watcher alive through transient DB errors
             print(f"Offline watch failed: {type(exc).__name__}: {exc}", flush=True)
@@ -1270,6 +1423,8 @@ def delete_monitored_server(server_id: int, session_id: Annotated[str | None, Co
     if not server:
         raise HTTPException(status_code=404, detail="Server not found.")
 
+    for rollup in (HostRollup, MountRollup, ContainerRollup):
+        db.query(rollup).filter(rollup.server_id == server.id).delete(synchronize_session=False)
     db.query(HostMetric).filter(HostMetric.server_id == server.id).delete(synchronize_session=False)
     db.query(ContainerMetric).filter(ContainerMetric.server_id == server.id).delete(synchronize_session=False)
     db.query(MountMetric).filter(MountMetric.server_id == server.id).delete(synchronize_session=False)

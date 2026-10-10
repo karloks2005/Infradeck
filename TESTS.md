@@ -4,8 +4,8 @@ Vexion ships with an automated test suite. This page explains how to run it, wha
 covers (and what it doesn't), and what every single test is for, so you can decide
 whether a failure matters before you upgrade or change your setup.
 
-- **676 test cases** from 384 test functions (some functions run once per input).
-- **About 15 to 20 seconds** to run. No Docker, PostgreSQL, Redis, network or root access needed.
+- **798 test cases** from 469 test functions, plus 16 small tests of the chart helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
+- **About a minute and a half** to run. No Docker, PostgreSQL, Redis, network or root access needed.
 - **Safe to run next to a live install.** The tests use a throwaway in-memory database
   and fakes; they never touch your running containers or your data. (Two collector
   tests read this machine's `/proc` and root filesystem, read-only.)
@@ -86,7 +86,11 @@ Being clear about the limits matters, especially for a security-focused project:
 - **The web interface** (React) has no automated tests. Build errors show up when you
   run `docker compose up -d --build`; look at the dashboard after upgrading. This
   includes the Account page and the two-factor prompts: the endpoints behind them are
-  tested, the screens are not.
+  tested, the screens are not. The Account page, the sign-in code step and the Statistics
+  page (including container cards, the all-servers view, histograms, the heatmap and storage
+  charts) were checked by hand in a real browser (headless Chromium against a running stack,
+  desktop and phone width). Only the plain helper functions behind the charts have automated
+  tests.
 - **Your deployment**: Compose files, Traefik labels, nginx configuration, your VPN,
   firewall rules and the collector gate are not exercised by the suite. They were
   checked by hand against a running stack when written, not by an automated test.
@@ -134,9 +138,13 @@ docker compose logs --tail 20 collector        # "Sent host metrics and N contai
 | [`test_docker_proxy.py`](#test_docker_proxypy) | 111 | The read-only Docker proxy: what it allows, refuses and hides. |
 | [`test_enrollment.py`](#test_enrollmentpy) | 10 | Enrollment keys, collector credentials and offline-server detection. |
 | [`test_health_checks.py`](#test_health_checkspy) | 4 | The assistant's fixed health checks and the critical-only webhook. |
+| [`test_history.py`](#test_historypy) | 36 | The history API behind long-range charts: which level of detail answers each range, point limits, gaps, and agreement with the raw samples. |
+| [`test_indexes.py`](#test_indexespy) | 9 | The database indexes on the metrics tables: only the ones queries use, none duplicated. |
 | [`test_network_checks.py`](#test_network_checkspy) | 94 | The host's real network totals, listening-port inventory, optional internet check, firewall fingerprints, and the validation of all of it. |
 | [`test_pending_collectors.py`](#test_pending_collectorspy) | 28 | Adding servers: approval, join tokens, strict mode, re-pairing safety. |
+| [`test_rollups.py`](#test_rollupspy) | 31 | Summarised history: hourly, daily, weekly and monthly rollups, catching up, gaps, and purging only what has been summarised. |
 | [`test_rules.py`](#test_rulespy) | 20 | Alert thresholds: sustained breaches, per-mount disks, settings validation. |
+| [`test_stats.py`](#test_statspy) | 46 | Fleet statistics (incidents over time, availability) and the busy-hours heatmap: grouping, ranges, caching and validation. |
 | [`test_system_checks.py`](#test_system_checkspy) | 17 | Reboot, OOM, kernel-fault, clock and pending-reboot detection, and the System row's event list. |
 | [`test_system_helper.py`](#test_system_helperpy) | 35 | The optional system helper: kernel-log parsing, `wtmp`, crash detection, hostile input. |
 
@@ -504,6 +512,49 @@ tested hardest (91 cases). If any of these fail, do not run the proxy until it i
 | `test_unknown_check_is_rejected` | Asking for any check that isn't one of the fixed ones raises an error. |
 | `test_daily_checkup_alerts_only_for_critical_findings` | The daily check-up notifies the webhook only when something is critical. |
 
+### test_history.py
+
+The history endpoints that charts will use for any range from the last hour to all time. The key promise is
+that the answer is the same whether or not the background summarising has caught up.
+
+| Test | What it checks |
+|---|---|
+| `test_the_last_hour_is_one_point_per_check_in_with_its_average_and_maximum` | The last hour is one point per check-in (both ends included), each with average and maximum, oldest first, with UTC times. |
+| `test_a_week_of_samples_is_grouped_into_at_most_five_hundred_points_without_losing_anything` | A week is grouped into at most 500 points; the check-in count, the overall average and the highest maximum are unchanged by grouping. |
+| `test_grouping_keeps_the_exact_average_and_maximum_of_each_group` | Three check-ins grouped into one five-minute point give their exact average and maximum. |
+| `test_a_gap_stays_a_gap` | Two bursts of data hours apart have no points between them. |
+| `test_a_metric_that_was_never_reported_is_null_not_zero` | A metric the collector never sent comes back as null, not 0. |
+| `test_a_server_without_data_gives_an_empty_series` | A server with no data gives an empty series for every range, without errors. |
+| `test_thirty_days_use_hourly_summaries_and_match_the_samples` | 30 days is answered from hourly summaries whose figures equal the samples they summarise. |
+| `test_the_hour_that_has_not_been_summarised_yet_is_still_in_the_answer` | The newest, not yet summarised hour is built from the samples so the right edge is current. |
+| `test_the_answer_does_not_depend_on_how_far_the_rollup_job_has_got` *(4 inputs)* | For 30 days, 90 days, 1 year and all time, the answer is identical with no summaries, part-way through catching up, and fully caught up. |
+| `test_every_sample_is_counted_exactly_once_in_the_all_time_view` | All time is monthly and every check-in is counted exactly once. |
+| `test_weekly_points_start_on_mondays_and_the_current_week_is_partial` | Weekly points start on Mondays and the unfinished week is included. |
+| `test_a_long_series_is_thinned_to_the_point_limit` | 720 hourly rows are merged into at most 500 points without losing check-ins. |
+| `test_history_starts_at_the_first_check_in_not_at_a_bucket_boundary` | "History starts" is the first check-in, not the midnight or hour boundary of a summary, even after summarising. |
+| `test_when_old_samples_are_gone_the_oldest_summary_that_reaches_back_decides` | Once old samples are purged, the oldest hourly (then daily) summary that reaches further back gives the start. |
+| `test_a_series_with_no_data_has_no_start` | A series without data has no start. |
+| `test_a_container_series_has_cpu_memory_limit_and_down_counts` | A container series has CPU, memory, its limit and restarts (limit and restarts only with a maximum), and counts the check-ins when it wasn't running. |
+| `test_a_mount_series_is_picked_by_path` | A filesystem is chosen by its path, and other mounts are excluded. |
+| `test_container_summaries_agree_with_the_samples` *(2 inputs)* | Container history is identical before and after summarising. |
+| `test_the_endpoint_returns_the_series_for_a_range` | The server endpoint returns the requested metrics for a range. |
+| `test_without_a_range_the_original_answer_is_unchanged` | Without a range, the dashboard's original answer is unchanged. |
+| `test_unknown_ranges_and_metrics_are_refused` *(9 inputs)* | Unknown ranges, empty, doubled, oversized or odd metric lists are refused (422). |
+| `test_unknown_servers_mounts_and_containers_are_not_found` | Unknown servers, mounts and containers give 404; a relative mount path, a missing mount or an oversized id are refused. |
+| `test_the_container_and_mount_endpoints_return_their_series` | The container and mount endpoints return their series with names. |
+| `test_signing_in_is_required` | All the history endpoints refuse requests without a session. |
+
+### test_indexes.py
+
+The indexes on the metrics tables. The live migration is checked by hand against PostgreSQL
+(these tests use SQLite and check what the models declare).
+
+| Test | What it checks |
+|---|---|
+| `test_the_metrics_tables_carry_exactly_the_indexes_they_need` | Each metrics table has only the planned indexes: `time` for the purge, `(server_id, time)` (or `(server_id, container_id, time)` for containers) for reads. |
+| `test_deleting_a_server_and_purging_old_rows_can_both_use_an_index` *(4 inputs)* | Every metrics table keeps an index starting with `server_id` (deleting a server cascades through it) and one on `time` alone (the hourly purge). |
+| `test_a_primary_key_is_never_indexed_a_second_time` *(4 inputs)* | No table gets a redundant index on its own `id`. |
+
 ### test_network_checks.py
 
 Network checks: the host's real traffic totals, which ports it listens on, whether it can
@@ -648,6 +699,46 @@ from machines or people you didn't invite.
 | `test_a_bad_token_is_refused_even_in_open_mode` | Even in open mode, a token that is presented but wrong is refused. |
 | `test_install_info_reports_the_configured_addresses` | **Connect a server** receives the configured VPN address and image names, and whether strict mode is on. |
 
+### test_rollups.py
+
+The background job that summarises check-in samples into hourly, daily, weekly (Monday to Sunday) and
+monthly rows, all in UTC. If these fail, long-range history could be wrong, duplicated, or deleted before
+it was kept.
+
+| Test | What it checks |
+|---|---|
+| `test_buckets_start_on_utc_boundaries_and_weeks_on_monday` | Hours, days and months start on the boundary and a week starts on Monday (Sunday 23:59 belongs to the week before the next Monday). |
+| `test_a_time_with_another_offset_is_converted_to_utc_first` | A time with another offset (or none) is converted to UTC before choosing its bucket. |
+| `test_the_following_bucket_handles_month_ends_and_leap_years` | The next month after December is January, February in a leap year ends correctly, and weeks cross new year. |
+| `test_an_hour_is_summarised_with_average_maximum_and_count` | An hour's row has the correct check-in count, average and maximum, and a metric that was never reported stays unknown (not zero). |
+| `test_a_metric_missing_from_some_samples_is_averaged_over_the_ones_that_have_it` | A metric missing from some check-ins is averaged over those that have it. |
+| `test_a_history_of_nothing_but_unknowns_still_counts_check_ins_and_does_not_break` | Check-ins that report nothing still produce rows with unknown averages and don't break the job. |
+| `test_only_completed_buckets_are_written_after_a_short_grace_period` | An hour is written only after it ended plus a five-minute grace, so check-ins in flight are not missed. |
+| `test_running_twice_changes_nothing` | A second run with nothing new builds nothing and leaves every row as it was. |
+| `test_rebuilding_a_bucket_replaces_it_instead_of_duplicating_it` | Rebuilding a bucket (for example after losing the watermark) replaces its rows and includes late samples. |
+| `test_servers_mounts_and_containers_are_summarised_separately` | Each server, mount and container gets its own rows. |
+| `test_down_samples_count_the_check_ins_where_a_container_was_not_running` | A container's row records how many check-ins it was not running. |
+| `test_a_day_is_the_samples_weighted_average_of_its_hours_and_keeps_the_maximum` | A day is the weighted average of its hours (one reading of 100 and three of 0 average 25, not 50) and keeps the highest maximum. |
+| `test_each_average_remembers_how_many_check_ins_reported_it` | Every averaged metric records how many check-ins reported it. |
+| `test_a_container_that_was_stopped_part_of_the_time_is_averaged_over_the_time_it_ran` | A container stopped for part of the day isn't averaged as if it were idle: its average is over the time it ran. |
+| `test_hours_that_never_reported_a_metric_do_not_pull_a_day_toward_zero` | Hours without a value for a metric don't drag a day's average toward zero. |
+| `test_a_week_runs_monday_to_sunday_and_is_written_only_when_sunday_has_ended` | A week covers Monday to Sunday, excludes the next Monday, and is written only once Sunday is over. |
+| `test_a_month_is_built_from_its_days_including_a_leap_february` | A month is built from its days, including the 29 days of a leap February. |
+| `test_data_either_side_of_new_year_lands_in_different_months_and_weeks` | New Year's Eve and New Year's Day land in different months but in the same week. |
+| `test_every_tier_is_built_for_mounts_and_containers_too` | Filesystems and containers get all four tiers, not just servers. |
+| `test_a_gap_stays_a_gap` | Hours, days or servers with no data get no row; nothing is filled in. |
+| `test_the_first_run_summarises_the_history_that_already_exists` | On upgrade, existing samples are summarised, and only complete weeks are written. |
+| `test_new_samples_are_picked_up_by_the_next_run` | Later runs continue from where the last one stopped. |
+| `test_after_downtime_the_job_catches_up_a_chunk_at_a_time` | After downtime the job catches up in limited chunks until nothing is left. |
+| `test_a_long_empty_stretch_cannot_stall_the_job` | A long stretch with no data at all still moves the job forward. |
+| `test_the_watermark_is_stored_per_tier_and_a_damaged_one_is_ignored` | The progress marker is saved per tier, and a damaged one makes the job start over harmlessly. |
+| `test_without_any_summaries_the_purge_behaves_as_before` | With no summaries yet, retention alone decides what the purge deletes (unchanged behaviour). |
+| `test_samples_that_were_not_summarised_yet_are_never_purged` | The purge never deletes a sample newer than the last summarised hour, even when retention says it is old enough. |
+| `test_maintenance_summarises_before_it_purges` | Maintenance summarises first, then purges, so history is kept before it is deleted. |
+| `test_a_failing_rollup_job_stops_the_purge` | If summarising fails, nothing is purged that run. |
+| `test_between_purges_maintenance_only_summarises` | Between hourly purges, maintenance only summarises. |
+| `test_deleting_a_server_deletes_its_summaries_but_not_another_servers` | Deleting a server removes its summaries and leaves other servers' alone. |
+
 ### test_rules.py
 
 The alert thresholds, and the settings that control them.
@@ -674,6 +765,40 @@ The alert thresholds, and the settings that control them.
 | `test_mount_thresholds_are_validated_audited_and_replaced` | Per-mount settings are validated (absolute paths, 1 to 100, warning below critical, no extras), audited, and replace the old set; an empty set clears them. |
 | `test_corrupt_mount_thresholds_are_ignored` | Damaged per-mount settings are ignored. |
 | `test_overview_shows_latest_mounts_and_disk_thresholds` | The dashboard shows the latest filesystems and the thresholds used to colour them. |
+
+### test_stats.py
+
+The all-servers statistics and the busy-hours heatmap behind the Statistics page.
+
+| Test | What it checks |
+|---|---|
+| `test_rule_keys_become_readable_groups` *(15 inputs)* | Alert rule keys become readable groups ("Disk space", "Server offline"); unknown, empty or odd keys become "Other". |
+| `test_long_or_odd_rule_keys_never_leak_through` | A huge or unknown rule key is never shown as is. |
+| `test_incidents_are_counted_per_day_and_severity_for_a_week` | Incidents opened are counted per day and severity, and per kind of problem. |
+| `test_the_bucket_size_follows_the_range` | Hours up to a day, days up to a month, weeks up to a year and months beyond; weeks start on Monday. |
+| `test_incidents_older_than_the_range_are_left_out` | Only incidents that opened inside the range are counted. |
+| `test_mean_time_to_resolve_uses_only_resolved_incidents` | The average time to resolve counts resolved incidents only. |
+| `test_open_incidents_are_counted_by_severity_whatever_the_range` | Incidents open right now are counted by severity, however old they are. |
+| `test_an_install_without_incidents_gives_empty_answers` | No incidents gives empty, well-formed answers for every range. |
+| `test_an_unknown_severity_is_counted_as_info_not_dropped` | An unexpected severity is counted as info instead of being lost. |
+| `test_the_amount_of_data_read_is_capped_and_says_so` | Reading is capped and the answer says when it was cut. |
+| `test_a_server_that_always_reported_is_fully_available` | A server that reported every time is 100% available; one that never reported is unknown, not 0%. |
+| `test_a_server_that_was_silent_for_half_the_time_is_half_available` | A long silence lowers availability accordingly. |
+| `test_a_new_server_is_not_blamed_for_the_time_before_it_existed` | A new server is judged from its first check-in. |
+| `test_availability_is_exact_even_after_the_history_has_been_summarised` | Availability stays correct once history is summarised (a first version counted from midnight). |
+| `test_availability_never_exceeds_one_hundred_percent` | Reporting more often than expected still caps at 100%. |
+| `test_availability_works_for_every_range_without_data` | Every range works for servers without data. |
+| `test_the_endpoint_returns_incidents_and_availability` | The endpoint returns both parts. |
+| `test_answers_are_cached_for_a_minute_per_range_only` | Answers are cached for a minute, one entry per range. |
+| `test_a_broken_cache_does_not_break_the_page` | If Redis is down the page still works. |
+| `test_unknown_ranges_are_refused_and_never_become_cache_keys` *(5 inputs)* | Odd ranges are refused (422) and leave nothing in the cache. |
+| `test_signing_in_is_required` | The fleet endpoint needs a session. |
+| `test_the_heatmap_puts_each_hour_in_its_weekday_and_hour_cell` | Each hour lands in the right weekday and hour cell, averaged. |
+| `test_the_heatmap_follows_the_viewers_time_zone` | The viewer's time zone moves cells across midnight correctly. |
+| `test_the_heatmap_ignores_samples_older_than_thirty_days_and_unknowns` | Samples older than 30 days and missing readings are left out. |
+| `test_the_heatmap_is_the_same_before_and_after_summarising` | The heatmap is identical before and after the history is summarised. |
+| `test_the_heatmap_endpoint_validates_everything_and_caches_per_server_metric_and_offset` | Unknown metric, offset out of range or unknown server are refused and cache nothing new. |
+| `test_the_heatmap_endpoint_needs_a_session` | The heatmap endpoint needs a session. |
 
 ### test_system_checks.py
 
@@ -731,6 +856,24 @@ log lines, user names), so most of these tests feed it hostile input.
 | `test_clean_shutdown_keeps_the_reboot_informational` | A reboot after a clean shutdown stays informational. |
 | `test_helper_arriving_after_the_reboot_was_noticed_updates_the_event_and_alert` | If the helper finishes after the reboot was first noticed, the event and incident are updated to the right answer. |
 | `test_invalid_last_shutdown_values_are_dropped` | An unexpected value for "last shutdown" is discarded. |
+
+## Frontend helper tests
+
+The chart helpers (axis ticks, gaps, histograms, the hour-by-weekday grid, donut slices, the
+"full in about N days" estimate, container and fleet rankings) are plain JavaScript with no
+dependencies, so they have tests that run with Node's built-in runner:
+
+```bash
+cd src/frontend && node --test        # Node 20 or newer; nothing to install
+```
+
+| File | Tests | What they protect |
+|---|---|---|
+| `tests/chartMath.test.js` | 9 | Histogram bins and weights, the hour-by-weekday grid, donut fractions, the disk-full estimate (clear trends only), axis ticks, gaps staying gaps, weighted summaries, time labels and forecast wording. |
+| `tests/fleetLogic.test.js` | 7 | Container states, top-N rankings, disk ranking and colours, online detection, availability rows, readable durations, and incident columns that fill quiet days with zeros. |
+
+The React components themselves (the page layout, tooltips, selection) have no automated tests;
+they were checked by hand in a real browser.
 
 ## Adding a test
 

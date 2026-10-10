@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -172,8 +172,11 @@ class EnrollmentKey(Base):
 class HostMetric(Base):
     __tablename__ = "host_metrics"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), index=True, nullable=False)
+    # Reads are "this server, newest first", so (server_id, time) serves them; time alone serves the purge.
+    __table_args__ = (Index("ix_host_metrics_server_time", "server_id", "time"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), nullable=False)
     time: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True, nullable=False)
     cpu_utilization_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     load_1m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -213,8 +216,10 @@ class SystemEvent(Base):
 
     __tablename__ = "system_events"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), index=True, nullable=False)
+    __table_args__ = (Index("ix_system_events_server_time", "server_id", "time"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), nullable=False)
     time: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True, nullable=False)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)  # reboot | oom_kill | kernel_fault | kernel_error
     # Identifies the occurrence so a snapshot that repeats it doesn't record it twice.
@@ -227,8 +232,10 @@ class MountMetric(Base):
 
     __tablename__ = "mount_metrics"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), index=True, nullable=False)
+    __table_args__ = (Index("ix_mount_metrics_server_time", "server_id", "time"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), nullable=False)
     time: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True, nullable=False)
     mount: Mapped[str] = mapped_column(String(255), nullable=False)
     fs_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
@@ -271,9 +278,13 @@ class FirewallState(Base):
 class ContainerMetric(Base):
     __tablename__ = "container_metrics"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), index=True, nullable=False)
-    container_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    # One container's history is "this server, this container, newest first". time alone serves the purge and the
+    # "containers at one check-in" lookup, where an exact timestamp already identifies the check-in.
+    __table_args__ = (Index("ix_container_metrics_server_container_time", "server_id", "container_id", "time"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), nullable=False)
+    container_id: Mapped[str] = mapped_column(String(128), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     image: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -311,3 +322,97 @@ class IncidentAlert(Base):
     rule_key: Mapped[Optional[str]] = mapped_column(String(255), index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True, nullable=False)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class HostRollup(Base):
+    """A summary of one server's check-ins over an hour, day, week or month (UTC). See rollups.py.
+
+    Every metric has an average and a maximum. ``samples`` is how many check-ins went into the row; ``n_<metric>`` is
+    how many of them reported that metric, which is the weight when a coarser tier averages this one. A metric the
+    collector never reported is None.
+    """
+
+    __tablename__ = "host_rollups"
+    # The unique key serves one server's history; (tier, bucket_start) serves building and purging a tier.
+    __table_args__ = (UniqueConstraint("server_id", "tier", "bucket_start"), Index("ix_host_rollups_tier_bucket", "tier", "bucket_start"))
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), nullable=False)
+    tier: Mapped[str] = mapped_column(String(8), nullable=False)  # hour | day | week | month
+    bucket_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    samples: Mapped[int] = mapped_column(Integer, nullable=False)
+    avg_cpu: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    n_cpu: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_cpu: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    avg_load: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    n_load: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_load: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    avg_ram: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    n_ram: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_ram: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    avg_swap: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    n_swap: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_swap: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    avg_disk: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    n_disk: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_disk: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    avg_inodes: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    n_inodes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_inodes: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    avg_docker_ms: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    n_docker_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_docker_ms: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    avg_collect_ms: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    n_collect_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_collect_ms: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+
+class MountRollup(Base):
+    """A summary of one filesystem's usage over an hour, day, week or month (UTC)."""
+
+    __tablename__ = "mount_rollups"
+    __table_args__ = (UniqueConstraint("server_id", "mount", "tier", "bucket_start"), Index("ix_mount_rollups_tier_bucket", "tier", "bucket_start"))
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), nullable=False)
+    mount: Mapped[str] = mapped_column(String(255), nullable=False)
+    tier: Mapped[str] = mapped_column(String(8), nullable=False)
+    bucket_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    samples: Mapped[int] = mapped_column(Integer, nullable=False)
+    avg_used_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    n_used_pct: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_used_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    avg_used_gb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    n_used_gb: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_total_gb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    avg_inodes_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    n_inodes_pct: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_inodes_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+
+class ContainerRollup(Base):
+    """A summary of one container over an hour, day, week or month (UTC)."""
+
+    __tablename__ = "container_rollups"
+    __table_args__ = (UniqueConstraint("server_id", "container_id", "tier", "bucket_start"), Index("ix_container_rollups_tier_bucket", "tier", "bucket_start"))
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), nullable=False)
+    container_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    tier: Mapped[str] = mapped_column(String(8), nullable=False)
+    bucket_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    samples: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Check-ins in which the container was not running; the rest of ``samples`` it was.
+    down_samples: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    avg_cpu: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    n_cpu: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_cpu: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    avg_memory_mb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    n_memory_mb: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_memory_mb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    avg_memory_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    n_memory_pct: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_memory_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    max_memory_limit_mb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    max_restarts: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

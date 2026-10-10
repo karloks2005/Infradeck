@@ -1,5 +1,6 @@
 import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { useEffect, useRef, useState } from 'react'
+import StatisticsContent from './StatisticsPage.jsx'
 
 const AUTH_KEY = 'homie-auth-user'
 const USERS_KEY = 'homie-auth-users'
@@ -46,6 +47,7 @@ function parseAgentMessage(text) {
 
 const navigation = [
   { label: 'Dashboard', to: '/', icon: '▣' },
+  { label: 'Statistics', to: '/statistics', icon: '▤' },
   { label: 'Agent', to: '/agent', icon: '◷' },
   { label: 'Account', to: '/account', icon: '◉' },
   { label: 'Admin', to: '/admin', icon: '⚙', adminOnly: true },
@@ -2541,6 +2543,16 @@ function App() {
           element={
             <RequireAuth user={user}>
               <AgentPage user={user} onLogout={handleLogout} />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/statistics"
+          element={
+            <RequireAuth user={user}>
+              <AppShell user={user} onLogout={handleLogout}>
+                <StatisticsContent request={apiRequest} />
+              </AppShell>
             </RequireAuth>
           }
         />
