@@ -443,6 +443,7 @@ stops firing.
 | Possible memory leak (steady climb over 12 hours) | 10 MB/h and 20% growth | warning |
 | Docker unreachable (after it worked before) | 3 check-ins in a row | critical |
 | Docker slow to list containers | over 2000 ms, 3 check-ins in a row | warning |
+| Collector can't keep up with its check interval | gathering takes over 80% of the interval, 3 check-ins in a row | warning |
 | New listener reachable from other machines | stays open 60 minutes | warning |
 | Firewall configuration changed | stays open 60 minutes | info |
 | Firewall protection reduced (ufw turned off, rules removed, a file gone) | stays open 60 minutes | warning |
@@ -480,7 +481,7 @@ the same number of check-ins.
 
 Admins can change every threshold, the number of check-ins in a row, how long
 event incidents (reboots, OOM kills, container exits, removals and image changes)
-stay open, the slow-Docker limit, the memory-leak window and sensitivity, and
+stay open, the slow-Docker and slow-collection limits, the memory-leak window and sensitivity, and
 **per-mount disk thresholds** under
 **Admin → Alerts**. A per-mount override replaces the default disk thresholds for
 that mount path on every server. Changes apply from each server's next check-in
@@ -653,7 +654,7 @@ from the backend's response to each report.
 
 - **Collector privileges.** In the Compose installs the collector has no Docker
   socket, drops all capabilities and has a read-only filesystem. Only the Docker
-  proxy mounts the socket; it has no network, answers three read-only requests and
+  proxy mounts the socket; it has no network, answers four read-only requests and
   strips environment variables, labels, mounts and error text from what it returns.
   Everything a collector reports about containers is validated again by the backend
   (types, ranges, lengths, counts) before it is stored.

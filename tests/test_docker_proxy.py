@@ -24,12 +24,26 @@ STATS = {"cpu_stats": {"cpu_usage": {"total_usage": 10}, "system_cpu_usage": 100
          "blkio_stats": {"io_service_bytes_recursive": []}, "pids_stats": {"current": 3}, "name": "/web", "id": CID}
 
 
+# What Docker returns for one-shot: the same readings but no earlier one to compare with.
+ONE_SHOT_STATS = {**STATS, "precpu_stats": {}}
+
+
+@pytest.fixture(autouse=True)
+def _fresh_collector_state():
+    collector._cpu_previous.clear()
+    collector._one_shot_unsupported = False
+    yield
+    collector._cpu_previous.clear()
+    collector._one_shot_unsupported = False
+
+
 # --- routing: the allow-list ---------------------------------------------------------------
 
 @pytest.mark.parametrize("target", [
     "/containers/json", "/containers/json?all=1", f"/containers/{CID}/json", f"/containers/{CID}/stats?stream=false", f"/containers/{CID[:12]}/json",
+    f"/containers/{CID}/stats?stream=false&one-shot=true",
 ])
-def test_the_three_read_requests_are_allowed(target):
+def test_the_four_read_requests_are_allowed(target):
     assert proxy.route("GET", target) is not None
 
 
@@ -47,6 +61,13 @@ def test_only_get_is_allowed(method):
     # query abuse
     "/containers/json?all=1&filters=x", "/containers/json?all=0", "/containers/json?all=1&all=1", "/containers/json?size=1", "/containers/json?",
     f"/containers/{CID}/stats", f"/containers/{CID}/stats?stream=true", f"/containers/{CID}/stats?stream=false&one-shot=1", f"/containers/{CID}/json?size=1",
+    # one-shot: exactly one spelling, in exactly one order
+    f"/containers/{CID}/stats?stream=false&one-shot=false", f"/containers/{CID}/stats?stream=false&one-shot=", f"/containers/{CID}/stats?stream=false&one-shot",
+    f"/containers/{CID}/stats?one-shot=true&stream=false", f"/containers/{CID}/stats?one-shot=true", f"/containers/{CID}/stats?stream=true&one-shot=true",
+    f"/containers/{CID}/stats?stream=false&one-shot=true&one-shot=true", f"/containers/{CID}/stats?stream=false&one-shot=true&stream=true",
+    f"/containers/{CID}/stats?stream=false&one-shot=True", f"/containers/{CID}/stats?stream=false&one-shot=TRUE", f"/containers/{CID}/stats?stream=false&One-Shot=true",
+    f"/containers/{CID}/stats?stream=false&one-shot=true&", f"/containers/{CID}/stats?stream=false&one-shot=true&x=1", f"/containers/{CID}/stats?stream=false&&one-shot=true",
+    f"/containers/{CID}/stats?stream=false&one-shot=true#f", f"/containers/{CID}/stats?stream=false&one-shot=true ", f"/containers/{CID}/stats?stream=false&one-shot=%74rue",
     # traversal, encoding, padding
     f"/containers/{CID}/../../images/json", "/containers/../images/json", f"/containers/{CID}/json/..", "//containers/json", "/containers//json",
     "/containers/json/", f"/containers/{CID}/json/", "/containers/%6Ason", "/containers/json%00", f"/containers/{CID}%2fjson", "/%2e%2e/containers/json",
@@ -90,7 +111,8 @@ class _FakeDocker(BaseHTTPRequestHandler):
 
     def do_GET(self):
         _FakeDocker.seen.append(self.path)
-        routes = {"/containers/json?all=1": LISTING, f"/containers/{CID}/json": INSPECT, f"/containers/{CID}/stats?stream=false": STATS}
+        routes = {"/containers/json?all=1": LISTING, f"/containers/{CID}/json": INSPECT, f"/containers/{CID}/stats?stream=false": STATS,
+                  f"/containers/{CID}/stats?stream=false&one-shot=true": ONE_SHOT_STATS}
         body = json.dumps(routes.get(self.path)).encode() if self.path in routes else b"nope"
         self.send_response(200 if self.path in routes else 404)
         self.send_header("Content-Length", str(len(body)))
@@ -136,10 +158,31 @@ def test_collector_works_through_the_proxy_and_never_sees_secrets(stack):
     assert SECRET not in json.dumps(container)
 
 
+def test_the_one_shot_request_is_passed_on_and_answers_are_cut_down(stack):
+    port, _ = stack
+
+    status, body = _raw(port, "GET", f"/containers/{CID}/stats?stream=false&one-shot=true")
+
+    assert status == 200 and _FakeDocker.seen == [f"/containers/{CID}/stats?stream=false&one-shot=true"]
+    assert set(json.loads(body)) == {"cpu_stats", "precpu_stats", "memory_stats", "networks", "blkio_stats", "pids_stats"}
+
+
+def test_cpu_comes_from_the_change_between_two_collections_through_the_proxy(stack):
+    port, _ = stack
+
+    [first] = collector.collect_containers(port)
+    [second] = collector.collect_containers(port)
+
+    assert "cpu_pct" not in first and "cpu_pct" not in second  # the fake daemon reports identical counters twice
+    assert collector._cpu_previous == {CID: (10, 100)} and not collector._one_shot_unsupported
+    assert f"/containers/{CID}/stats?stream=false" not in _FakeDocker.seen  # only the one-shot form was used
+
+
 def test_refused_requests_never_reach_the_docker_daemon(stack):
     port, _ = stack
     attacks = [("POST", "/containers/create"), ("DELETE", f"/containers/{CID}"), ("GET", f"/containers/{CID}/archive?path=/etc"), ("GET", "/containers/../info"),
-               ("GET", f"/containers/{CID}/json?size=1"), ("POST", f"/containers/{CID}/start"), ("GET", "/containers/%6Ason")]
+               ("GET", f"/containers/{CID}/json?size=1"),
+               ("GET", f"/containers/{CID}/stats?one-shot=true&stream=false"), ("GET", f"/containers/{CID}/stats?stream=false&one-shot=false"), ("POST", f"/containers/{CID}/start"), ("GET", "/containers/%6Ason")]
     for method, path in attacks:
         assert _raw(port, method, path)[0] == 403, (method, path)
 

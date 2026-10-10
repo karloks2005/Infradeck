@@ -31,6 +31,8 @@ DEFAULT_THRESHOLDS: dict[str, float | int] = {
     "event_window_minutes": 60,
     # Listing containers slower than this (sustained) means the Docker daemon is struggling.
     "docker_slow_ms": 2000,
+    # Collecting a check-in taking more than this share of the server's check interval (sustained) means it is falling behind.
+    "collect_slow_pct": 80,
     # A container whose memory climbs steadily is flagged as a possible leak; see memory_trend_rules.
     "leak_window_hours": 12, "leak_min_mb_per_hour": 10, "leak_min_growth_pct": 20,
 }
@@ -288,6 +290,11 @@ def system_rules(db, server, thresholds: dict, now: datetime, active_keys: froze
             firing[key] = (CRITICAL, f"Docker is unreachable on {host}", f"Container data has stopped updating because {DOCKER_REASONS.get(latest.docker_reason, DOCKER_REASONS['error'])}. Check that the Docker daemon (and the docker-proxy container) is running.")
     elif len(samples) >= sustained and all(sample.docker_status == "ok" and sample.docker_latency_ms is not None and sample.docker_latency_ms > thresholds["docker_slow_ms"] for sample in samples):
         firing[f"{SYSTEM_RULE_PREFIX}docker_slow"] = (WARNING, f"Docker is responding slowly on {host}", f"Listing containers took {latest.docker_latency_ms} ms (limit {thresholds['docker_slow_ms']} ms) for several check-ins in a row. The daemon may be overloaded or the host starved of resources.")
+    budget_ms = server.check_interval_seconds * 1000 * thresholds["collect_slow_pct"] / 100
+    if len(samples) >= sustained and all(sample.collect_duration_ms is not None and sample.collect_duration_ms > budget_ms for sample in samples):
+        firing[f"{SYSTEM_RULE_PREFIX}collect_slow"] = (
+            WARNING, f"The collector on {host} can't keep up with its check interval",
+            f"Gathering data took {latest.collect_duration_ms / 1000:.1f} s of the {server.check_interval_seconds} s check interval (limit {thresholds['collect_slow_pct']:g}%) for several check-ins in a row, so data arrives late. Raise the check interval or reduce the number of containers on this machine.")
     if latest.reboot_required:
         firing[f"{SYSTEM_RULE_PREFIX}reboot_required"] = (INFO, f"{host} needs a reboot", "Installed updates (often a new kernel) only take effect after a restart.")
     return firing

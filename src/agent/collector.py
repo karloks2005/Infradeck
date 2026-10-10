@@ -17,6 +17,7 @@ import ctypes.util
 import hashlib
 import http.client
 import json
+import math
 import os
 import platform
 import re
@@ -631,6 +632,8 @@ def collect_containers(socket_path: str | None = None, info: dict[str, Any] | No
     if info is not None:
         info["latency_ms"] = int((time.monotonic() - listing_started) * 1000)
     result = []
+    for stale in set(_cpu_previous) - {item.get("Id") for item in containers}:
+        del _cpu_previous[stale]
     for item in containers:
         container_id = item.get("Id", "")
         if not container_id:
@@ -698,21 +701,67 @@ def _format_ports(ports: dict[str, Any] | None) -> str | None:
     return ", ".join(sorted(set(mappings)))[:512] or None
 
 
+# Cumulative CPU counters (container, whole system) from the previous check-in, per container. The one-shot stats
+# call returns at once but carries no earlier reading, so CPU % is the change since the last check-in. The first
+# check-in after a start has no figure for a container (unknown, not zero).
+_cpu_previous: dict[str, tuple[float, float]] = {}
+# Set once the proxy or daemon refuses the one-shot request while the normal one works (an older proxy image).
+_one_shot_unsupported = False
+
+
+def _fetch_stats(socket_path: str, container_id: str) -> Any:
+    """One container's stats: the quick one-shot request, falling back to the normal one that waits about a second."""
+    global _one_shot_unsupported
+    base = f"/containers/{container_id}/stats?stream=false"
+    tried_one_shot = not _one_shot_unsupported
+    if tried_one_shot:
+        try:
+            return _docker_request(socket_path, f"{base}&one-shot=true")
+        except (OSError, ValueError):
+            pass
+    stats = _docker_request(socket_path, base)
+    if tried_one_shot:
+        _one_shot_unsupported = True
+    return stats
+
+
+def _number(value: Any) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) else None
+
+
+def _cpu_percent(container_id: str, stats: dict[str, Any]) -> float | None:
+    cpu = stats.get("cpu_stats") or {}
+    previous = stats.get("precpu_stats") or {}
+    total = _number((cpu.get("cpu_usage") or {}).get("total_usage"))
+    system = _number(cpu.get("system_cpu_usage"))
+    before_total = _number((previous.get("cpu_usage") or {}).get("total_usage"))
+    before_system = _number(previous.get("system_cpu_usage"))
+    if total is not None and system is not None:
+        remembered = _cpu_previous.get(container_id)
+        _cpu_previous[container_id] = (total, system)
+        if not before_system:
+            before_total, before_system = remembered if remembered else (None, None)
+    if None in (total, system, before_total, before_system):
+        return None
+    cpu_delta, system_delta = total - before_total, system - before_system
+    # A counter that went backwards means the container restarted; skip that sample.
+    if cpu_delta <= 0 or system_delta <= 0:
+        return None
+    # cgroup v2 omits percpu_usage, so prefer online_cpus like `docker stats` does.
+    cores = cpu.get("online_cpus") or len((cpu.get("cpu_usage") or {}).get("percpu_usage") or []) or 1
+    return round(cpu_delta / system_delta * cores * 100, 2)
+
+
 def _container_usage(socket_path: str, container_id: str) -> dict[str, Any]:
     try:
-        stats = _docker_request(socket_path, f"/containers/{container_id}/stats?stream=false")
+        stats = _fetch_stats(socket_path, container_id)
     except (OSError, ValueError):
         return {}
     usage: dict[str, Any] = {}
     try:
-        cpu = stats.get("cpu_stats") or {}
-        previous = stats.get("precpu_stats") or {}
-        cpu_delta = (cpu.get("cpu_usage") or {}).get("total_usage", 0) - (previous.get("cpu_usage") or {}).get("total_usage", 0)
-        system_delta = cpu.get("system_cpu_usage", 0) - previous.get("system_cpu_usage", 0)
-        # cgroup v2 omits percpu_usage, so prefer online_cpus like `docker stats` does.
-        cores = cpu.get("online_cpus") or len((cpu.get("cpu_usage") or {}).get("percpu_usage") or []) or 1
-        if cpu_delta > 0 and system_delta > 0:
-            usage["cpu_pct"] = round(cpu_delta / system_delta * cores * 100, 2)
+        cpu_pct = _cpu_percent(container_id, stats)
+        if cpu_pct is not None:
+            usage["cpu_pct"] = cpu_pct
 
         memory = stats.get("memory_stats") or {}
         # Page cache is reclaimable; subtract it the same way `docker stats` does.
@@ -891,6 +940,8 @@ def run_collector() -> None:
             server, host = collect_host()
             containers, docker = collect_docker()
             host.update(docker)
+            # How long gathering took, so the dashboard can warn when it no longer fits in the check interval.
+            host["collect_duration_ms"] = int((time.monotonic() - started) * 1000)
             response = send_payload(api_url, server_id, token, {"server": server, "host": host, "containers": containers})
             interval = max(15, int(response.get("interval_seconds", interval)))
             print(f"Sent host metrics and {len(containers)} container records; next check in {interval}s", flush=True)

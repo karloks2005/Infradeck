@@ -607,3 +607,65 @@ def test_the_longest_container_name_still_fits_every_incident_key(db):
 
     keys = list(_active(db))
     assert keys and max(len(key) for key in keys) < 255
+
+
+# --- collector keeping up with its check interval (#44) ---------------------------------------------
+
+def test_a_collector_too_slow_for_its_interval_warns_when_sustained_and_clears(db):
+    for _ in range(2):
+        _ingest(db, collect_duration_ms=55_000)          # 60 s interval, limit 80% = 48 s
+    assert "system:collect_slow" not in _active(db)
+    _ingest(db, collect_duration_ms=55_000)
+    alert = _active(db)["system:collect_slow"]
+    assert alert.severity == alerts.WARNING and "55.0 s" in alert.description and "60 s" in alert.description
+
+    _ingest(db, collect_duration_ms=900)
+    assert "system:collect_slow" not in _active(db)
+
+
+def test_collection_within_the_limit_never_warns(db):
+    for _ in range(6):
+        _ingest(db, collect_duration_ms=47_999)
+    assert "system:collect_slow" not in _active(db)
+
+
+def test_one_slow_check_in_among_fast_ones_does_not_warn(db):
+    for duration in (900, 55_000, 900, 55_000, 900):
+        _ingest(db, collect_duration_ms=duration)
+    assert "system:collect_slow" not in _active(db)
+
+
+def test_old_collectors_that_do_not_send_the_duration_never_trigger_it(db):
+    for _ in range(6):
+        _ingest(db)
+    assert "system:collect_slow" not in _active(db)
+    for duration in (55_000, None, 55_000):
+        _ingest(db, collect_duration_ms=duration)
+    assert "system:collect_slow" not in _active(db)
+
+
+def test_the_limit_follows_the_servers_check_interval(db):
+    db.get(Server, 5).check_interval_seconds = 15
+    db.commit()
+    for _ in range(3):
+        _ingest(db, collect_duration_ms=13_000)         # fine at 60 s, too slow at 15 s
+    assert "system:collect_slow" in _active(db)
+
+
+def test_the_limit_is_an_editable_validated_threshold():
+    assert rules.DEFAULT_THRESHOLDS["collect_slow_pct"] == 80
+    for bad in (0, 101, -5, "80", True, None):
+        with pytest.raises(ValueError):
+            rules.validate_thresholds({"collect_slow_pct": bad}, rules.DEFAULT_THRESHOLDS)
+    assert rules.validate_thresholds({"collect_slow_pct": 60}, rules.DEFAULT_THRESHOLDS)["collect_slow_pct"] == 60
+
+
+@pytest.mark.parametrize("bad", ["12", -1, 10**12, True, 1.5, None, [1], float("nan")])
+def test_a_hostile_collection_time_is_dropped_not_stored(db, bad):
+    _ingest(db, collect_duration_ms=bad)
+    assert db.query(HostMetric).order_by(HostMetric.id.desc()).first().collect_duration_ms is None
+
+
+def test_a_sane_collection_time_is_stored(db):
+    _ingest(db, collect_duration_ms=1234)
+    assert db.query(HostMetric).order_by(HostMetric.id.desc()).first().collect_duration_ms == 1234

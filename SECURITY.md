@@ -8,7 +8,7 @@ This page says what each component can reach, so you can decide what to run.
 | Component | Runs as | Reaches | Notes |
 |---|---|---|---|
 | Collector | container | host `/proc`, the host filesystem (read-only), the Docker proxy, the backend over HTTP | No Docker socket in the compose installs. |
-| Docker proxy | container, uid 0, no capabilities | the Docker socket; a Unix socket shared only with the collector; no network | Allows three read-only requests. See below. |
+| Docker proxy | container, uid 0, no capabilities | the Docker socket; a Unix socket shared only with the collector; no network | Allows four read-only requests. See below. |
 | System helper (optional) | container, uid 0 with **one** capability | kernel log, `/var/log/wtmp` (read-only), one output volume | Off by default. Details below. |
 | Collector gate (server stack) | nginx container, no capabilities | the backend; publishes one port on your VPN address | The only way to reach collector endpoints. See below. |
 | Backend / frontend / database | containers | each other | Only the frontend port is published. |
@@ -51,8 +51,10 @@ A Docker socket mount is root on the host: the `:ro` flag only protects the sock
 API behind it, and anything that can reach the API can start a privileged container. So in the
 compose files the collector **does not mount the socket**. A separate `docker-proxy` container does:
 
-- It answers exactly three requests: `GET /containers/json?all=1`, `GET /containers/<id>/json` and
-  `GET /containers/<id>/stats?stream=false`. Everything else (other endpoints, other methods, extra
+- It answers exactly four requests: `GET /containers/json?all=1`, `GET /containers/<id>/json`,
+  `GET /containers/<id>/stats?stream=false` and the same stats request with `&one-shot=true` (which makes
+  Docker answer at once instead of waiting a second for a second CPU reading; the collector works out CPU %
+  from the change since its previous check-in). Everything else (other endpoints, other methods, extra
   query parameters, encoded or padded paths) gets a 403 and is logged. Matching is literal against the
   whole request target, with no decoding.
 - It cuts the answers down to a fixed list of fields. For container inspect that is the ID, name,

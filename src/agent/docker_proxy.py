@@ -2,11 +2,14 @@
 
 The Docker socket is all-or-nothing: whatever can talk to it can start a privileged container,
 which is root on the host. Only this proxy mounts the socket. It listens on a Unix socket in a
-volume that only the collector shares (no network port at all), and answers exactly three kinds of request:
+volume that only the collector shares (no network port at all), and answers exactly four kinds of request:
 
     GET /containers/json?all=1
     GET /containers/<id>/json
     GET /containers/<id>/stats?stream=false
+    GET /containers/<id>/stats?stream=false&one-shot=true
+
+The last one returns immediately instead of waiting a second for Docker to take a second CPU reading.
 
 Everything else is refused, and the answers are cut down to the fields the collector uses: the
 inspect output is where a container's environment variables (often secrets) live, and they never
@@ -36,7 +39,7 @@ _ID = r"[0-9a-f]{12,64}"
 # Matched against the whole request target, query string included.
 _LIST = re.compile(r"/containers/json(\?all=1)?")
 _INSPECT = re.compile(rf"/containers/{_ID}/json")
-_STATS = re.compile(rf"/containers/{_ID}/stats\?stream=false")
+_STATS = re.compile(rf"/containers/{_ID}/stats\?stream=false(&one-shot=true)?")
 
 
 def _pick(source: Any, keys: tuple[str, ...]) -> dict[str, Any]:

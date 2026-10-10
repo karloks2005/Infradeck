@@ -204,6 +204,8 @@ class HostMetric(Base):
     # Whether the host can reach the internet (ok | degraded | dns_failed | down); None when the check is off.
     internet_status: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     internet_latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # How long the collector took to gather this check-in (milliseconds); None from collectors that don't say.
+    collect_duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
 
 class SystemEvent(Base):

@@ -895,10 +895,23 @@ const refresh = async () => {
     // Inicijalno učitavanje
     refresh()
 
-    const timer = setInterval(refresh, LIVE_GRAPH_REFRESH_INTERVAL_SECONDS * 1000)
+    // No polling while the tab is hidden; refresh straight away when it comes back.
+    let timer = null
+    const start = () => { if (timer === null) timer = setInterval(refresh, LIVE_GRAPH_REFRESH_INTERVAL_SECONDS * 1000) }
+    const stop = () => { if (timer !== null) { clearInterval(timer); timer = null } }
+    const onVisibilityChange = () => {
+      if (document.hidden) { stop(); return }
+      refresh()
+      start()
+    }
+    if (!document.hidden) start()
+    document.addEventListener('visibilitychange', onVisibilityChange)
 
     // Obavezno čišćenje timera pri unmountu
-    return () => clearInterval(timer)
+    return () => {
+      stop()
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
   }, [user?.id]) // <-- Stabilna instanca, okida se samo pri promjeni ID-a
 
   const servers = overview.servers || []
@@ -2058,6 +2071,10 @@ function IncidentThresholdsSection() {
         <label className="flex flex-col gap-3 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:py-2.5">
           <span><span className="text-[#bcbcbc]">Slow Docker</span><span className="block text-xs text-[#7f8589]">Milliseconds to list containers before Docker counts as slow (sustained)</span></span>
           <ThresholdInput label="Slow Docker threshold in milliseconds" value={values?.docker_slow_ms} step={100} onChange={set('docker_slow_ms')} disabled={loading} />
+        </label>
+        <label className="flex flex-col gap-3 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:py-2.5">
+          <span><span className="text-[#bcbcbc]">Slow collection</span><span className="block text-xs text-[#7f8589]">Warning when gathering data takes more than this percent of the check interval (sustained)</span></span>
+          <ThresholdInput label="Slow collection threshold in percent of the check interval" value={values?.collect_slow_pct} step={5} onChange={set('collect_slow_pct')} disabled={loading} />
         </label>
         <div className="flex flex-col gap-3 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:py-2.5">
           <span className="shrink-0"><span className="text-[#bcbcbc]">Possible memory leak</span><span className="block text-xs text-[#7f8589]">Warning when a container's memory climbs steadily</span></span>

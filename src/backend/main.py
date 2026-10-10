@@ -221,7 +221,7 @@ def startup_event():
                 ("boot_id", "VARCHAR(64)"), ("oom_kill_total", "INTEGER"), ("kernel_tainted", "INTEGER"),
                 ("ntp_synced", "BOOLEAN"), ("reboot_required", "BOOLEAN"), ("last_shutdown", "VARCHAR(16)"),
                 ("docker_status", "VARCHAR(16)"), ("docker_reason", "VARCHAR(16)"), ("docker_latency_ms", "INTEGER"),
-                ("internet_status", "VARCHAR(16)"), ("internet_latency_ms", "INTEGER"),
+                ("internet_status", "VARCHAR(16)"), ("internet_latency_ms", "INTEGER"), ("collect_duration_ms", "INTEGER"),
             ):
                 connection.execute(text(f"ALTER TABLE host_metrics ADD COLUMN IF NOT EXISTS {column} {column_type}"))
             for column, column_type in (("exit_code", "INTEGER"), ("oom_killed", "BOOLEAN"), ("finished_at", "TIMESTAMP WITH TIME ZONE"), ("image_id", "VARCHAR(80)")):
@@ -1433,6 +1433,8 @@ def _clean_system_fields(fields: dict) -> None:
         fields["docker_reason"] = None
     if "docker_latency_ms" in fields:
         fields["docker_latency_ms"] = _whole_number(fields["docker_latency_ms"], 0, 600_000)
+    if "collect_duration_ms" in fields:
+        fields["collect_duration_ms"] = _whole_number(fields["collect_duration_ms"], 0, 3_600_000)
     if "internet_status" in fields and fields["internet_status"] not in INTERNET_STATUSES:
         fields["internet_status"] = None
     if "internet_latency_ms" in fields:

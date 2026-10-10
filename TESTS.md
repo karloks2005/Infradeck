@@ -4,7 +4,7 @@ Vexion ships with an automated test suite. This page explains how to run it, wha
 covers (and what it doesn't), and what every single test is for, so you can decide
 whether a failure matters before you upgrade or change your setup.
 
-- **628 test cases** from 366 test functions (some functions run once per input).
+- **676 test cases** from 384 test functions (some functions run once per input).
 - **About 15 to 20 seconds** to run. No Docker, PostgreSQL, Redis, network or root access needed.
 - **Safe to run next to a live install.** The tests use a throwaway in-memory database
   and fakes; they never touch your running containers or your data. (Two collector
@@ -127,11 +127,11 @@ docker compose logs --tail 20 collector        # "Sent host metrics and N contai
 | [`test_alerts.py`](#test_alertspy) | 10 | The incident engine: one incident per problem, resolve, container rules. |
 | [`test_auth_backend.py`](#test_auth_backendpy) | 50 | Accounts, passwords, the first-account setup token, and the cross-site request check. |
 | [`test_collector_mounts.py`](#test_collector_mountspy) | 1 | Which filesystems the collector reports. |
-| [`test_container_detail.py`](#test_container_detailpy) | 5 | Per-container details and parsing of Docker's stats. |
+| [`test_container_detail.py`](#test_container_detailpy) | 18 | Per-container details and parsing of Docker's stats. |
 | [`test_conversations.py`](#test_conversationspy) | 1 | Deleting one assistant conversation leaves the others alone. |
-| [`test_container_checks.py`](#test_container_checkspy) | 111 | Docker health, container exit codes, inventory and image changes, memory-leak trends, and the validation of everything a collector sends about containers. |
+| [`test_container_checks.py`](#test_container_checkspy) | 126 | Docker health, container exit codes, inventory and image changes, memory-leak trends, and the validation of everything a collector sends about containers. |
 | [`test_dashboard_host.py`](#test_dashboard_hostpy) | 8 | The "this machine" logic, history charts, container list and incident counts. |
-| [`test_docker_proxy.py`](#test_docker_proxypy) | 91 | The read-only Docker proxy: what it allows, refuses and hides. |
+| [`test_docker_proxy.py`](#test_docker_proxypy) | 111 | The read-only Docker proxy: what it allows, refuses and hides. |
 | [`test_enrollment.py`](#test_enrollmentpy) | 10 | Enrollment keys, collector credentials and offline-server detection. |
 | [`test_health_checks.py`](#test_health_checkspy) | 4 | The assistant's fixed health checks and the critical-only webhook. |
 | [`test_network_checks.py`](#test_network_checkspy) | 94 | The host's real network totals, listening-port inventory, optional internet check, firewall fingerprints, and the validation of all of it. |
@@ -155,6 +155,7 @@ out of their own install.
 |---|---|
 | `test_codes_match_the_rfc_6238_reference_vectors` *(6 inputs)* | The one-time code generator gives the exact answers published in the TOTP standard (RFC 6238), so it will match any authenticator app. |
 | `test_a_code_is_accepted_in_its_own_period_and_one_either_side_but_not_further` | A code works in its own 30-second period and one either side (clock drift), not further away. |
+| `test_a_code_cannot_be_replayed` | A code that just signed you in is refused if used again in its window; the next period's code works. |
 | `test_a_code_cannot_be_used_twice_or_after_a_newer_one` | A code that was already used, or an older one, is refused. |
 | `test_malformed_codes_are_rejected` *(12 inputs)* | Empty, short, long, non-numeric, huge and non-string codes are refused without errors. |
 | `test_spaces_and_a_hyphen_in_a_typed_code_are_ignored` | `123 456` and `123-456` are accepted as `123456`. |
@@ -323,6 +324,14 @@ Accounts, passwords, first-run protection and the cross-site check.
 | `test_container_detail_returns_latest_and_chronological_history` | A container's detail view returns its latest numbers and a history sorted oldest to newest. |
 | `test_container_detail_is_visible_to_regular_users` | Regular users can open container details (they are read-only). |
 | `test_container_detail_returns_404_for_unknown_server` | Asking for an unknown server gives a clean 404. |
+| `test_the_quick_one_shot_request_is_tried_first` | Stats are fetched with the fast one-shot request first. |
+| `test_cpu_is_the_change_since_the_previous_check_in_and_the_first_has_none` | CPU % is worked out from the change since the last check-in; the first check-in shows no figure rather than a false 0. |
+| `test_containers_do_not_share_cpu_history` | Each container's CPU is measured against its own earlier reading. |
+| `test_a_counter_that_goes_backwards_skips_that_sample_and_recovers` | A container restart (counters reset) skips one sample, then measures from the new baseline. |
+| `test_the_normal_request_is_used_when_one_shot_is_refused_and_remembered` | With an older proxy that refuses one-shot, the collector falls back to the normal request and stops retrying the quick one. |
+| `test_a_container_that_vanished_does_not_make_one_shot_look_unsupported` | A container removed mid-collection doesn't switch the quick request off. |
+| `test_hostile_cpu_counters_give_no_figure_and_no_crash` *(6 inputs)* | Text, null, boolean, list, object and NaN counters give no CPU figure and no error. |
+| `test_cpu_state_for_containers_that_are_gone_is_dropped` | Remembered readings for containers that no longer exist are discarded. |
 | `test_container_usage_parses_docker_stats` | Docker's raw statistics are converted correctly into CPU %, memory used and percentage (ignoring reclaimable cache), network and disk totals, and process count. |
 | `test_format_ports_lists_published_bindings` | Published ports are shown as `8080->80/tcp`, once even if both IPv4 and IPv6 are bound, and unpublished ports are skipped. |
 
@@ -394,6 +403,14 @@ validation of container data, because everything a collector reports is untruste
 | `test_the_api_schema_already_refuses_container_entries_that_are_not_objects` | The API itself rejects container lists with non-object entries. |
 | `test_hostile_container_records_never_break_ingest_or_other_data` | Odd records are cleaned or dropped, and the host's own numbers in the same check-in are still recorded. |
 | `test_no_more_than_500_containers_are_accepted_per_check_in` | At most 500 containers are stored per check-in. |
+| `test_a_collector_too_slow_for_its_interval_warns_when_sustained_and_clears` | Gathering data over 80% of the check interval for 3 check-ins in a row opens a warning, and it clears when collection is fast again. |
+| `test_collection_within_the_limit_never_warns` | Collection just under the limit never warns. |
+| `test_one_slow_check_in_among_fast_ones_does_not_warn` | A single slow check-in isn't enough. |
+| `test_old_collectors_that_do_not_send_the_duration_never_trigger_it` | Collectors that don't report the duration (or skip it sometimes) never trigger the warning. |
+| `test_the_limit_follows_the_servers_check_interval` | The limit is a share of that server's own interval, so a 15 s interval is stricter than a 60 s one. |
+| `test_the_limit_is_an_editable_validated_threshold` | The 80% default, its 1–100 bounds and rejection of text, booleans and null. |
+| `test_a_hostile_collection_time_is_dropped_not_stored` *(8 inputs)* | Text, negative, absurd, boolean, fractional, null, list and NaN durations are discarded. |
+| `test_a_sane_collection_time_is_stored` | A normal duration is saved with the check-in. |
 | `test_the_longest_container_name_still_fits_every_incident_key` | Even the longest allowed name keeps every incident key within the database limit, so a crafted name cannot make check-ins fail. |
 
 **Inventory changes and image drift**
@@ -448,12 +465,14 @@ tested hardest (91 cases). If any of these fail, do not run the proxy until it i
 
 | Test | What it checks |
 |---|---|
-| `test_the_three_read_requests_are_allowed` *(5 inputs)* | The exact requests the collector needs (list containers, inspect one, one stats snapshot) are allowed. |
+| `test_the_four_read_requests_are_allowed` *(6 inputs)* | The exact requests the collector needs (list containers, inspect one, one stats snapshot, and the quick one-shot stats form) are allowed. |
 | `test_only_get_is_allowed` *(8 inputs)* | Every method except GET (POST, PUT, DELETE, PATCH, HEAD, OPTIONS, lowercase `get`, CONNECT) is refused. |
 | `test_everything_else_is_refused` *(63 inputs)* | Everything outside the allow-list is refused: other endpoints (`/info`, images, exec, start, kill, export, archive, logs), extra or changed query strings, path traversal, encoded or padded paths, injected line breaks, odd container IDs. |
 | `test_inspect_output_drops_environment_and_everything_unneeded` | The container description is cut down to the needed fields (including exit code, out-of-memory flag, finish time and image ID); environment variables (often secrets), mounts, labels, host configuration and Docker's free-text error message never leave the proxy. |
 | `test_list_and_stats_output_are_cut_down` | The same filtering applies to the container list and stats. |
 | `test_unexpected_upstream_shapes_do_not_crash_the_filters` *(7 inputs)* | Strange or malformed answers from Docker don't crash the proxy. |
+| `test_the_one_shot_request_is_passed_on_and_answers_are_cut_down` | The quick stats request reaches Docker unchanged and the answer is cut down to the usual fields. |
+| `test_cpu_comes_from_the_change_between_two_collections_through_the_proxy` | Through the real proxy the collector uses only the quick request and remembers the CPU counters for next time. |
 | `test_collector_works_through_the_proxy_and_never_sees_secrets` | End to end: the real collector gets correct container data through the proxy and no secret reaches it. |
 | `test_refused_requests_never_reach_the_docker_daemon` | Attack requests are rejected with 403 and Docker is never contacted. |
 | `test_upstream_failures_become_a_generic_502` | If Docker errors or is down, the caller gets a plain "Upstream error" with no details. |
