@@ -228,6 +228,15 @@ The collector's network checks are passive or opt-in, and add no privileges:
 - **Visibility.** Like all monitoring data, the list of listening ports and firewall state is visible to
   every signed-in account. Keep registration closed on a public dashboard.
 
+## Client addresses and collector installs
+
+- **Client IPs.** nginx accepts `X-Forwarded-For` only from private or Docker network addresses (for
+  example Traefik), so login and registration rate limits see the real client address and it can't be
+  spoofed from outside.
+- **No one-line installer.** The old `docker run` install is gone. Remote machines run the compose
+  command **Connect a server** generates (signed, digest-pinned images), and machines set up from
+  `collector-compose.yml` build the images locally.
+
 ## Statistics and history
 
 - **Who can see it.** Every signed-in account sees the same statistics as the dashboard, for every

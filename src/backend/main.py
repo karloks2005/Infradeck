@@ -507,7 +507,7 @@ def two_factor_status(session_id: Annotated[str | None, Cookie(alias=SESSION_COO
 def two_factor_setup(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     _session, user = _account_session(session_id, db, allow_limited=True)
     if not secrets_box.available():
-        raise HTTPException(status_code=503, detail="Two-factor needs SECRETS_KEY to be configured on the server. See the README.")
+        raise HTTPException(status_code=503, detail="Two-factor needs SECRETS_KEY to be configured on the server. See docs/accounts.md (Two-factor sign-in).")
     if user.totp_enabled:
         raise HTTPException(status_code=409, detail="Two-factor is already turned on. Turn it off first to set it up again.")
     enforce_limit(redis_client, scope="2fa-setup", subject=user.id, limit=10, window_seconds=3600)

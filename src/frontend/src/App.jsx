@@ -1744,7 +1744,7 @@ function TwoFactorPolicySetting() {
   return (
     <AdminSection title="Two-factor" description="Protects sign-in with a code from an authenticator app, on top of the password.">
       <Toggle label="Require two-factor for administrators" description="An administrator without it can only reach the two-factor setup until it is done." checked={state?.required ?? false} onChange={change} disabled={state === null || saving} />
-      {state && !state.configured && <p className="mt-3 rounded-xl border border-amber-400/30 bg-amber-400/5 p-3 text-xs text-amber-200">SECRETS_KEY is not set on the server, so two-factor can't be set up and this is <strong>not being enforced</strong> yet. Set it in <code>.env</code> (see the README, Secrets at rest) and restart.</p>}
+      {state && !state.configured && <p className="mt-3 rounded-xl border border-amber-400/30 bg-amber-400/5 p-3 text-xs text-amber-200">SECRETS_KEY is not set on the server, so two-factor can't be set up and this is <strong>not being enforced</strong> yet. Set it in <code>.env</code> (see docs/accounts.md, Two-factor sign-in) and restart.</p>}
       {message && <p className={`mt-3 text-xs ${message.ok ? 'text-emerald-300' : 'text-amber-200'}`}>{message.text}</p>}
     </AdminSection>
   )
@@ -2360,7 +2360,7 @@ function TwoFactorSection({ status, reload, onEnrolled }) {
 
   return (
     <AdminSection title="Two-factor sign-in" description="A 6-digit code from an authenticator app (such as Aegis, Authy or Google Authenticator) is asked for after your password.">
-      {!status.available && <p className="rounded-xl border border-amber-400/30 bg-amber-400/5 p-3 text-sm text-amber-200">Two-factor can't be set up because the server has no <code>SECRETS_KEY</code>. An administrator needs to set one in <code>.env</code> (see the README, Secrets at rest).</p>}
+      {!status.available && <p className="rounded-xl border border-amber-400/30 bg-amber-400/5 p-3 text-sm text-amber-200">Two-factor can't be set up because the server has no <code>SECRETS_KEY</code>. An administrator needs to set one in <code>.env</code> (see docs/accounts.md, Two-factor sign-in).</p>}
 
       {status.available && codes && <RecoveryCodesPanel codes={codes} doneLabel={status.setup_required || onEnrolled ? 'Continue' : 'Done'} onDone={() => { setCodes(null); if (onEnrolled) onEnrolled() }} />}
 
