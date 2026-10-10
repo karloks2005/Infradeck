@@ -56,6 +56,9 @@ for what every component can touch and the limits of each protection.
 - **Accounts with roles**: the first account (created with a setup token) is the
   admin; other accounts get a read-only view. Passwords must be at least 16
   characters. Redis-backed sessions and login/registration rate limiting.
+- **Account security**: optional two-factor sign-in (authenticator app and single-use
+  recovery codes), **required for admins by default**; change your password, review
+  and end your sessions, and reset a locked-out account from the host.
 - **Homie chat assistant** (optional) restricted to predefined read-only checks.
 
 <ui - Three phone screenshots side by side (about 390 px wide): the dashboard top with the bottom tab bar, a server card with the Containers list open, and Admin → Alerts thresholds>
@@ -768,7 +771,8 @@ per filesystem in `mount_metrics` and one per container in `container_metrics` (
 also records the exit code, out-of-memory flag, finish time and image ID), all with the
 same timestamp. `system_events` holds reboots, OOM kills, kernel messages, container
 changes (appeared, removed, image changed) and network changes (ports opened or closed,
-firewall changes); `listener_states` and `firewall_states` hold what was last seen, `join_tokens` the hashed single-use tokens, and per-mount disk
+firewall changes); `listener_states` and `firewall_states` hold what was last seen, `join_tokens` the hashed single-use tokens, `recovery_codes` the hashed two-factor
+recovery codes (the encrypted two-factor secret lives on the `users` row), and per-mount disk
 thresholds live in `app_settings`. `docker/postgres/init/01_create_users.sql` initialises
 the `users` table on a fresh volume.
 
@@ -799,6 +803,9 @@ src/
   backend/                  API: auth, monitoring, enrollment, rate limits, models
     alerts.py               alert engine: one incident per rule, auto-resolve
     rules.py                alert rules and default thresholds
+    totp.py                 one-time codes and recovery codes (standard library only)
+    secrets_box.py          encrypts stored secrets with SECRETS_KEY; also prints a new key
+    reset_2fa.py            command-line two-factor reset for a locked-out account
   agent/
     collector.py            metrics collector (standard library only)
     docker_proxy.py         read-only Docker API proxy (standard library only)
@@ -868,6 +875,10 @@ same address as everything else.
 | The **Network** row says *no config found* for the firewall | None of the known firewall files exist on that host (`/etc/ufw`, `/etc/nftables.conf`, `/etc/iptables/rules.v4`). The check reads configuration, not the live ruleset, so a host that configures its firewall some other way shows this. |
 | The **Network** row says *not checked* for the internet | The check is opt-in. Set `HOMELAB_CONNECTIVITY_TARGETS` on that collector (for example `1.1.1.1:443`). |
 | Listeners show *unknown* or the Network row is empty | The collector couldn't read the host's network tables (older collector, or a table with more than 500,000 sockets). An unreadable report never raises a "port closed" alert. |
+| "Invalid code." although the code looks right | Codes depend on the clock: check the phone's time is automatic. A code also can't be used twice, so wait for the next one. Five wrong codes lock the code step for 5 minutes. |
+| Two-factor setup says it is not available | `SECRETS_KEY` is missing or invalid in `.env`. Generate one (see [Two-factor sign-in](#two-factor-sign-in)) and restart the backend. The backend log shows a SECURITY WARNING while the key is missing. |
+| Lost the authenticator and the recovery codes | Run `docker compose exec backend python src/backend/reset_2fa.py <email>` on the host, then sign in with the password and set it up again. |
+| Authenticator codes stopped working after a restore or `.env` change | `SECRETS_KEY` changed or was lost, so the stored secret can't be decrypted. Restore the old key (rotation: `new,old`), or use a recovery code and the reset command. |
 | Server marked offline | It missed 3 check-ins in a row. Check the machine, its collector log and its route to the dashboard. The incident resolves on the next report. |
 
 ## License
