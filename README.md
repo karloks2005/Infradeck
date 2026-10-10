@@ -142,41 +142,42 @@ There are two Compose files:
 | `compose.yml` | Laptop / development (the default when you run `docker compose` without `-f`) | Dashboard on port 5173 on all interfaces; plain HTTP; optional Caddy (`--profile https`). |
 | `docker-compose.server.yml` | Server behind an existing Traefik | Traefik labels and network; HTTPS-only session cookie; only the first account can register; port 5173 bound to `127.0.0.1`; no Caddy; **collector endpoints removed from the public side** and served by a separate collector gate on your VPN address. |
 
-### 1. Fill in the placeholders
+### 1. Create `.env` on the server
 
-In `docker-compose.server.yml`, replace every value marked `# CHANGE ME`:
+Nothing in `docker-compose.server.yml` needs editing: everything specific to you comes from
+`.env`, so `git pull` can always update the file. Start from the production template:
 
-| Setting | Placeholder | Replace with |
+```bash
+cp example.env .env
+```
+
+Then set at least these:
+
+| Setting | Default | Meaning |
 |---|---|---|
-| `traefik.http.routers.homelab.rule` | ``Host(`dashboard.example.com`)`` | Your domain |
-| `traefik.http.routers.homelab.entrypoints` | `websecure` | Your Traefik HTTPS entrypoint name |
-| `traefik.http.routers.homelab.tls.certresolver` | `letsencrypt` | Your Traefik certificate resolver name |
-| `traefik.docker.network` **and** `networks.traefik.name` | `traefik_default` | The Docker network Traefik is attached to (both must match) |
+| `POSTGRES_PASSWORD` | *(required)* | A long random password for the bundled database. |
+| `DASHBOARD_DOMAIN` | *(required)* | Your domain, without `https://`. Used for the Traefik router. |
+| `TRAEFIK_ENTRYPOINT` | `websecure` | Your Traefik HTTPS entrypoint name. |
+| `TRAEFIK_CERT_RESOLVER` | `letsencrypt` | Your Traefik certificate resolver name. |
+| `TRAEFIK_NETWORK` | `traefik_default` | The Docker network Traefik is attached to. |
+| `TRAEFIK_ROUTER` | `homelab` | Name of this dashboard's Traefik router and service; change it only if it clashes with another one. |
+| `COMPOSE_FILE` | `docker-compose.server.yml` | Makes plain `docker compose ...` commands use the server file (see below). |
 
 Find the network with `docker network ls` or
 `docker inspect <traefik-container> --format '{{json .NetworkSettings.Networks}}'`.
 The entrypoint and resolver names are in Traefik's static configuration
 (`entryPoints:` / `certificatesResolvers:`).
 
-### 2. Create `.env` on the server
+### 2. Use the right Compose file
 
-```bash
-cp .env.example .env
-```
+`COMPOSE_FILE=docker-compose.server.yml` in `.env` matters. Without it, Compose picks
+`compose.yml` (the development stack), and an `up` would replace the server containers
+with ones that have no Traefik labels and open registration.
 
-Set at least `POSTGRES_PASSWORD`, and add
-
-```bash
-COMPOSE_FILE=docker-compose.server.yml
-```
-
-so plain `docker compose ...` commands use the server file. Without it, Compose
-picks `compose.yml` (the development stack), and an `up` would replace the
-server containers with ones that have no Traefik labels and open registration.
-
-Don't rename or delete the Compose files in the checkout. `git pull` then can't
-update them (or refuses to run), and if both `compose.yml` and
-`docker-compose.yml` exist in the folder, Compose silently uses `compose.yml`.
+**Don't copy the server file under another name** (for example `docker-compose.yml`). If
+both `compose.yml` and `docker-compose.yml` exist, Compose silently uses `compose.yml`, and
+a copy won't receive updates. If you made a copy of an older version, move your values
+into `.env`, delete the copy, and continue with `docker-compose.server.yml`.
 
 ### 3. Start it
 
@@ -559,7 +560,9 @@ standard-library Python.
 | `ADMIN_BOOTSTRAP_TOKEN` | generated at start | Setup token for the first account. Leave empty to have one generated and printed in the backend log until the first account exists. |
 | `FRONTEND_BIND` | `0.0.0.0` (dev), `127.0.0.1` (server file) | Interface for the dashboard's plain-HTTP port. |
 | `FRONTEND_PORT` | `5173` | Dashboard port on the host. |
-| `CORS_ORIGINS` | `http://localhost:5173` | Comma-separated origins. Also the allow-list for the cross-site request check: a state-changing request from any other origin is refused unless its `Origin` matches the `Host` the dashboard was reached on. Add your dashboard URL if something in front rewrites `Host`. |
+| `DASHBOARD_DOMAIN` | *(required on a server)* | Domain of the dashboard, without `https://` (server file). |
+| `TRAEFIK_ENTRYPOINT` / `TRAEFIK_CERT_RESOLVER` / `TRAEFIK_NETWORK` / `TRAEFIK_ROUTER` | `websecure` / `letsencrypt` / `traefik_default` / `homelab` | Your Traefik names (server file). |
+| `CORS_ORIGINS` | `http://localhost:5173` (dev), `https://<DASHBOARD_DOMAIN>` (server file) | Comma-separated origins. Also the allow-list for the cross-site request check: a state-changing request from any other origin is refused unless its `Origin` matches the `Host` the dashboard was reached on. Add your dashboard URL if something in front rewrites `Host`. |
 | `LOGIN_RATE_LIMIT` / `LOGIN_RATE_WINDOW_SECONDS` | `5` / `60` | Login attempts per IP and per email. |
 | `REGISTER_RATE_LIMIT` / `REGISTER_RATE_WINDOW_SECONDS` | `3` / `3600` | Registrations per IP. |
 | `COLLECTOR_BIND` / `COLLECTOR_PORT` | `127.0.0.1` / `8081` | Server file: address and port where the collector gate is published. Set the address to your VPN's. |
@@ -730,7 +733,6 @@ the `users` table on a fresh volume.
 ```text
 compose.yml                 development stack (default for `docker compose`)
 docker-compose.server.yml   server stack behind Traefik
-docker-compose-example.yml  template for the server stack
 collector-compose.yml       collector-only stack for monitored machines
 SECURITY.md                 what each component can touch, and its limits
 TESTS.md                    how to run the tests and what each one checks
@@ -801,7 +803,7 @@ same address as everything else.
 |---|---|
 | A new machine never shows up under **New servers detected** | `docker logs homelab-collector` on that machine. "Could not reach …" means the address in the command isn't reachable from it (firewall, `localhost`, wrong IP/domain). |
 | Collector log says "Backend no longer accepts server …" | The server was deleted on the dashboard; it is asking to join again, so click **Add** or **Dismiss**. |
-| `network traefik_default declared as external, but could not be found` | You're using `docker-compose.server.yml` on a machine without that Traefik network. Use `compose.yml` for development, or fix the network name. |
+| `network traefik_default declared as external, but could not be found` | You're using `docker-compose.server.yml` on a machine without that Traefik network. Use `compose.yml` for development, or set `TRAEFIK_NETWORK` in `.env` to the network Traefik is really on. |
 | Dashboard shows old behaviour after a code change or `git pull` | Rebuild **all** services with `docker compose up -d --build` (with `-f docker-compose.server.yml` on a server unless `COMPOSE_FILE` is set) and hard-refresh the browser (Ctrl+Shift+R). |
 | "The machine running the dashboard isn't reporting yet" at the top | The stack's own collector hasn't checked in: add it under **New servers detected**, then wait one check interval. If it is reporting, its image is outdated: `docker exec homelab-collector grep -c dashboard_host /app/collector.py` prints `0`. Rebuild it (`docker compose build --no-cache collector && docker compose up -d collector`). |
 | A server shows only `/` and no **Storage** bars for other disks | Its collector predates per-mount reporting. Install a newer collector image (run a freshly generated command, or `docker compose -f collector-compose.yml up -d --build`). A disk mounted after the collector started appears after a collector restart. |

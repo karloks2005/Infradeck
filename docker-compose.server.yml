@@ -1,7 +1,9 @@
 # Server stack, published over HTTPS by an existing Traefik.
 #   docker compose -f docker-compose.server.yml up -d --build
-# Tip: put COMPOSE_FILE=docker-compose.server.yml in this server's .env so a plain
-# `docker compose ...` uses this file. Replace every "CHANGE ME" value below.
+# Nothing here needs editing: your domain and Traefik names come from .env (see example.env),
+# so `git pull` can always update this file. Don't copy it under another name: Compose
+# prefers compose.yml (the development stack) when two default-named files exist.
+# Tip: put COMPOSE_FILE=docker-compose.server.yml in .env so a plain `docker compose ...` uses it.
 services:
   postgres:
     image: postgres:16-alpine
@@ -49,7 +51,7 @@ services:
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
       # Only the first account can register; set to true to let others sign up.
       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://${DASHBOARD_DOMAIN:?Set DASHBOARD_DOMAIN in .env}}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-86400}
       SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-homie_session}
       LOGIN_RATE_LIMIT: ${LOGIN_RATE_LIMIT:-5}
@@ -207,11 +209,13 @@ services:
       - traefik
     labels:
       - traefik.enable=true
-      - traefik.docker.network=traefik_default                                # CHANGE ME: Traefik's Docker network
-      - traefik.http.routers.homelab.rule=Host(`dashboard.karloks.com`)       # CHANGE ME: your domain
-      - traefik.http.routers.homelab.entrypoints=websecure                    # CHANGE ME: Traefik HTTPS entrypoint
-      - traefik.http.routers.homelab.tls.certresolver=letsencrypt             # CHANGE ME: Traefik certificate resolver
-      - traefik.http.services.homelab.loadbalancer.server.port=80
+      # All values come from .env: DASHBOARD_DOMAIN (required), TRAEFIK_ROUTER, TRAEFIK_ENTRYPOINT,
+      # TRAEFIK_CERT_RESOLVER and TRAEFIK_NETWORK (defaults shown).
+      - traefik.docker.network=${TRAEFIK_NETWORK:-traefik_default}
+      - traefik.http.routers.${TRAEFIK_ROUTER:-homelab}.rule=Host(`${DASHBOARD_DOMAIN:?Set DASHBOARD_DOMAIN in .env}`)
+      - traefik.http.routers.${TRAEFIK_ROUTER:-homelab}.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}
+      - traefik.http.routers.${TRAEFIK_ROUTER:-homelab}.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      - traefik.http.services.${TRAEFIK_ROUTER:-homelab}.loadbalancer.server.port=80
     depends_on:
       backend:
         condition: service_healthy
@@ -219,7 +223,7 @@ services:
 networks:
   traefik:
     external: true
-    name: traefik_default  # CHANGE ME: Traefik's Docker network (same as traefik.docker.network above)
+    name: ${TRAEFIK_NETWORK:-traefik_default}  # Traefik's Docker network; same value as the label above
 
 volumes:
   postgres_data:
