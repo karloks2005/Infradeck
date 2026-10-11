@@ -37,7 +37,7 @@ UPSTREAM_TIMEOUT_SECONDS = 10
 
 _ID = r"[0-9a-f]{12,64}"
 # Matched against the whole request target, query string included.
-_LIST = re.compile(r"/containers/json(\?all=1)?")
+_LIST = re.compile(r"/containers/json\?all=1")
 _INSPECT = re.compile(rf"/containers/{_ID}/json")
 _STATS = re.compile(rf"/containers/{_ID}/stats\?stream=false(&one-shot=true)?")
 

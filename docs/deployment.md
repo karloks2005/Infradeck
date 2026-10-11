@@ -126,9 +126,14 @@ compose project). Collectors started from `collector-compose.yml` need
 
 ## Without Traefik
 
-- **Caddy (automatic Let's Encrypt):** with `compose.yml`, set
-  `DOMAIN`, `SESSION_COOKIE_SECURE=true` and `FRONTEND_BIND=127.0.0.1` in
-  `.env`, open ports 80/443, and run `docker compose --profile https up -d --build`.
+- **Another reverse proxy (nginx, Caddy, HAProxy, ...):** use the **server stack** (`docker-compose.server.yml`),
+  not the development stack, and point your proxy at its dashboard port (`127.0.0.1:5173` by default; the
+  Traefik labels are simply unused). The server stack is the one that keeps the collector endpoints off the
+  public side, registration closed and the session cookie HTTPS-only. Terminate HTTPS in your proxy and have it
+  send `X-Forwarded-For`.
+- **Caddy profile (`--profile https`, development stack): private use only.** It publishes the development
+  stack's single listener, which serves the collector endpoints on the same address as the dashboard, so it
+  is not suitable for a dashboard that is open to the internet. Use it on a LAN or behind a VPN.
 - **Private, over a VPN:** install Tailscale, WireGuard or OpenVPN on the server
   and your devices, run `docker compose up -d --build`, and use `http://<vpn-ip>:5173`
   (collectors: `http://<vpn-ip>:5173/api`). Nothing is exposed publicly. This uses

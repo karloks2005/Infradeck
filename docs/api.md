@@ -9,7 +9,7 @@ All paths are relative to `/api` when going through the frontend/nginx.
 | `GET /health` | – | Database and Redis status. |
 | `POST /auth/register`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/me` | session cookie | Accounts and sessions. |
 | `POST /auth/login/2fa` | pending login token | Second step of sign-in: authenticator or recovery code. |
-| `GET /auth/2fa/status`, `POST /auth/2fa/setup`, `POST /auth/2fa/enable` | session (also the limited setup session) | Two-factor status, start and confirm setup. |
+| `GET /auth/2fa/status`, `POST /auth/2fa/setup`, `POST /auth/2fa/enable` | session (also the limited setup session) | Two-factor status, start and confirm setup. Starting setup from a normal session needs `{"password": ...}`; the forced first enrolment doesn't. |
 | `POST /auth/2fa/disable`, `POST /auth/2fa/recovery-codes` | session + password + code | Turn two-factor off; replace the recovery codes. |
 | `POST /auth/password` | session + current password | Change password; signs out other sessions. |
 | `GET /auth/sessions`, `POST /auth/sessions/revoke-others`, `DELETE /auth/sessions/{id}` | session | List and end your own sessions. |
@@ -34,7 +34,7 @@ All paths are relative to `/api` when going through the frontend/nginx.
 | `POST /monitoring/collectors/enroll` | enrollment key | Join without approval. |
 | `POST /monitoring/metrics/ingest` | collector token | Collector reports host, container and system metrics. |
 | `GET /conversations`, `POST /conversations`, `DELETE /conversations/{id}`, `POST /agent/chat` | session | Homie assistant chats. |
-| `GET /logs`, `POST /logs`, `GET /dashboard/summary` | session | Audit log and summary counts. |
+| `GET /logs`, `POST /logs`, `GET /dashboard/summary` | session | Audit log and summary counts. `POST /logs` adds an entry to your own log (level from a fixed list, message up to 2000 characters, at most 120 an hour); its source is always `dashboard`. |
 
 The four collector endpoints above exist only on the collector gate in the server
 stack (the public listener answers 404); the development stack serves them on the

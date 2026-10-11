@@ -9,7 +9,9 @@ class FakeRedis:
         self.ttls: dict[str, int] = {}
 
     # strings and counters
-    def set(self, key, value, ex=None, **kwargs):
+    def set(self, key, value, ex=None, nx=False, **kwargs):
+        if nx and key in self.store:
+            return None
         self.store[key] = value
         if ex is not None:
             self.ttls[key] = ex
@@ -24,6 +26,10 @@ class FakeRedis:
             removed += int(self.store.pop(key, None) is not None) + int(self.hashes.pop(key, None) is not None)
             self.ttls.pop(key, None)
         return removed
+
+    def decr(self, key):
+        self.store[key] = int(self.store.get(key, 0)) - 1
+        return self.store[key]
 
     def incr(self, key):
         self.store[key] = int(self.store.get(key, 0)) + 1

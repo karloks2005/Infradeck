@@ -44,10 +44,15 @@ services:
       AGENT_MODEL: ${AGENT_MODEL:-models/gemini-3.5-flash}
       # Set to true when the dashboard is served over HTTPS.
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
-      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
       # Key that encrypts stored secrets such as two-factor secrets (generate: docker compose run --rm backend python -m src.backend.secrets_box).
       SECRETS_KEY: ${SECRETS_KEY:-}
+      # Limits on what collectors can do. A check-in must come at least this share of the check interval after the
+      # previous one (0 switches it off); the install holds at most MAX_SERVERS; /docs is off unless enabled.
+      INGEST_MIN_SPACING_RATIO: ${INGEST_MIN_SPACING_RATIO:-0.25}
+      MAX_SERVERS: ${MAX_SERVERS:-200}
+      ENABLE_API_DOCS: ${ENABLE_API_DOCS:-false}
       # Setup token for the very first account. Empty: one is generated and printed in the backend log.
       ADMIN_BOOTSTRAP_TOKEN: ${ADMIN_BOOTSTRAP_TOKEN:-}
       # How long a token from "Connect a server" stays valid, in seconds.

@@ -27,6 +27,8 @@ RANGES: dict[str, timedelta | None] = {
 SOURCE = {"1h": DETAILED, "6h": DETAILED, "24h": DETAILED, "7d": DETAILED,
           "30d": rollups.HOUR, "90d": rollups.WEEK, "1y": rollups.WEEK, "all": rollups.MONTH}
 MAX_POINTS = 500
+# A backstop: with check-ins spaced by the ingest limit, one series stays well below this in seven days.
+MAX_RAW_ROWS = 150_000
 NATURAL_SECONDS = {rollups.HOUR: 3600, rollups.DAY: 86400, rollups.WEEK: 7 * 86400, rollups.MONTH: 31 * 86400}
 # Bucket sizes a chart can be given; the smallest that keeps a range within MAX_POINTS is used.
 NICE_STEPS = (15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 14400, 21600, 43200, 86400, 7 * 86400)
@@ -156,7 +158,7 @@ def _raw_items(db, spec: Series, wanted, server_id, key, since: datetime, until:
     columns = [getattr(spec.raw, spec.metrics[name].raw) for name in wanted]
     if spec.has_down:
         columns.append(spec.raw.status)
-    query = select(spec.raw.time, *columns).where(*_where(spec, "raw", server_id, key), spec.raw.time >= since, spec.raw.time < until).order_by(spec.raw.time)
+    query = select(spec.raw.time, *columns).where(*_where(spec, "raw", server_id, key), spec.raw.time >= since, spec.raw.time < until).order_by(spec.raw.time).limit(MAX_RAW_ROWS)
     return [(rollups._utc(row[0]), _raw_agg(spec, wanted, row)) for row in db.execute(query)]
 
 

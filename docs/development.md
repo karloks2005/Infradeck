@@ -44,7 +44,7 @@ pip install -r requirements-dev.txt   # the app's requirements plus pytest
 pytest
 ```
 
-No Docker, PostgreSQL or Redis is needed; the suite takes about a minute and a half. The chart
+No Docker, PostgreSQL or Redis is needed; the suite takes about two minutes. The chart
 helpers have their own tests that need only Node 20 or newer: `cd src/frontend && node --test`. See
 [TESTS.md](../TESTS.md) for how the tests work, what they don't cover, and what every
 test is for.

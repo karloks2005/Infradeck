@@ -733,8 +733,8 @@ function ContainerSection({ server, open, onToggle }) {
 }
 
 const TAINT_FAULT_BITS = [4, 5, 7, 9, 14]
-const SYSTEM_EVENT_LABELS = { reboot: 'Reboot', oom_kill: 'OOM kill', kernel_fault: 'Kernel fault', kernel_error: 'Kernel error' }
-const SYSTEM_EVENT_CLASSES = { reboot: 'text-sky-300', oom_kill: 'text-amber-300', kernel_fault: 'text-red-300', kernel_error: 'text-amber-300' }
+const SYSTEM_EVENT_LABELS = { reboot: 'Reboot', oom_kill: 'OOM kill', kernel_fault: 'Kernel fault', kernel_error: 'Kernel error', credentials_replaced: 'Credentials replaced' }
+const SYSTEM_EVENT_CLASSES = { reboot: 'text-sky-300', oom_kill: 'text-amber-300', kernel_fault: 'text-red-300', kernel_error: 'text-amber-300', credentials_replaced: 'text-amber-300' }
 const CHIP_CLASSES = { ok: 'text-emerald-300', warn: 'text-amber-300', info: 'text-sky-300', unknown: 'text-[#7f8589]' }
 
 function formatAgo(value) {
@@ -2345,7 +2345,16 @@ function TwoFactorSection({ status, reload, onEnrolled }) {
     setMessage(null)
     try { await work() } catch (error) { setMessage({ ok: false, text: error.message || 'Something went wrong.' }) } finally { setBusy(false) }
   }
-  const start = () => run(async () => setSetup(await apiRequest('/auth/2fa/setup', { method: 'POST' })))
+  const [askPassword, setAskPassword] = useState(false)
+  const [setupPassword, setSetupPassword] = useState('')
+  // A session that has just signed in (the forced first enrolment) needs no password; a normal one must give it again.
+  const start = () => {
+    if (!status.setup_required && !askPassword) { setAskPassword(true); return }
+    return run(async () => {
+      setSetup(await apiRequest('/auth/2fa/setup', { method: 'POST', body: JSON.stringify(status.setup_required ? {} : { password: setupPassword }) }))
+      setSetupPassword(''); setAskPassword(false)
+    })
+  }
   const enable = (event) => { event.preventDefault(); run(async () => {
     const data = await apiRequest('/auth/2fa/enable', { method: 'POST', body: JSON.stringify({ code: code.trim() }) })
     setCodes(data.recovery_codes); setSetup(null); setCode('')
@@ -2367,7 +2376,15 @@ function TwoFactorSection({ status, reload, onEnrolled }) {
       {status.available && !codes && !status.enabled && (
         <div className="space-y-3">
           {status.required && <p className="text-sm text-amber-200">Two-factor is required for administrators on this server.</p>}
-          {!setup && <button type="button" onClick={start} disabled={busy} className="rounded-2xl bg-linear-to-r from-white to-[#cfcfcf] px-4 py-2.5 text-sm font-medium text-[#0b0b0b] disabled:opacity-50">Set up two-factor</button>}
+          {!setup && askPassword && (
+            <form onSubmit={(event) => { event.preventDefault(); start() }} className="flex flex-wrap items-center gap-2">
+              <input type="password" autoComplete="current-password" autoFocus aria-label="Your current password" placeholder="Your current password" value={setupPassword} onChange={(event) => setSetupPassword(event.target.value)} className="min-h-10 w-64 max-w-full rounded-xl border border-white/10 bg-[#111417] px-3 text-sm text-white" />
+              <button type="submit" disabled={busy || !setupPassword} className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-slate-950 disabled:opacity-50">Continue</button>
+              <button type="button" onClick={() => { setAskPassword(false); setSetupPassword('') }} className="text-xs text-[#9aa0a6] hover:text-white">Cancel</button>
+              <span className="w-full text-xs text-[#7f8589]">Asked again because turning on two-factor is a sensitive change.</span>
+            </form>
+          )}
+          {!setup && !askPassword && <button type="button" onClick={start} disabled={busy} className="rounded-2xl bg-linear-to-r from-white to-[#cfcfcf] px-4 py-2.5 text-sm font-medium text-[#0b0b0b] disabled:opacity-50">Set up two-factor</button>}
           {setup && (
             <SecretsBox>
               <ol className="list-decimal space-y-3 pl-5 text-sm text-[#bcbcbc]">

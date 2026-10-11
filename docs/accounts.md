@@ -4,8 +4,9 @@
 
 - The first account created is the **admin**. It needs the install's **setup
   token** (printed in the backend log at start, or `ADMIN_BOOTSTRAP_TOKEN`). Later
-  accounts are regular users (and on the server file, registration closes after
-  the first account).
+  accounts are regular users. Registration is closed after the first account unless you set
+  `ALLOW_REGISTRATION=true` (the backend then prints a security warning at every start, because anyone
+  who can reach the dashboard could create an account).
 - **Passwords must be at least 16 characters** (and at most 72 bytes). A few random
   words make a good passphrase. The rule applies to new accounts; existing
   accounts keep working with their current password.
@@ -39,7 +40,8 @@ as Google Authenticator, Aegis or a password manager).
    Back this key up with your other secrets. **If you lose it, authenticator codes
    stop working** (recovery codes still do, and so does the reset command below).
    To rotate it, put the new key first and keep the old one after a comma.
-2. **Turn it on** under Account → Two-factor sign-in. You get a setup key and an
+2. **Turn it on** under Account → Two-factor sign-in. From a normal session it first asks for your
+   password again (the forced first enrolment of an admin doesn't). You get a setup key and an
    `otpauth://` link to paste into your authenticator app (no QR code yet), confirm
    with a code, and are shown **10 recovery codes once**. Each works one time.
 3. **Signing in** then asks for the code after the password. A recovery code can be

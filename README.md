@@ -189,7 +189,7 @@ protection. In short:
 Backend (Python 3.12) and frontend (Node 20) can run without Docker; see [Development](docs/development.md).
 
 ```bash
-source venv/bin/activate && pip install -r requirements-dev.txt && pytest     # backend, about a minute and a half
+source venv/bin/activate && pip install -r requirements-dev.txt && pytest     # backend, about two minutes
 cd src/frontend && node --test                                                # chart helpers, nothing to install
 ```
 

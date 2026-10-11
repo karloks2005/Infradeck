@@ -277,6 +277,12 @@ def system_rules(db, server, thresholds: dict, now: datetime, active_keys: froze
             CRITICAL if len(oom) >= 3 else WARNING, f"{host} is killing processes to free memory",
             f"The kernel OOM killer fired {len(oom)} time(s) in the last {thresholds['event_window_minutes']} minutes ({'; '.join(dict.fromkeys(event.detail for event in oom[:3]))}). Check which containers or processes are using the most memory.",
         )
+    if replaced := [event for event in events if event.kind == "credentials_replaced"]:
+        firing[f"{SYSTEM_RULE_PREFIX}credentials"] = (
+            WARNING, f"The credentials of {host} were replaced",
+            f"At {replaced[0].time:%Y-%m-%d %H:%M} UTC the enrollment key was used to give this server new credentials, which signed its previous collector out. "
+            "That is expected when you reinstalled it with the key. If you did not, treat the enrollment key as compromised: rotate it under Connect a server → Advanced, and check the machine.",
+        )
     if faults := taint_faults(latest.kernel_tainted):
         # The taint flags stay set until the next boot, so this alert clears on reboot.
         firing[f"{SYSTEM_RULE_PREFIX}kernel"] = (WARNING, f"Kernel on {host} reported faults", f"The kernel has flagged: {', '.join(faults)}. Check dmesg on the host for details; the flag clears after a reboot.")

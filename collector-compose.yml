@@ -1,5 +1,5 @@
-# Collector-only stack, an alternative to the one-line `docker run` shown on the
-# dashboard (Connect a server). Set HOMELAB_API_URL (e.g. in a .env next to
+# Collector-only stack that builds the images locally, an alternative to the signed images the compose
+# command from the dashboard (Connect a server) installs. Set HOMELAB_API_URL (e.g. in a .env next to
 # this file) and run:
 #   docker compose -f collector-compose.yml up -d --build
 # The server then appears on the dashboard under "New servers detected"; click

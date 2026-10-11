@@ -4,8 +4,8 @@ Vexion ships with an automated test suite. This page explains how to run it, wha
 covers (and what it doesn't), and what every single test is for, so you can decide
 whether a failure matters before you upgrade or change your setup.
 
-- **798 test cases** from 469 test functions, plus 16 small tests of the chart helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
-- **About a minute and a half** to run. No Docker, PostgreSQL, Redis, network or root access needed.
+- **1035 test cases** from 523 test functions, plus 16 small tests of the chart helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
+- **About two minutes** to run. No Docker, PostgreSQL, Redis, network or root access needed.
 - **Safe to run next to a live install.** The tests use a throwaway in-memory database
   and fakes; they never touch your running containers or your data. (Two collector
   tests read this machine's `/proc` and root filesystem, read-only.)
@@ -124,7 +124,7 @@ docker compose logs --tail 20 collector        # "Sent host metrics and N contai
 
 | File | Cases | Protects |
 |---|---|---|
-| [`test_account_security.py`](#test_account_securitypy) | 121 | Two-factor sign-in, recovery codes, encrypted secrets, sessions you can review and end, and password change. |
+| [`test_account_security.py`](#test_account_securitypy) | 130 | Two-factor sign-in, recovery codes, encrypted secrets, sessions you can review and end, password change, and the password check before turning two-factor on. |
 | [`test_admin.py`](#test_adminpy) | 18 | Who may do what: admin-only actions, roles, retention cleanup, the chat on/off switch. |
 | [`test_agent_errors.py`](#test_agent_errorspy) | 2 | Helpful, non-leaking error messages from the AI assistant. |
 | [`test_agent_service.py`](#test_agent_servicepy) | 2 | The assistant can only run the fixed read-only checks. |
@@ -137,9 +137,12 @@ docker compose logs --tail 20 collector        # "Sent host metrics and N contai
 | [`test_dashboard_host.py`](#test_dashboard_hostpy) | 8 | The "this machine" logic, history charts, container list and incident counts. |
 | [`test_docker_proxy.py`](#test_docker_proxypy) | 111 | The read-only Docker proxy: what it allows, refuses and hides. |
 | [`test_enrollment.py`](#test_enrollmentpy) | 10 | Enrollment keys, collector credentials and offline-server detection. |
+| [`test_enrollment_limits.py`](#test_enrollment_limitspy) | 12 | Limits on the enrollment key: rate limits, the server cap, and a warning when credentials are replaced. |
 | [`test_health_checks.py`](#test_health_checkspy) | 4 | The assistant's fixed health checks and the critical-only webhook. |
 | [`test_history.py`](#test_historypy) | 36 | The history API behind long-range charts: which level of detail answers each range, point limits, gaps, and agreement with the raw samples. |
 | [`test_indexes.py`](#test_indexespy) | 9 | The database indexes on the metrics tables: only the ones queries use, none duplicated. |
+| [`test_ingest_validation.py`](#test_ingest_validationpy) | 178 | What collectors report is checked and bounded: numbers, names, filesystems, spacing of check-ins. |
+| [`test_input_limits.py`](#test_input_limitspy) | 38 | Size and shape limits on request bodies, the audit-log endpoint, and safe defaults. |
 | [`test_network_checks.py`](#test_network_checkspy) | 94 | The host's real network totals, listening-port inventory, optional internet check, firewall fingerprints, and the validation of all of it. |
 | [`test_pending_collectors.py`](#test_pending_collectorspy) | 28 | Adding servers: approval, join tokens, strict mode, re-pairing safety. |
 | [`test_rollups.py`](#test_rollupspy) | 31 | Summarised history: hourly, daily, weekly and monthly rollups, catching up, gaps, and purging only what has been summarised. |
@@ -235,6 +238,15 @@ out of their own install.
 | `test_malformed_session_ids_in_the_url_are_not_found` *(4 inputs)* | Odd identifiers in the session URL get "not found". |
 | `test_one_user_cannot_end_another_users_session_by_guessing_its_id` | Even a valid public ID can only be ended by the account that owns it. |
 | `test_cross_site_requests_to_the_new_endpoints_are_refused` | All the new state-changing endpoints reject requests from another site. |
+| `test_a_normal_session_must_give_the_password_to_set_up_two_factor` | From a normal session, starting two-factor setup without the password, or with a wrong one, is refused (401) and nothing is created. |
+| `test_the_right_password_starts_the_setup_from_a_normal_session` | The right password starts the setup. |
+| `test_a_stolen_session_cannot_lock_the_owner_out_by_enrolling_its_own_authenticator` | Someone with only the session cookie can't enrol their own authenticator, and the owner can still sign in. |
+| `test_wrong_passwords_while_setting_up_count_toward_the_two_factor_lockout` | Wrong passwords during setup count towards the shared lockout. |
+| `test_the_forced_first_enrolment_does_not_ask_for_the_password_again` | An admin who just signed in and must enrol isn't asked for the password again. |
+| `test_turning_two_factor_off_gives_this_session_a_new_id` | Turning two-factor off gives the current session a new ID and ends the old one. |
+| `test_a_successful_sign_in_does_not_reset_the_address_counter` | Signing in to your own account doesn't give more guesses against someone else's: only the one allowed guess is left. |
+| `test_signing_in_successfully_does_not_use_up_the_addresss_allowance` | People behind one address can all sign in, 15 times in a row, without being locked out. |
+| `test_a_successful_sign_in_still_resets_that_accounts_own_counter` | A successful sign-in clears that account's own counter. |
 
 ### test_admin.py
 
@@ -473,9 +485,9 @@ tested hardest (91 cases). If any of these fail, do not run the proxy until it i
 
 | Test | What it checks |
 |---|---|
-| `test_the_four_read_requests_are_allowed` *(6 inputs)* | The exact requests the collector needs (list containers, inspect one, one stats snapshot, and the quick one-shot stats form) are allowed. |
+| `test_the_four_read_requests_are_allowed` *(5 inputs)* | The exact requests the collector needs (list containers, inspect one, one stats snapshot, and the quick one-shot stats form) are allowed. |
 | `test_only_get_is_allowed` *(8 inputs)* | Every method except GET (POST, PUT, DELETE, PATCH, HEAD, OPTIONS, lowercase `get`, CONNECT) is refused. |
-| `test_everything_else_is_refused` *(63 inputs)* | Everything outside the allow-list is refused: other endpoints (`/info`, images, exec, start, kill, export, archive, logs), extra or changed query strings, path traversal, encoded or padded paths, injected line breaks, odd container IDs. |
+| `test_everything_else_is_refused` *(81 inputs)* | Everything outside the allow-list is refused: other endpoints (`/info`, images, exec, start, kill, export, archive, logs), extra or changed query strings, path traversal, encoded or padded paths, injected line breaks, odd container IDs. |
 | `test_inspect_output_drops_environment_and_everything_unneeded` | The container description is cut down to the needed fields (including exit code, out-of-memory flag, finish time and image ID); environment variables (often secrets), mounts, labels, host configuration and Docker's free-text error message never leave the proxy. |
 | `test_list_and_stats_output_are_cut_down` | The same filtering applies to the container list and stats. |
 | `test_unexpected_upstream_shapes_do_not_crash_the_filters` *(7 inputs)* | Strange or malformed answers from Docker don't crash the proxy. |
@@ -502,6 +514,25 @@ tested hardest (91 cases). If any of these fail, do not run the proxy until it i
 | `test_collector_prefers_saved_credentials_over_enrolling` | A collector that already has saved credentials uses them and doesn't enroll again. |
 | `test_collector_enrolls_and_saves_when_no_credentials` | Without credentials, the collector enrolls, saves its token, and the file is readable only by its owner (mode 600). |
 | `test_machine_id_read_from_host_root` | The collector identifies the machine from the host's `/etc/machine-id`. |
+
+### test_enrollment_limits.py
+
+The enrollment key can re-issue a server's credentials, so its use is limited and visible.
+
+| Test | What it checks |
+|---|---|
+| `test_enrolling_with_a_known_machine_id_still_works_but_signs_the_old_collector_out` | Re-enrolling a known machine gives its server a new token and the old token stops working. |
+| `test_replacing_credentials_leaves_an_event_and_an_audit_entry` | The replacement is written to the server's events and to the audit log. |
+| `test_the_replacement_opens_a_warning_that_clears_by_itself` | A warning opens at the server's next check-in and resolves once the event is old. |
+| `test_a_brand_new_machine_is_not_a_replacement` | A new machine creates a server and no warning. |
+| `test_the_hostname_is_made_printable_and_bounded` | Control characters in the hostname become `?`, and one over 255 characters is refused. |
+| `test_one_address_can_only_enroll_so_often` | The 31st enrollment from one address in an hour gets 429. |
+| `test_wrong_keys_count_against_the_limit_too` | Wrong keys count against the limit, so keys can't be tried freely. |
+| `test_another_address_has_its_own_allowance` | Another address isn't affected by the first one's limit. |
+| `test_the_key_itself_has_a_limit_across_addresses` | One key can only be used so often in total, whichever addresses it comes from. |
+| `test_a_redis_outage_does_not_block_enrolling` | With Redis down, enrolling still works. |
+| `test_a_full_install_refuses_new_servers_but_still_serves_the_ones_it_has` | At the server limit new machines are refused (409) but existing ones can re-enroll. |
+| `test_the_cap_applies_to_adding_by_hand_and_to_approving_requests` | The server limit also applies to adding a server by hand and to approving a request. |
 
 ### test_health_checks.py
 
@@ -554,6 +585,53 @@ The indexes on the metrics tables. The live migration is checked by hand against
 | `test_the_metrics_tables_carry_exactly_the_indexes_they_need` | Each metrics table has only the planned indexes: `time` for the purge, `(server_id, time)` (or `(server_id, container_id, time)` for containers) for reads. |
 | `test_deleting_a_server_and_purging_old_rows_can_both_use_an_index` *(4 inputs)* | Every metrics table keeps an index starting with `server_id` (deleting a server cascades through it) and one on `time` alone (the hourly purge). |
 | `test_a_primary_key_is_never_indexed_a_second_time` *(4 inputs)* | No table gets a redundant index on its own `id`. |
+
+### test_ingest_validation.py
+
+Nothing a collector reports is trusted: numbers, names and filesystems are checked, check-ins are spaced, and one bad collector can't break pages for everyone.
+
+| Test | What it checks |
+|---|---|
+| `test_a_check_in_with_infinity_does_not_break_the_pages_for_everyone` | A check-in containing `Infinity`, `-Infinity` or `NaN` is accepted but stored as unknown, and the overview, history, heatmap and fleet pages keep working for everyone. |
+| `test_every_host_number_outside_its_range_or_of_the_wrong_type_is_stored_as_unknown` *(117 inputs)* | Each host number (every field, each bad value: too big, negative, text, boolean, null, list, object, a number too large for a float) is stored as unknown. |
+| `test_sensible_numbers_are_stored_exactly` | Normal values are stored unchanged. |
+| `test_counters_too_big_for_the_database_are_unknown_instead_of_an_error` *(8 inputs)* | Counters beyond what the database column holds, or negative, become unknown instead of an error. |
+| `test_the_summaries_survive_whatever_was_reported` | Absurd values never reach the summaries, so summarising can't be broken by a collector. |
+| `test_a_server_description_is_kept_only_if_it_is_sensible` | A valid hostname, address, operating system, core count and memory size are saved (control characters become `?`). |
+| `test_a_bad_server_description_leaves_what_was_known` *(18 inputs)* | A bad core count, memory size, address or hostname leaves the earlier value in place. |
+| `test_long_names_are_cut_to_what_fits` | Over-long hostnames and operating system names are cut to 255 characters. |
+| `test_a_collector_cannot_take_another_servers_name` | A hostname another server already uses (in any letter case) is ignored. |
+| `test_only_a_collector_on_the_internal_listener_can_claim_to_be_the_dashboards_machine` | Over the VPN listener a collector can't take the dashboard machine's place; the stack's own collector can. |
+| `test_in_the_development_stack_the_claim_is_accepted_as_before` | With a single listener (development) the claim still works. |
+| `test_at_most_sixty_four_filesystems_are_stored_per_check_in` | 3000 reported filesystems become 64 stored rows. |
+| `test_a_filesystem_is_stored_once_and_only_with_known_good_fields` | Duplicates are dropped, and fields a collector shouldn't set (`id`, `server_id`, `time`, extras) are ignored. |
+| `test_filesystem_records_that_are_not_usable_are_skipped` *(9 inputs)* | Relative paths, empty names, wrong types and non-objects are skipped; valid ones around them are kept. |
+| `test_filesystem_numbers_outside_their_range_are_unknown` *(8 inputs)* | Bad sizes and percentages for a filesystem become unknown. |
+| `test_mount_names_are_made_printable_and_bounded` | Long names and control characters are cut and replaced. |
+| `test_a_check_in_that_follows_the_last_one_too_closely_is_refused` | A second check-in a moment after the first gets 429 with `Retry-After`; another server is unaffected. |
+| `test_the_next_check_in_is_accepted_when_the_slot_has_passed` | Once the spacing has passed, check-ins work again. |
+| `test_the_spacing_is_never_shorter_than_the_minimum` | Even with a 15-second interval the spacing is at least 5 seconds. |
+| `test_someone_without_the_token_cannot_use_up_a_servers_slot` | A request with a wrong token is refused (401) without using up the real collector's slot. |
+| `test_a_redis_outage_does_not_stop_check_ins` | If Redis is down the limit is skipped and monitoring continues. |
+| `test_one_server_with_a_flood_of_alerts_cannot_hide_everyone_elses` | 100 alerts from one server show at most 10, so another server's single alert stays visible; the total count stays true. |
+| `test_one_query_never_reads_more_raw_rows_than_the_backstop` | A history query stops at the row cap. |
+
+### test_input_limits.py
+
+Request bodies have sizes and shapes, and the defaults are the safe ones.
+
+| Test | What it checks |
+|---|---|
+| `test_a_sensible_log_entry_is_stored_under_the_dashboard_source` | A normal log entry is stored and its source is always `dashboard`, even if the request says otherwise. |
+| `test_nobody_can_write_entries_that_look_like_they_came_from_another_part_of_the_system` | Entries claiming to come from `auth` or `admin` are stored as `dashboard`. |
+| `test_log_entries_outside_the_limits_are_refused_and_nothing_is_stored` *(14 inputs)* | Too long, too many, wrong type, unknown level or an odd event type: refused (422) and nothing stored. |
+| `test_a_megabyte_message_is_refused` | A one-megabyte message is refused. |
+| `test_writing_log_entries_is_rate_limited_per_user` | The 121st entry in an hour gets 429. |
+| `test_log_entries_need_a_session` | Without a session, 401. |
+| `test_oversized_fields_in_other_bodies_are_refused_before_any_work_is_done` *(16 inputs)* | Over-long fields in chat, conversations, sign-in, registration, enrollment, collector registration and adding servers are refused (422). |
+| `test_registration_is_closed_unless_someone_opens_it` | Registration, API documentation and CORS origins default to closed and empty, and registration opens only when asked. |
+| `test_the_api_documentation_is_not_served_to_anonymous_visitors` | `/docs`, `/redoc` and `/openapi.json` return 404. |
+| `test_an_open_registration_is_called_out_in_the_log` | With registration open and accounts existing, the startup log gets a SECURITY WARNING; not on a fresh install. |
 
 ### test_network_checks.py
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import math
 import re
@@ -18,7 +19,7 @@ from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Requ
 from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import case, func, inspect, text
 
 from .alerts import CONTAINER_RULE_PREFIX, CRITICAL, SERVER_OFFLINE_RULE, SEVERITIES, active_rule_keys, raise_alert, resolve_alerts, sync_alerts
@@ -45,27 +46,31 @@ from .config import (
     COLLECTOR_PUBLIC_URL,
     DOCKER_PROXY_IMAGE,
     JOIN_TOKEN_TTL_SECONDS,
+    ENABLE_API_DOCS,
+    INGEST_MIN_SPACING_RATIO,
+    INGEST_MIN_SPACING_SECONDS,
+    MAX_SERVERS,
     CORS_ORIGINS,
     SESSION_COOKIE_NAME,
     SESSION_COOKIE_SECURE,
     SESSION_TTL_SECONDS,
 )
 from .rules import DEFAULT_THRESHOLDS, HOST_RULE_PREFIX, container_rules, host_rules, validate_thresholds, detect_system_events, system_rules, SYSTEM_RULE_PREFIX, validate_mount_thresholds, validate_helper_events, REBOOT_DETAILS, REBOOT_KEY_PREFIX, detect_container_events, memory_trend_rules, CONTAINER_EVENT_KINDS, MAX_CONTAINER_EVENTS_PER_CHECKIN, MAX_CONTAINER_EVENTS_PER_HOUR, TREND_RULE_PREFIX, NETWORK_EVENT_KINDS, NETWORK_RULE_PREFIX, MAX_NETWORK_EVENTS_PER_CHECKIN, MAX_NETWORK_EVENTS_PER_HOUR, INTERNET_STATUSES, LISTENER_SCOPES, FIREWALL_LABELS, detect_listener_changes, detect_firewall_changes, network_rules, validate_listeners, validate_firewall
-from .rate_limit import enforce_ip_limit, enforce_limit, enforce_login_limit, enforce_register_limit, reset_limits
+from .rate_limit import enforce_ip_limit, enforce_limit, enforce_login_limit, enforce_register_limit, refund_attempt, reset_limits
 from ..agent.service import delete_agent_conversation, send_agent_message
 
 
 class RegisterRequest(BaseModel):
-    name: str
+    name: str = Field(max_length=255)
     email: EmailStr
-    password: str
+    password: str = Field(max_length=1024)
     # Only needed for the very first account; see ensure_bootstrap_token.
-    bootstrap_token: str | None = None
+    bootstrap_token: str | None = Field(default=None, max_length=200)
 
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(max_length=1024)
 
 
 class TwoFactorLoginRequest(BaseModel):
@@ -75,6 +80,10 @@ class TwoFactorLoginRequest(BaseModel):
 
 class CodeRequest(BaseModel):
     code: str = Field(max_length=64)
+
+
+class SetupRequest(BaseModel):
+    password: str | None = Field(default=None, max_length=1024)
 
 
 class ReauthRequest(BaseModel):
@@ -88,32 +97,49 @@ class PasswordChangeRequest(BaseModel):
 
 
 class AgentChatRequest(BaseModel):
-    conversation_id: str
-    message: str
+    conversation_id: str = Field(max_length=255)
+    message: str = Field(max_length=8000)
 
 
 class ConversationRequest(BaseModel):
-    conversation_id: str
-    title: str = "New chat"
+    conversation_id: str = Field(max_length=255)
+    title: str = Field(default="New chat", max_length=255)
+
+
+class LogCreateRequest(BaseModel):
+    """An entry the dashboard adds to the user's own audit log. The source is always the dashboard, so nobody can
+    write entries that look like they came from sign-in or administration."""
+
+    level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    message: str = Field(default="New event", max_length=2000)
+    task_title: str | None = Field(default=None, max_length=255)
+    steps: list[Annotated[str, Field(max_length=1000)]] = Field(default_factory=list, max_length=50)
+    conversation_id: str | None = Field(default=None, max_length=255)
+    event_type: str | None = Field(default=None, max_length=50, pattern=r"^[a-z0-9_\-]*$")
+
+    @field_validator("level", mode="before")
+    @classmethod
+    def _upper_case_level(cls, value):
+        return value.upper() if isinstance(value, str) else value
 
 
 class ServerRequest(BaseModel):
-    hostname: str
-    ip_address: str | None = None
+    hostname: str = Field(max_length=255)
+    ip_address: str | None = Field(default=None, max_length=64)
     check_interval_seconds: int = 60
 
 
 class EnrollRequest(BaseModel):
-    enroll_key: str
-    hostname: str
-    machine_id: str | None = None
+    enroll_key: str = Field(max_length=200)
+    hostname: str = Field(max_length=255)
+    machine_id: str | None = Field(default=None, max_length=64)
 
 
 class CollectorRegisterRequest(BaseModel):
-    hostname: str
-    machine_id: str | None = None
-    os_info: str | None = None
-    join_token: str | None = None
+    hostname: str = Field(max_length=255)
+    machine_id: str | None = Field(default=None, max_length=64)
+    os_info: str | None = Field(default=None, max_length=255)
+    join_token: str | None = Field(default=None, max_length=200)
 
 
 class ApproveRequest(BaseModel):
@@ -161,7 +187,8 @@ def agent_error_message(exc: Exception) -> str:
 
 
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-app = FastAPI(title="Homelab Agent API")
+# The interactive API documentation is a map of every endpoint, so it is off unless ENABLE_API_DOCS=true.
+app = FastAPI(title="Homelab Agent API", docs_url="/docs" if ENABLE_API_DOCS else None, redoc_url=None, openapi_url="/openapi.json" if ENABLE_API_DOCS else None)
 
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -201,6 +228,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def registration_warning(db) -> str | None:
+    """A warning for the log when anyone who can reach the dashboard may create an account."""
+    if ALLOW_REGISTRATION and db.query(User).count() > 0:
+        return ("SECURITY WARNING: ALLOW_REGISTRATION is true, so anyone who can reach the dashboard can create an account and see "
+                "every server, container and incident. Set ALLOW_REGISTRATION=false unless that is what you want.")
+    return None
 
 
 @app.on_event("startup")
@@ -274,6 +309,8 @@ def startup_event():
         if require_admin_two_factor(db) and not secrets_box.available():
             print("SECURITY WARNING: two-factor is required for administrators, but SECRETS_KEY is missing or invalid, so it is NOT being enforced. "
                   "Generate a key with `python -m src.backend.secrets_box` and set SECRETS_KEY in .env.", flush=True)
+        if warning := registration_warning(db):
+            print(warning, flush=True)
         setup_token = ensure_bootstrap_token(db)
         if setup_token:
             print(f"First-run setup token: {setup_token}  (needed to create the first account; shown again at every start until it exists)", flush=True)
@@ -414,7 +451,10 @@ def auth_login(payload: LoginRequest, request: Request, response: Response, db=D
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
-    reset_limits(redis_client, *limit_keys)
+    # This email's counter is cleared. The address's counter only gets this one successful attempt back: clearing it
+    # would let anyone with an account of their own reset the limit between guesses at someone else's password.
+    reset_limits(redis_client, limit_keys[1])
+    refund_attempt(redis_client, limit_keys[0])
     if user.totp_enabled:
         # No session exists until the second step passes; this token only carries the login between the steps.
         return {"status": "two_factor_required", "pending_token": create_pending_two_factor(redis_client, user.id)}
@@ -504,12 +544,16 @@ def two_factor_status(session_id: Annotated[str | None, Cookie(alias=SESSION_COO
 
 
 @app.post("/auth/2fa/setup")
-def two_factor_setup(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
-    _session, user = _account_session(session_id, db, allow_limited=True)
+def two_factor_setup(payload: SetupRequest | None = None, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    session, user = _account_session(session_id, db, allow_limited=True)
     if not secrets_box.available():
         raise HTTPException(status_code=503, detail="Two-factor needs SECRETS_KEY to be configured on the server. See docs/accounts.md (Two-factor sign-in).")
     if user.totp_enabled:
         raise HTTPException(status_code=409, detail="Two-factor is already turned on. Turn it off first to set it up again.")
+    if session.get("stage") != STAGE_ENROLLMENT:
+        # Turning two-factor on from a normal session needs the password again. Otherwise a stolen session could
+        # enrol its own authenticator, which signs out the real owner and locks them out.
+        _confirm_password(db, user, payload.password if payload else None)
     enforce_limit(redis_client, scope="2fa-setup", subject=user.id, limit=10, window_seconds=3600)
     secret = totp.new_secret()
     # Stored encrypted and inactive until a code from the app has been confirmed.
@@ -545,6 +589,14 @@ def two_factor_enable(payload: CodeRequest, request: Request, response: Response
     return {"recovery_codes": codes, "setup_required": False}
 
 
+def _confirm_password(db, user: User, password: str | None) -> None:
+    """Ask for the current password again before a sensitive change. Wrong tries share the two-factor lockout."""
+    if not password or not verify_password(user, password):
+        enforce_limit(redis_client, scope="2fa-user", subject=user.id, limit=TWO_FACTOR_ATTEMPTS, window_seconds=TWO_FACTOR_WINDOW_SECONDS)
+        record_audit_log(db, user_id=user.id, level="WARNING", message="A wrong or missing password was given while setting up two-factor", source="auth")
+        raise HTTPException(status_code=401, detail="Enter your current password to set up two-factor.")
+
+
 def _reauthenticate(db, user: User, password: str, code: str) -> None:
     """Password plus a second-factor code, for changes to the two-factor setup. One generic error for either being wrong."""
     wrong = HTTPException(status_code=401, detail="The password or the code is not correct.")
@@ -561,7 +613,7 @@ def _reauthenticate(db, user: User, password: str, code: str) -> None:
 
 
 @app.post("/auth/2fa/disable")
-def two_factor_disable(payload: ReauthRequest, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+def two_factor_disable(payload: ReauthRequest, request: Request, response: Response, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     session, user = _account_session(session_id, db)
     if not user.totp_enabled:
         raise HTTPException(status_code=409, detail="Two-factor is not turned on.")
@@ -571,7 +623,11 @@ def two_factor_disable(payload: ReauthRequest, session_id: Annotated[str | None,
     user.totp_enabled, user.totp_secret_enc, user.totp_last_step = False, None, None
     db.query(RecoveryCode).filter(RecoveryCode.user_id == user.id).delete(synchronize_session=False)
     db.commit()
-    revoked = revoke_other_sessions(redis_client, user.id, session["public_id"])
+    # A fresh session ID for this one too, and every other session ends.
+    new_session_id, new_public_id = create_session(redis_client, user, stage=STAGE_FULL, ip=_client_ip(request), user_agent=request.headers.get("user-agent"))
+    delete_session(redis_client, session_id)
+    revoked = revoke_other_sessions(redis_client, user.id, new_public_id)
+    _set_session_cookie(response, new_session_id)
     record_audit_log(db, user_id=user.id, level="WARNING", message=f"Two-factor was turned off ({revoked} other sessions signed out)", source="auth")
     return {"status": "ok"}
 
@@ -807,6 +863,22 @@ def agent_config(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_N
 
 
 OVERVIEW_ALERT_LIMIT = 50
+OVERVIEW_ALERTS_PER_SERVER = 10
+OVERVIEW_ALERT_SCAN = 1000
+
+
+def _spread_alerts(alerts: list) -> list:
+    """The most severe alerts first, but at most a few per server, so one server with a flood of alerts can't push
+    everybody else's off the list. The alert count shown elsewhere is still the true total."""
+    per_server: dict[int, int] = {}
+    chosen = []
+    for alert in alerts:
+        per_server[alert.server_id] = per_server.get(alert.server_id, 0) + 1
+        if per_server[alert.server_id] <= OVERVIEW_ALERTS_PER_SERVER:
+            chosen.append(alert)
+        if len(chosen) >= OVERVIEW_ALERT_LIMIT:
+            break
+    return chosen
 
 
 SYSTEM_EVENTS_SHOWN = 10
@@ -909,7 +981,7 @@ def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_C
     active_alerts = db.query(IncidentAlert).filter(IncidentAlert.status == "active")
     # Most severe first, then newest.
     severity_rank = case({severity: rank for rank, severity in enumerate(reversed(SEVERITIES))}, value=IncidentAlert.severity, else_=len(SEVERITIES))
-    alerts = active_alerts.order_by(severity_rank, IncidentAlert.created_at.desc()).limit(OVERVIEW_ALERT_LIMIT).all()
+    alerts = _spread_alerts(active_alerts.order_by(severity_rank, IncidentAlert.created_at.desc()).limit(OVERVIEW_ALERT_SCAN).all())
     hostnames = {server.id: server.hostname for server in servers}
     thresholds = get_alert_thresholds(db)
     pending = visible_pending_collectors(db) if _is_admin(db, user["id"]) else []
@@ -1148,18 +1220,23 @@ def revoke_enrollment_key(session_id: Annotated[str | None, Cookie(alias=SESSION
 
 
 @app.post("/monitoring/collectors/enroll", dependencies=[Depends(require_collector_listener)])
-def enroll_collector(payload: EnrollRequest, db=Depends(get_db)):
+def enroll_collector(payload: EnrollRequest, db=Depends(get_db), request: Request = None):
     """Register (or re-register) a collector using the owner's enrollment key.
 
     Servers are matched on machine_id, so a collector that lost its saved
-    credentials gets its existing server back with a fresh token.
+    credentials gets its existing server back with a fresh token. That makes the key powerful, so every use is
+    rate limited, the number of servers is capped, and replacing an existing server's credentials is recorded
+    as an event (it opens a warning), so it can't happen unnoticed.
     """
+    client_ip = _client_ip(request) if request else "unknown"
+    _soft_limit(scope="enroll-ip", subject=client_ip, limit=ENROLL_RATE_LIMIT, window_seconds=ENROLL_RATE_WINDOW_SECONDS)
     key = db.query(EnrollmentKey).filter(EnrollmentKey.key_hash == _hash_secret(payload.enroll_key.strip())).first()
     if not key:
         raise HTTPException(status_code=401, detail="Enrollment key is invalid or has been rotated.")
     if not _is_admin(db, key.owner_id):
         raise HTTPException(status_code=403, detail="Enrollment key belongs to an account that can no longer add servers.")
-    hostname = payload.hostname.strip()[:255]
+    _soft_limit(scope="enroll-key", subject=key.id, limit=ENROLL_RATE_LIMIT * 2, window_seconds=ENROLL_RATE_WINDOW_SECONDS)
+    hostname = _printable(payload.hostname, 255)
     machine_id = (payload.machine_id or "").strip()[:64] or None
     if not hostname:
         raise HTTPException(status_code=400, detail="Hostname is required.")
@@ -1167,11 +1244,19 @@ def enroll_collector(payload: EnrollRequest, db=Depends(get_db)):
     server = None
     if machine_id:
         server = db.query(Server).filter(Server.machine_id == machine_id).first()
+    replaced = server is not None
     if not server:
+        _ensure_server_capacity(db)
         server = Server(owner_id=key.owner_id, hostname=hostname, machine_id=machine_id)
         db.add(server)
+        db.flush()
     token = secrets.token_urlsafe(32)
     server.collector_token_hash = _hash_secret(token)
+    if replaced:
+        now = datetime.now(timezone.utc)
+        detail = f"This server's credentials were replaced through the enrollment key (request from {_printable(client_ip, 64)}). Its previous collector can no longer report."
+        db.add(SystemEvent(server_id=server.id, time=now, kind=CREDENTIALS_REPLACED_KIND, detail=detail[:512], event_key=f"credentials:{now.isoformat()}"))
+        record_audit_log(db, user_id=key.owner_id, level="warning", message=f"Enrollment key replaced the credentials of server {server.id} ({server.hostname}) from {_printable(client_ip, 64)}", source="enrollment", event_type="credentials_replaced")
     db.commit()
     db.refresh(server)
     return {"server_id": server.id, "collector_token": token, "check_interval_seconds": server.check_interval_seconds}
@@ -1291,6 +1376,7 @@ def approve_pending_collector(pending_id: int, payload: ApproveRequest | None = 
         # Approving mints new credentials for that server and locks out its current collector, so never do it silently.
         raise HTTPException(status_code=409, detail=f"This machine matches the existing server {server.hostname}. Approving replaces that server's credentials and signs its current collector out. Confirm to continue.")
     if not server:
+        _ensure_server_capacity(db)
         server = Server(owner_id=user["id"], hostname=pending.hostname, machine_id=pending.machine_id, ip_address=pending.ip_address, os_info=pending.os_info)
         db.add(server)
         db.flush()
@@ -1409,6 +1495,7 @@ def add_monitored_server(payload: ServerRequest, session_id: Annotated[str | Non
     user = _require_admin(session_id, db)
     if not payload.hostname.strip() or not 15 <= payload.check_interval_seconds <= 86400:
         raise HTTPException(status_code=400, detail="Hostname is required and interval must be between 15 and 86400 seconds.")
+    _ensure_server_capacity(db)
     token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     server = Server(owner_id=user["id"], hostname=payload.hostname.strip()[:255], ip_address=payload.ip_address, check_interval_seconds=payload.check_interval_seconds, collector_token_hash=token_hash)
@@ -1480,6 +1567,128 @@ def _printable(text: str, limit: int) -> str:
 
 def _whole_number(value, low: int, high: int) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and low <= value <= high else None
+
+
+def _finite_number(value, low: float, high: float) -> float | None:
+    """A real number inside [low, high], or None for anything else: text, booleans, NaN, infinity, out of range."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        number = float(value)
+    except OverflowError:  # an integer too large for a float
+        return None
+    return number if math.isfinite(number) and low <= number <= high else None
+
+
+# What a collector may report for the host, as (lowest, highest). Anything outside becomes unknown (None).
+HOST_NUMBER_LIMITS = {
+    "cpu_utilization_pct": (0, 100), "ram_pct": (0, 100), "swap_pct": (0, 100), "disk_usage_pct": (0, 100), "disk_inodes_pct": (0, 100),
+    "load_1m": (0, 1e6), "load_5m": (0, 1e6), "load_15m": (0, 1e6),
+    "ram_used_gb": (0, 1e9), "ram_available_gb": (0, 1e9),
+    "net_bytes_sent_mb": (0, 1e12), "net_bytes_recv_mb": (0, 1e12), "system_uptime_seconds": (0, 1e10),
+}
+MAX_MOUNTS_PER_CHECKIN = 64
+INT_MAX = 2**31 - 1  # the database's INTEGER columns
+
+
+def _clean_host_numbers(fields: dict) -> None:
+    """Range-check every number a collector reported about the host. A single NaN or Infinity stored here would
+    make every page that reads the latest sample fail for every user, so nothing unchecked is stored."""
+    for key, (low, high) in HOST_NUMBER_LIMITS.items():
+        if key in fields:
+            fields[key] = _finite_number(fields[key], low, high)
+
+
+def _clean_mount(raw) -> dict | None:
+    """One filesystem record reduced to known fields of the right type and size, or None if unusable."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("mount"), str):
+        return None
+    mount = _printable(raw["mount"], 255)
+    if not mount.startswith("/"):
+        return None
+    fs_type = raw.get("fs_type")
+    return {
+        "mount": mount, "fs_type": (_printable(fs_type, 64) or None) if isinstance(fs_type, str) else None,
+        "total_gb": _finite_number(raw.get("total_gb"), 0, 1e9), "used_gb": _finite_number(raw.get("used_gb"), 0, 1e9),
+        "used_pct": _finite_number(raw.get("used_pct"), 0, 100), "inodes_pct": _finite_number(raw.get("inodes_pct"), 0, 100),
+    }
+
+
+def _clean_mounts(raw) -> list[dict]:
+    """At most MAX_MOUNTS_PER_CHECKIN valid, distinct filesystems."""
+    seen: set[str] = set()
+    cleaned = []
+    for item in raw if isinstance(raw, list) else []:
+        mount = _clean_mount(item)
+        if mount and mount["mount"] not in seen:
+            seen.add(mount["mount"])
+            cleaned.append(mount)
+            if len(cleaned) >= MAX_MOUNTS_PER_CHECKIN:
+                break
+    return cleaned
+
+
+def _apply_server_fields(db, server: Server, reported: dict) -> None:
+    """Copy the descriptive fields a collector reports onto its server, each checked, never trusted.
+
+    A hostname that another server already uses is ignored, so one collector can't pose as another machine in
+    alert titles.
+    """
+    hostname = reported.get("hostname")
+    if isinstance(hostname, str) and (name := _printable(hostname, 255)):
+        taken = db.query(Server.id).filter(func.lower(Server.hostname) == name.lower(), Server.id != server.id).first()
+        if not taken:
+            server.hostname = name
+    address = reported.get("ip_address")
+    if isinstance(address, str):
+        try:
+            server.ip_address = str(ipaddress.ip_address(address.strip()))
+        except ValueError:
+            pass
+    os_info = reported.get("os_info")
+    if isinstance(os_info, str) and (text := _printable(os_info, 255)):
+        server.os_info = text
+    if (cores := _whole_number(reported.get("cpu_cores"), 1, 4096)) is not None:
+        server.cpu_cores = cores
+    if (ram := _finite_number(reported.get("total_ram_gb"), 0, 1e6)) is not None:
+        server.total_ram_gb = ram
+
+
+ENROLL_RATE_LIMIT = 30
+ENROLL_RATE_WINDOW_SECONDS = 3600
+CREDENTIALS_REPLACED_KIND = "credentials_replaced"
+
+
+def _soft_limit(*, scope: str, subject, limit: int, window_seconds: int) -> None:
+    """Count an attempt and refuse with 429 past the limit. Doesn't get in the way if Redis itself is down."""
+    try:
+        enforce_limit(redis_client, scope=scope, subject=subject, limit=limit, window_seconds=window_seconds)
+    except HTTPException as exc:
+        if exc.status_code == 429:
+            raise
+        # 503 means the counter itself is unavailable (Redis down); that must not stop servers from enrolling
+    except Exception:
+        return
+
+
+def _ensure_server_capacity(db) -> None:
+    """Refuse to add yet another server once the install holds MAX_SERVERS, however it is being added."""
+    if (db.query(func.count(Server.id)).scalar() or 0) >= MAX_SERVERS:
+        raise HTTPException(status_code=409, detail=f"This install already has the most servers it allows ({MAX_SERVERS}). Remove one first, or raise MAX_SERVERS.")
+
+
+def _enforce_ingest_spacing(server: Server) -> None:
+    """Refuse a check-in that follows the previous one too closely. Runs after authentication, so only the
+    server's own collector can use up its slot."""
+    if INGEST_MIN_SPACING_RATIO <= 0:
+        return
+    spacing = max(INGEST_MIN_SPACING_SECONDS, int(server.check_interval_seconds * INGEST_MIN_SPACING_RATIO))
+    try:
+        allowed = redis_client.set(f"homelab:ingest:{server.id}", "1", nx=True, ex=spacing)
+    except Exception:  # losing the limit during a Redis outage is better than losing the monitoring
+        return
+    if not allowed:
+        raise HTTPException(status_code=429, detail="Check-ins are arriving faster than this server's interval allows.", headers={"Retry-After": str(spacing)})
 
 
 def _clean_container(raw, now: datetime) -> dict | None:
@@ -1580,6 +1789,9 @@ def _clean_system_fields(fields: dict) -> None:
     for key, kind in (("oom_kill_total", int), ("kernel_tainted", int), ("ntp_synced", bool), ("reboot_required", bool)):
         if key in fields and not (isinstance(fields[key], kind) and (kind is bool or not isinstance(fields[key], bool))):
             fields[key] = None
+    for key in ("oom_kill_total", "kernel_tainted"):
+        if key in fields:
+            fields[key] = _whole_number(fields[key], 0, INT_MAX)
     if "last_shutdown" in fields and fields["last_shutdown"] not in {"clean", "unclean", "unknown"}:
         fields["last_shutdown"] = None
     if "docker_status" in fields and fields["docker_status"] not in DOCKER_STATUSES:
@@ -1599,7 +1811,7 @@ def _clean_system_fields(fields: dict) -> None:
 
 
 @app.post("/monitoring/metrics/ingest", dependencies=[Depends(require_collector_listener)])
-def ingest_metrics(payload: MetricsIngestRequest, authorization: Annotated[str | None, Header()] = None, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+def ingest_metrics(payload: MetricsIngestRequest, authorization: Annotated[str | None, Header()] = None, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db), request: Request = None):
     server = db.query(Server).filter(Server.id == payload.server_id).first()
     if not server:
         raise HTTPException(status_code=404, detail="Server not found.")
@@ -1609,16 +1821,18 @@ def ingest_metrics(payload: MetricsIngestRequest, authorization: Annotated[str |
         pass
     else:
         _require_admin(session_id, db)
-    for field in ("hostname", "ip_address", "os_info", "cpu_cores", "total_ram_gb"):
-        if field in payload.server and payload.server[field] is not None:
-            setattr(server, field, payload.server[field])
-    # Only one server can be the dashboard's own machine; the latest collector to claim it wins.
-    server.is_dashboard_host = payload.server.get("dashboard_host") is True
+    _enforce_ingest_spacing(server)
+    _apply_server_fields(db, server, payload.server)
+    # Only the stack's own collector, which reaches the backend through the gate's internal listener, may claim to
+    # be the dashboard's machine; a collector coming in over the VPN can't take that place. (With a single
+    # listener, in the development stack, there is no way to tell, so the claim is accepted.)
+    server.is_dashboard_host = payload.server.get("dashboard_host") is True and _collector_via(request) in ("internal", "")
     if server.is_dashboard_host:
         db.query(Server).filter(Server.id != server.id, Server.is_dashboard_host.is_(True)).update({"is_dashboard_host": False}, synchronize_session=False)
     now = datetime.now(timezone.utc)
     host_fields = {k: v for k, v in payload.host.items() if k in HostMetric.__table__.columns.keys() and k not in {"id", "server_id", "time"}}
     _clean_system_fields(host_fields)
+    _clean_host_numbers(host_fields)
     previous = db.query(HostMetric).filter(HostMetric.server_id == server.id).order_by(HostMetric.time.desc(), HostMetric.id.desc()).first()
     # Only a collector that found the system helper sends its events; then they replace the OOM counter.
     helper_active = isinstance(payload.host.get("helper_events"), list)
@@ -1629,11 +1843,8 @@ def ingest_metrics(payload: MetricsIngestRequest, authorization: Annotated[str |
     if host_fields.get("boot_id") and host_fields.get("last_shutdown") in REBOOT_DETAILS:
         db.query(SystemEvent).filter(SystemEvent.server_id == server.id, SystemEvent.event_key == f"{REBOOT_KEY_PREFIX}{host_fields['boot_id']}").update({"detail": REBOOT_DETAILS[host_fields["last_shutdown"]]}, synchronize_session=False)
     db.add(HostMetric(server_id=server.id, time=now, **host_fields))
-    mounts = payload.host.get("mounts")
-    for mount in mounts if isinstance(mounts, list) else []:
-        if isinstance(mount, dict) and isinstance(mount.get("mount"), str) and mount["mount"]:
-            allowed = {k: v for k, v in mount.items() if k in MountMetric.__table__.columns.keys() and k not in {"id", "server_id", "time"}}
-            db.add(MountMetric(server_id=server.id, time=now, **allowed))
+    for mount in _clean_mounts(payload.host.get("mounts")):
+        db.add(MountMetric(server_id=server.id, time=now, **mount))
     containers = [clean for clean in (_clean_container(raw, now) for raw in payload.containers[:MAX_CONTAINERS_PER_CHECKIN]) if clean]
     # Compare with the previous check-in before this one's rows exist.
     previous_containers = latest_containers(db, server.id, previous.time) if previous else []
@@ -1745,26 +1956,30 @@ def delete_conversation(conversation_id: str, session_id: Annotated[str | None, 
     return {"status": "deleted"}
 
 
+LOG_WRITE_LIMIT = 120
+
+
 @app.post("/logs")
 def create_log(
-    payload: dict,
+    payload: LogCreateRequest,
     session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
     db=Depends(get_db),
 ):
     user = get_user_from_session(redis_client, session_id)
     if not user:
         raise HTTPException(status_code=401, detail="Session is invalid or expired.")
+    enforce_limit(redis_client, scope="logs-user", subject=user["id"], limit=LOG_WRITE_LIMIT, window_seconds=3600)
 
     return record_audit_log(
         db,
         user_id=user["id"],
-        level=str(payload.get("level", "INFO")).upper(),
-        message=str(payload.get("message", "New event")),
-        source=str(payload.get("source", "dashboard")),
-        task_title=str(payload.get("task_title") or payload.get("message", "New task")),
-        steps=[str(step) for step in payload.get("steps", []) if str(step).strip()],
-        conversation_id=payload.get("conversation_id"),
-        event_type=payload.get("event_type"),
+        level=payload.level,
+        message=payload.message,
+        source="dashboard",
+        task_title=payload.task_title or payload.message[:255],
+        steps=[step for step in payload.steps if step.strip()],
+        conversation_id=payload.conversation_id,
+        event_type=payload.event_type or None,
     )
 
 

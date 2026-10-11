@@ -56,6 +56,16 @@ def enforce_limit(redis_client, *, scope: str, subject: str, limit: int, window_
     return key
 
 
+def refund_attempt(redis_client, key: str) -> None:
+    """Give back one attempt, for an attempt that turned out to be fine. Unlike a reset this can't be used to
+    clear the failures that came before it: the count of wrong guesses in the window stays as it was."""
+    try:
+        if redis_client.decr(key) < 0:
+            redis_client.incr(key)
+    except Exception:
+        pass
+
+
 def reset_limits(redis_client, *keys: str) -> None:
     try:
         redis_client.delete(*keys)

@@ -40,7 +40,7 @@ def _fresh_collector_state():
 # --- routing: the allow-list ---------------------------------------------------------------
 
 @pytest.mark.parametrize("target", [
-    "/containers/json", "/containers/json?all=1", f"/containers/{CID}/json", f"/containers/{CID}/stats?stream=false", f"/containers/{CID[:12]}/json",
+    "/containers/json?all=1", f"/containers/{CID}/json", f"/containers/{CID}/stats?stream=false", f"/containers/{CID[:12]}/json",
     f"/containers/{CID}/stats?stream=false&one-shot=true",
 ])
 def test_the_four_read_requests_are_allowed(target):
@@ -49,11 +49,12 @@ def test_the_four_read_requests_are_allowed(target):
 
 @pytest.mark.parametrize("method", ["POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "get", "CONNECT"])
 def test_only_get_is_allowed(method):
-    assert proxy.route(method, "/containers/json") is None
+    assert proxy.route(method, "/containers/json?all=1") is None
 
 
 @pytest.mark.parametrize("target", [
     # other endpoints, including the ones that read container contents or start things
+    "/containers/json",   # only the full list the collector asks for (?all=1) is allowed
     "/", "/version", "/info", "/images/json", "/volumes", "/networks", "/system/df", "/events", "/_ping", "/containers", "/containers/",
     f"/containers/{CID}/export", f"/containers/{CID}/archive?path=/etc/passwd", f"/containers/{CID}/logs", f"/containers/{CID}/top",
     f"/containers/{CID}/attach", f"/containers/{CID}/exec", f"/containers/{CID}/start", f"/containers/{CID}/kill", f"/containers/{CID}/changes",
@@ -196,7 +197,7 @@ def test_upstream_failures_become_a_generic_502(stack):
 
     daemon.shutdown()
     daemon.server_close()
-    assert _raw(port, "GET", "/containers/json")[0] == 502
+    assert _raw(port, "GET", "/containers/json?all=1")[0] == 502
 
 
 def test_oversized_upstream_answers_are_rejected(stack, monkeypatch):

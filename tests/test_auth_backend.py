@@ -168,7 +168,7 @@ def test_configured_token_is_used_and_not_printed(monkeypatch):
     assert main._bootstrap_token_valid(session, "my-own-setup-token")
 
 
-@pytest.mark.parametrize("bad", [None, "", "   ", "hlb_wrong", "x" * 1000])
+@pytest.mark.parametrize("bad", [None, "", "   ", "hlb_wrong", "x" * 200])      # 200 is the longest the request model accepts (longer is refused before it gets here)
 def test_first_account_is_refused_without_the_right_token(monkeypatch, bad):
     main, session = _fresh(monkeypatch)
     main.ensure_bootstrap_token(session)

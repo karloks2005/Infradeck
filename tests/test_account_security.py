@@ -260,7 +260,7 @@ def _signed_in(email="admin@example.com"):
 
 
 def _enroll(app, client):
-    secret = client.post("/auth/2fa/setup").json()["secret"]
+    secret = client.post("/auth/2fa/setup", json={"password": PASSWORD}).json()["secret"]
     response = client.post("/auth/2fa/enable", json={"code": totp.code_at(secret, app.clock["now"])})
     assert response.status_code == 200, response.text
     return secret, response.json()["recovery_codes"]
@@ -334,7 +334,7 @@ def test_when_no_key_is_configured_two_factor_is_not_enforced_and_cannot_be_set_
     assert _login(client).json()["setup_required"] is False
     assert client.get("/monitoring/overview").status_code == 200
     assert client.get("/auth/2fa/status").json()["available"] is False
-    assert client.post("/auth/2fa/setup").status_code == 503
+    assert client.post("/auth/2fa/setup", json={"password": PASSWORD}).status_code == 503
 
 
 def test_the_policy_can_be_turned_off_and_defaults_to_on(app):
@@ -378,7 +378,7 @@ def test_enrolling_upgrades_the_session_and_rotates_its_id(app):
 
 def test_a_wrong_code_does_not_enable_two_factor(app):
     client = _signed_in()
-    client.post("/auth/2fa/setup")
+    client.post("/auth/2fa/setup", json={"password": PASSWORD})
     user_before = app.db.get(User, 1).totp_enabled
 
     response = client.post("/auth/2fa/enable", json={"code": "000000"})
@@ -449,7 +449,7 @@ def test_a_code_cannot_be_replayed(app):
 
 def test_the_code_from_the_enrollment_step_cannot_be_reused_to_sign_in(app):
     client = _signed_in()
-    secret = client.post("/auth/2fa/setup").json()["secret"]
+    secret = client.post("/auth/2fa/setup", json={"password": PASSWORD}).json()["secret"]
     code = totp.code_at(secret, app.clock["now"])
     client.post("/auth/2fa/enable", json={"code": code})
 
@@ -562,13 +562,13 @@ def test_setup_is_refused_while_two_factor_is_already_on(app):
     client = _signed_in()
     _enroll(app, client)
 
-    assert client.post("/auth/2fa/setup").status_code == 409 and client.post("/auth/2fa/enable", json={"code": "123456"}).status_code == 409
+    assert client.post("/auth/2fa/setup", json={"password": PASSWORD}).status_code == 409 and client.post("/auth/2fa/enable", json={"code": "123456"}).status_code == 409
 
 
 def test_setting_up_again_before_confirming_replaces_the_pending_secret(app):
     client = _signed_in()
-    first = client.post("/auth/2fa/setup").json()["secret"]
-    second = client.post("/auth/2fa/setup").json()["secret"]
+    first = client.post("/auth/2fa/setup", json={"password": PASSWORD}).json()["secret"]
+    second = client.post("/auth/2fa/setup", json={"password": PASSWORD}).json()["secret"]
 
     assert first != second
     assert client.post("/auth/2fa/enable", json={"code": totp.code_at(first, app.clock["now"])}).status_code == 400
@@ -788,3 +788,90 @@ def test_the_reset_script_asks_for_exactly_one_email():
     script = os.path.join(os.path.dirname(__file__), "..", "src", "backend", "reset_2fa.py")
     source = open(script).read()
     assert "reset_two_factor" in source and "len(argv) != 2" in source
+
+
+# --- turning two-factor on from a normal session needs the password again ---------------------------------
+
+def test_a_normal_session_must_give_the_password_to_set_up_two_factor(app):
+    client = _signed_in("member@example.com")
+
+    for body in (None, {}, {"password": None}, {"password": ""}, {"password": "wrong-password-entirely"}):
+        response = client.post("/auth/2fa/setup", json=body) if body is not None else client.post("/auth/2fa/setup")
+        assert response.status_code == 401, body
+    user = app.db.get(User, 2)
+    app.db.refresh(user)
+    assert user.totp_secret_enc is None and user.totp_enabled is False            # nothing was created
+    assert any("wrong or missing password" in message for message in _audit(app))
+
+
+def test_the_right_password_starts_the_setup_from_a_normal_session(app):
+    client = _signed_in("member@example.com")
+
+    response = client.post("/auth/2fa/setup", json={"password": PASSWORD})
+
+    assert response.status_code == 200 and len(response.json()["secret"]) == 32
+
+
+def test_a_stolen_session_cannot_lock_the_owner_out_by_enrolling_its_own_authenticator(app):
+    thief = _signed_in("member@example.com")           # has the session cookie but not the password
+
+    assert thief.post("/auth/2fa/setup").status_code == 401
+    assert thief.post("/auth/2fa/enable", json={"code": "123456"}).status_code == 400
+    owner = TestClient(main.app)
+    assert _login(owner, "member@example.com").json().get("status") != "two_factor_required"     # the owner can still sign in with the password alone
+
+
+def test_wrong_passwords_while_setting_up_count_toward_the_two_factor_lockout(app):
+    client = _signed_in("member@example.com")
+    codes = [client.post("/auth/2fa/setup", json={"password": "nope-nope-nope-nope"}).status_code for _ in range(main.TWO_FACTOR_ATTEMPTS + 2)]
+
+    assert codes[:main.TWO_FACTOR_ATTEMPTS] == [401] * main.TWO_FACTOR_ATTEMPTS and codes[-1] == 429
+
+
+def test_the_forced_first_enrolment_does_not_ask_for_the_password_again(app):
+    client = _signed_in("admin@example.com")           # an administrator who must enrol: the session just passed the password
+
+    assert client.get("/auth/me").json()["user"]["setup_required"] is True
+    assert client.post("/auth/2fa/setup").status_code == 200
+
+
+# --- smaller hardening ----------------------------------------------------------------------------------
+
+def test_turning_two_factor_off_gives_this_session_a_new_id(app):
+    member = _signed_in("member@example.com")
+    secret, _ = _enroll(app, member)
+    before = member.cookies.get(COOKIE)
+
+    assert member.post("/auth/2fa/disable", json={"password": PASSWORD, "code": _code(app, secret, 30)}).status_code == 200
+
+    after = member.cookies.get(COOKIE)
+    assert after and after != before
+    assert main.redis_client.get(f"homelab:session:{before}") is None and member.get("/auth/me").status_code == 200
+
+
+def test_a_successful_sign_in_does_not_reset_the_address_counter(app):
+    """Someone with an account of their own must not be able to reset the limit between guesses at another account."""
+    attacker = TestClient(main.app)
+    for _ in range(main.LOGIN_RATE_LIMIT - 1):
+        assert _login(attacker, "admin@example.com", "a-wrong-password-for-the-admin").status_code == 401
+    assert _login(attacker, "member@example.com").status_code == 200                # their own account, from the same address
+
+    # signing in did not buy more guesses: only the one allowed guess is left, then the address is locked out
+    assert _login(attacker, "admin@example.com", "the-last-allowed-guess-attempt").status_code == 401
+    assert _login(attacker, "admin@example.com", "another-wrong-password-attempt").status_code == 429
+
+
+def test_signing_in_successfully_does_not_use_up_the_addresss_allowance(app):
+    """People behind one shared address can all sign in without locking each other out."""
+    for _ in range(main.LOGIN_RATE_LIMIT * 3):
+        assert _login(TestClient(main.app), "member@example.com").status_code == 200
+
+
+def test_a_successful_sign_in_still_resets_that_accounts_own_counter(app):
+    client = TestClient(main.app)
+    for _ in range(main.LOGIN_RATE_LIMIT - 2):
+        _login(client, "member@example.com", "wrong-password-for-the-member")
+    assert _login(client, "member@example.com").status_code == 200
+
+    keys = [key for key in main.redis_client.keys("*") if "login-email" in key and "member" in key]
+    assert keys == []

@@ -260,7 +260,7 @@ def test_vpn_listener_refuses_registration_without_a_token(db, strict):
     assert db.query(PendingCollector).count() == 0
 
 
-@pytest.mark.parametrize("bad", ["", "hlj_nonsense", "x" * 500])
+@pytest.mark.parametrize("bad", ["", "hlj_nonsense", "x" * 200])      # 200 is the longest the request model accepts
 def test_wrong_tokens_are_refused(db, strict, bad):
     _mint(db)
     with pytest.raises(HTTPException) as exc:

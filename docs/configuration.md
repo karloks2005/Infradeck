@@ -12,7 +12,10 @@
 | `ADMIN_ALERT_WEBHOOK_URL` | empty | Receives JSON alerts for critical `daily_checkup` findings. |
 | `SESSION_COOKIE_SECURE` | `false` (dev), `true` (server file) | Send the login cookie over HTTPS only. |
 | `SESSION_TTL_SECONDS` | `86400` | Session lifetime. |
-| `ALLOW_REGISTRATION` | `true` (dev), `false` (server file) | Let anyone create an account. When `false`, only the first account can be created. |
+| `ALLOW_REGISTRATION` | `false` | Let anyone create an account. When `false` (the default), only the first account can be created. Turning it on prints a security warning at every start. |
+| `MAX_SERVERS` | `200` | The most servers the install holds, however they are added (enrollment key, approval or by hand). |
+| `INGEST_MIN_SPACING_RATIO` | `0.25` | A check-in must arrive at least this share of the server's check interval (and never sooner than 5 seconds) after the previous one, or it is refused with 429. `0` switches the limit off. |
+| `ENABLE_API_DOCS` | `false` | Serves the interactive API documentation at `/api/docs`. Leave off on a public install. |
 | `SECRETS_KEY` | empty | Key that encrypts two-factor secrets. Required for two-factor sign-in and for the "require two-factor for admins" policy to be enforced. Generate with `python -m src.backend.secrets_box`; comma-separated keys allow rotation. |
 | `ADMIN_BOOTSTRAP_TOKEN` | generated at start | Setup token for the first account. Leave empty to have one generated and printed in the backend log until the first account exists. |
 | `FRONTEND_BIND` | `0.0.0.0` (dev), `127.0.0.1` (server file) | Interface for the dashboard's plain-HTTP port. |

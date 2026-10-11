@@ -38,6 +38,7 @@ stops firing.
 | Kernel fault flags (machine check, bad page, oops, warning, soft lockup) | – | warning, clears on reboot |
 | Clock not synchronised | 3 check-ins in a row | warning |
 | Reboot required | – | info |
+| Server credentials replaced through the enrollment key | stays open 60 minutes | warning |
 
 New listening ports and firewall changes are noticed the same way, by comparing with
 what the previous check-in saw. The first report is a silent baseline, an unreadable

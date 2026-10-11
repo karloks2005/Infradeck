@@ -82,8 +82,10 @@ stats) and nothing more through Docker.
   already have access to the database (local development, recovering a lost login). It reads the
   email and password from `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` or prompts for them, never prints
   the password, and applies the same 16-character rule. It has no built-in account or password.
-- **Registration stays off.** `ALLOW_REGISTRATION` defaults to `false` in `docker-compose.server.yml`,
-  so after the first account nobody else can sign up.
+- **Registration stays off.** `ALLOW_REGISTRATION` defaults to `false` everywhere (in the backend and in
+  both compose files), so after the first account nobody else can sign up. If you turn it on, the backend
+  prints a SECURITY WARNING at every start, because anyone who can reach the dashboard can then create an
+  account and read every server, container and incident.
 
 ## Passwords and cross-site requests
 
@@ -170,6 +172,13 @@ the public side at all.
 - **Re-pairing an existing machine needs explicit confirmation.** If a new request matches the
   machine ID of a server you already have, approving it replaces that server's credentials and signs
   its collector out. The dashboard warns and asks, and the API refuses without `replace: true`.
+- **The enrollment key is the exception, and it is watched.** A collector installed with the enrollment key
+  (for scripted installs) gets its existing server back, with a new token, when its machine ID is already
+  known, which is what makes reinstalling easy. Because that key is long-lived, using it is rate limited
+  (per address and per key), the number of servers is capped (`MAX_SERVERS`, default 200), and replacing an
+  existing server's credentials is recorded: it appears in the server's System row, in the audit log, and
+  opens a **warning** for an hour, with advice to rotate the key if you didn't do it. Treat the key like a
+  password and rotate it under *Connect a server → Advanced* if a host that holds it is compromised.
 - **No code comes from the dashboard.** The dashboard no longer serves `collector.py`. Remote
   hosts install the collector and the Docker proxy from container images you publish (the "Publish
   images" workflow builds them for a version tag, signs them with cosign and prints their digests).
@@ -187,10 +196,20 @@ What this still depends on:
   admin still has to approve them; ingest additionally needs a server's token.
 - Rotating a collector token means re-adding that server.
 
-## Container data is untrusted
+## Data from collectors is untrusted
 
-A compromised collector controls everything it reports about containers, so the backend never trusts
-it: each record is reduced to known fields of the right type (text made printable and capped, numbers
+A compromised collector controls everything it reports, so the backend never trusts any of it. For the host
+itself, every number is range-checked (percentages 0 to 100, loads, sizes and counters within sane limits; NaN,
+infinity, text and booleans become "unknown"), so one bad value can't make pages fail for everyone. Server
+descriptions (hostname, address, operating system, core count, memory) are checked too, and a hostname that
+another server already uses is ignored, so one collector can't pose as another. Only the stack's own collector,
+which reaches the backend through the gate's internal listener, can claim to be the dashboard's machine. At most
+64 filesystems are accepted per check-in, check-ins must be spaced by a quarter of the check interval
+(refused with 429 otherwise, and checked only after the token is verified, so nobody else can use up a
+server's slot), and the alerts list on the dashboard shows at most ten per server, so one noisy server can't
+push everyone else's off it.
+
+For containers, each record is reduced to known fields of the right type (text made printable and capped, numbers
 range-checked, timestamps parsed strictly, image IDs matched against `sha256:` plus 64 hex characters),
 and anything unexpected becomes "unknown", which never raises an incident. At most 500 containers are
 accepted per check-in, names are capped at 128 characters so they can't break incident keys, and

@@ -59,6 +59,11 @@ services:
       REGISTER_RATE_LIMIT: ${REGISTER_RATE_LIMIT:-3}
       REGISTER_RATE_WINDOW_SECONDS: ${REGISTER_RATE_WINDOW_SECONDS:-3600}
       ADMIN_ALERT_WEBHOOK_URL: ${ADMIN_ALERT_WEBHOOK_URL:-}
+      # Limits on what collectors can do. A check-in must come at least this share of the check interval after the
+      # previous one (0 switches it off); the install holds at most MAX_SERVERS; /docs is off unless enabled.
+      INGEST_MIN_SPACING_RATIO: ${INGEST_MIN_SPACING_RATIO:-0.25}
+      MAX_SERVERS: ${MAX_SERVERS:-200}
+      ENABLE_API_DOCS: ${ENABLE_API_DOCS:-false}
       # Setup token for the very first account. Empty: one is generated and printed in the backend log.
       ADMIN_BOOTSTRAP_TOKEN: ${ADMIN_BOOTSTRAP_TOKEN:-}
       # How long a token from "Connect a server" stays valid, in seconds.
