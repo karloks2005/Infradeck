@@ -104,8 +104,9 @@ flowchart LR
   volume and it answers only container list, inspect and stats.
 - The optional **system helper** reads the kernel log and `wtmp`, and writes a
   sanitised summary file the collector picks up (profile `system-events`).
-- PostgreSQL and Redis have no host ports; they are reachable only inside the
-  Compose network.
+- PostgreSQL and Redis have no host ports and sit on a separate network with no route out, reachable only
+  by the backend; Redis needs a password. The collector can reach the gate (or, in development, the backend)
+  and nothing else.
 
 The development stack (`compose.yml`) keeps a single listener: everything,
 including the collector endpoints, is reachable through the frontend. The server
@@ -116,7 +117,7 @@ stack splits them as described above.
 Requirements: Docker with Compose v2.
 
 ```bash
-cp .env.example .env              # then set POSTGRES_PASSWORD to a long random value
+cp .env.example .env              # then set POSTGRES_PASSWORD and REDIS_PASSWORD (openssl rand -hex 24)
 docker compose up -d --build
 ```
 
@@ -146,7 +147,7 @@ need published images; see [Publishing the collector images](docs/deployment.md#
 The server stack (`docker-compose.server.yml`) publishes the dashboard through an existing **Traefik** and
 serves the collector endpoints only on a separate listener bound to your **VPN address**. In short:
 
-1. `cp example.env .env`, then set `POSTGRES_PASSWORD`, `DASHBOARD_DOMAIN`, your Traefik names and
+1. `cp example.env .env`, then set `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `DASHBOARD_DOMAIN`, your Traefik names and
    `COMPOSE_FILE=docker-compose.server.yml` (the last one matters: without it Compose uses the development stack).
 2. Generate `SECRETS_KEY` (needed for two-factor sign-in) and set `COLLECTOR_BIND` / `COLLECTOR_PUBLIC_URL` for your VPN.
 3. `docker compose -f docker-compose.server.yml up -d --build`, then register the first account with the setup token from the backend log.

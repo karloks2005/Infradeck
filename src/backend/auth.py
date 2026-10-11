@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 import secrets
@@ -30,24 +31,34 @@ def _serialize_user(user: User):
     }
 
 
+def _digest(secret: str) -> str:
+    """What Redis stores in place of a secret. The cookie value (and a pending-login token) is only ever kept
+    as its SHA-256, so reading Redis (a backup, a leak, another container) doesn't hand out working sessions,
+    and writing a key there is useless without knowing a secret that hashes to it."""
+    return hashlib.sha256(secret.encode()).hexdigest()
+
+
+_DIGEST = re.compile(r"[0-9a-f]{64}")
+
+
 def _session_key(session_id: str) -> str:
-    return f"homelab:session:{session_id}"
+    return _key_for_digest(_digest(session_id))
+
+
+def _key_for_digest(digest: str) -> str:
+    return f"homelab:session:{digest}"
 
 
 def _store_session(redis_client, session_id: str, payload: dict):
-    key = _session_key(session_id)
-    value = json.dumps(payload)
-    redis_client.set(key, value, ex=SESSION_TTL_SECONDS)
+    redis_client.set(_session_key(session_id), json.dumps(payload), ex=SESSION_TTL_SECONDS)
 
 
 def _read_session(redis_client, session_id: str):
-    key = _session_key(session_id)
-    return redis_client.get(key)
+    return redis_client.get(_session_key(session_id))
 
 
 def _delete_session(redis_client, session_id: str):
-    key = _session_key(session_id)
-    redis_client.delete(key)
+    redis_client.delete(_session_key(session_id))
 
 
 def _user_sessions_key(user_id: int) -> str:
@@ -55,7 +66,11 @@ def _user_sessions_key(user_id: int) -> str:
 
 
 def _pending_key(token: str) -> str:
-    return f"homelab:2fa-pending:{token}"
+    return f"homelab:2fa-pending:{_digest(token)}"
+
+
+def _attempts_key(token: str) -> str:
+    return f"homelab:2fa-attempts:{_digest(token)}"
 
 
 def _printable(text: str | None, limit: int) -> str | None:
@@ -75,7 +90,7 @@ def create_session(redis_client, user: User, *, stage: str = STAGE_FULL, ip: str
         "created_at": datetime.now(timezone.utc).isoformat(), "ip": _printable(ip, 64), "user_agent": _printable(user_agent, 120),
     })
     index = _user_sessions_key(user.id)
-    redis_client.hset(index, public_id, session_id)
+    redis_client.hset(index, public_id, _digest(session_id))
     redis_client.expire(index, SESSION_TTL_SECONDS)
     return session_id, public_id
 
@@ -84,7 +99,14 @@ def get_session(redis_client, session_id: str | None) -> dict | None:
     """The session behind a cookie, whatever its stage, or None. Sessions from before stages existed count as full."""
     if not session_id:
         return None
-    raw = _read_session(redis_client, session_id)
+    return _session_from_raw(_read_session(redis_client, session_id))
+
+
+def _session_by_digest(redis_client, digest) -> dict | None:
+    return _session_from_raw(redis_client.get(_key_for_digest(digest))) if isinstance(digest, str) and _DIGEST.fullmatch(digest) else None
+
+
+def _session_from_raw(raw) -> dict | None:
     if not raw:
         return None
     try:
@@ -120,8 +142,8 @@ def delete_session(redis_client, session_id: str | None) -> bool:
 def list_user_sessions(redis_client, user_id: int, current_public_id: str | None) -> list[dict]:
     """A user's live sessions, newest first, by public ID only. Entries whose session has expired are dropped."""
     index, sessions = _user_sessions_key(user_id), []
-    for public_id, session_id in redis_client.hgetall(index).items():
-        session = get_session(redis_client, session_id)
+    for public_id, digest in redis_client.hgetall(index).items():
+        session = _session_by_digest(redis_client, digest)
         if not session or session["id"] != user_id or session["public_id"] != public_id:
             redis_client.hdel(index, public_id)
             continue
@@ -134,12 +156,14 @@ def revoke_user_session(redis_client, user_id: int, public_id: str) -> bool:
     """Sign out one of the user's own sessions by public ID. Anything that isn't theirs is simply not found."""
     if not isinstance(public_id, str) or not _PUBLIC_ID.fullmatch(public_id):
         return False
-    session_id = redis_client.hget(_user_sessions_key(user_id), public_id)
-    session = get_session(redis_client, session_id)
+    digest = redis_client.hget(_user_sessions_key(user_id), public_id)
+    session = _session_by_digest(redis_client, digest)
     if not session or session["id"] != user_id:
         redis_client.hdel(_user_sessions_key(user_id), public_id)
         return False
-    return delete_session(redis_client, session_id)
+    redis_client.hdel(_user_sessions_key(user_id), public_id)
+    redis_client.delete(_key_for_digest(digest))
+    return True
 
 
 def revoke_other_sessions(redis_client, user_id: int, keep_public_id: str | None) -> int:
@@ -170,7 +194,7 @@ def read_pending_two_factor(redis_client, token) -> int | None:
 
 def count_pending_attempt(redis_client, token: str) -> bool:
     """Count a try against this pending login; after MAX_PENDING_ATTEMPTS the token is destroyed. False means no more tries."""
-    key = f"homelab:2fa-attempts:{token}"
+    key = _attempts_key(token)
     attempts = redis_client.incr(key)
     if attempts == 1:
         redis_client.expire(key, PENDING_TWO_FACTOR_TTL_SECONDS)
@@ -181,7 +205,24 @@ def count_pending_attempt(redis_client, token: str) -> bool:
 
 
 def delete_pending_two_factor(redis_client, token: str) -> None:
-    redis_client.delete(_pending_key(token), f"homelab:2fa-attempts:{token}")
+    redis_client.delete(_pending_key(token), _attempts_key(token))
+
+
+def purge_legacy_session_keys(redis_client) -> int:
+    """Delete session data written before session IDs were hashed: the keys that still contain a raw session ID or
+    pending-login token, and the per-user indexes that point at them. Those sessions stopped working when the
+    format changed; this stops their secrets from sitting in Redis until they expire. Returns how many were removed."""
+    removed = 0
+    try:
+        for key in list(redis_client.scan_iter(match="homelab:session:*")) + list(redis_client.scan_iter(match="homelab:2fa-pending:*")) + list(redis_client.scan_iter(match="homelab:2fa-attempts:*")):
+            if not _DIGEST.fullmatch(key.rsplit(":", 1)[-1]):
+                removed += int(bool(redis_client.delete(key)))
+        for key in redis_client.scan_iter(match="homelab:user-sessions:*"):
+            if any(not _DIGEST.fullmatch(value) for value in redis_client.hvals(key)):
+                removed += int(bool(redis_client.delete(key)))
+    except Exception:
+        return removed
+    return removed
 
 
 def record_audit_log(

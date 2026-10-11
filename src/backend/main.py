@@ -23,7 +23,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import case, func, inspect, text
 
 from .alerts import CONTAINER_RULE_PREFIX, CRITICAL, SERVER_OFFLINE_RULE, SEVERITIES, active_rule_keys, raise_alert, resolve_alerts, sync_alerts
-from . import history as history_service, rollups, secrets_box, stats, totp
+from . import auth, history as history_service, rollups, secrets_box, stats, totp
 from .auth import (
     STAGE_ENROLLMENT, STAGE_FULL, count_pending_attempt, create_pending_two_factor, create_session, delete_pending_two_factor, delete_session, get_recent_logs,
     get_session, get_user_from_session, hash_password, issue_recovery_codes, list_user_sessions, read_pending_two_factor, recovery_codes_left, record_audit_log,
@@ -309,6 +309,8 @@ def startup_event():
         if require_admin_two_factor(db) and not secrets_box.available():
             print("SECURITY WARNING: two-factor is required for administrators, but SECRETS_KEY is missing or invalid, so it is NOT being enforced. "
                   "Generate a key with `python -m src.backend.secrets_box` and set SECRETS_KEY in .env.", flush=True)
+        if removed := auth.purge_legacy_session_keys(redis_client):
+            print(f"Removed {removed} session records written in the old format (sign-ins before this version ended).", flush=True)
         if warning := registration_warning(db):
             print(warning, flush=True)
         setup_token = ensure_bootstrap_token(db)

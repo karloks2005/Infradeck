@@ -11,7 +11,7 @@ This page says what each component can reach, so you can decide what to run.
 | Docker proxy | container, uid 0, no capabilities | the Docker socket; a Unix socket shared only with the collector; no network | Allows four read-only requests. See below. |
 | System helper (optional) | container, uid 0 with **one** capability | kernel log, `/var/log/wtmp` (read-only), one output volume | Off by default. Details below. |
 | Collector gate (server stack) | nginx container, no capabilities | the backend; publishes one port on your VPN address | The only way to reach collector endpoints. See below. |
-| Backend / frontend / database | containers | each other | Only the frontend port is published. |
+| Backend / frontend / database / Redis | containers | each other, over separate networks | Only the frontend port is published. Redis and PostgreSQL are on a network with no route out and are reachable only by the backend. Redis needs a password. |
 
 ## The optional system helper
 
@@ -255,6 +255,26 @@ The collector's network checks are passive or opt-in, and add no privileges:
 - **No one-line installer.** The old `docker run` install is gone. Remote machines run the compose
   command **Connect a server** generates (signed, digest-pinned images), and machines set up from
   `collector-compose.yml` build the images locally.
+
+## Network separation, Redis and login sessions
+
+- **Three networks.** `data` holds PostgreSQL, Redis and the backend and has **no route to the internet**.
+  `front` holds the frontend, the collector gate and the backend. `collector` holds the collector and the gate
+  only. So the collector, the container that talks to remote hosts and parses their data, can reach the gate
+  and nothing else: it can't resolve or connect to Redis or PostgreSQL, and a neighbouring container can't
+  either. (Checked on a running stack.) The development stack has the same split, except that its collector
+  talks to the backend directly.
+- **Redis has a password** (`REDIS_PASSWORD`, required). Without it, anything that could reach Redis could write
+  a session for any user, administrator included, with no password or two-factor.
+- **Sessions are stored hashed.** Redis holds only the SHA-256 of the cookie value, in the session key, the
+  per-user index and the pending-login token. Reading Redis (a backup, a leaked dump) doesn't hand out working
+  sessions. Note what this does and doesn't do: hashing protects against *reading* Redis. It does not stop
+  someone who can *write* to it, because they can pick a secret and store its hash; the password and the
+  network separation are what stop that.
+- **Upgrade.** Sessions written in the old format no longer work (everyone signs in once) and are deleted from
+  Redis at start, so the old session IDs don't linger there.
+- **Still open:** the backend trusts `X-Forwarded-For` from any address that can reach it (`--forwarded-allow-ips`).
+  With the separation, only the nginx containers can, but narrowing it further is tracked separately.
 
 ## Statistics and history
 

@@ -42,6 +42,12 @@ class FakeRedis:
     def ttl(self, key):
         return self.ttls.get(key, -1)
 
+    def scan_iter(self, match="*", **kwargs):
+        return iter(self.keys(match))
+
+    def hvals(self, key):
+        return list(self.hashes.get(key, {}).values())
+
     def keys(self, pattern="*"):
         return [key for key in list(self.store) + list(self.hashes) if fnmatch.fnmatch(key, pattern)]
 

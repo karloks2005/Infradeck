@@ -9,6 +9,7 @@ services:
     image: postgres:16-alpine
     container_name: homelab-postgres
     restart: unless-stopped
+    networks: [data]
     environment:
       POSTGRES_DB: homelab
       POSTGRES_USER: homelab
@@ -26,11 +27,16 @@ services:
     image: redis:7-alpine
     container_name: homelab-redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    networks: [data]
+    # Needs a password: Redis holds the login sessions, so nothing that can merely reach it on the network
+    # may use it. Generate one with `openssl rand -hex 24` (letters and digits only, so it fits in a URL).
+    command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env (generate one with openssl rand -hex 24)}
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -42,9 +48,10 @@ services:
     container_name: homelab-backend
     image: homelab-backend:latest
     restart: unless-stopped
+    networks: [data, front]
     environment:
       DATABASE_URL: postgresql+psycopg://homelab:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/homelab
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env (generate one with openssl rand -hex 24)}@redis:6379/0
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       AGENT_MODEL: ${AGENT_MODEL:-models/gemini-3.5-flash}
       # Served over HTTPS via Traefik, so the login cookie is HTTPS-only.
@@ -98,6 +105,7 @@ services:
     image: homelab-collector:latest
     container_name: homelab-collector
     restart: unless-stopped
+    networks: [collector]
     environment:
       # Through the gate's internal listener (not published); the public listener refuses collectors.
       HOMELAB_API_URL: http://collector-gate:8080/api
@@ -139,6 +147,7 @@ services:
     image: nginx:alpine
     container_name: homelab-collector-gate
     restart: unless-stopped
+    networks: [front, collector]
     ports:
       - "${COLLECTOR_BIND:-127.0.0.1}:${COLLECTOR_PORT:-8081}:8081"
     volumes:
@@ -216,7 +225,7 @@ services:
       # Public listener only: collector endpoints are refused here (see the collector-gate service).
       - ./docker/nginx.strict.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
-      - default
+      - front
       - traefik
     labels:
       - traefik.enable=true
@@ -232,6 +241,12 @@ services:
         condition: service_healthy
 
 networks:
+  # Three networks keep each container to what it needs. Redis and PostgreSQL are on `data` only, which has no
+  # route out; the collector is on `collector` only and can reach nothing but the gate.
+  data:
+    internal: true
+  front:
+  collector:
   traefik:
     external: true
     name: ${TRAEFIK_NETWORK:-traefik_default}  # Traefik's Docker network; same value as the label above

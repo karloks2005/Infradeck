@@ -4,7 +4,7 @@ Vexion ships with an automated test suite. This page explains how to run it, wha
 covers (and what it doesn't), and what every single test is for, so you can decide
 whether a failure matters before you upgrade or change your setup.
 
-- **1035 test cases** from 523 test functions, plus 16 small tests of the chart helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
+- **1041 test cases** from 529 test functions, plus 16 small tests of the chart helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
 - **About two minutes** to run. No Docker, PostgreSQL, Redis, network or root access needed.
 - **Safe to run next to a live install.** The tests use a throwaway in-memory database
   and fakes; they never touch your running containers or your data. (Two collector
@@ -124,7 +124,7 @@ docker compose logs --tail 20 collector        # "Sent host metrics and N contai
 
 | File | Cases | Protects |
 |---|---|---|
-| [`test_account_security.py`](#test_account_securitypy) | 130 | Two-factor sign-in, recovery codes, encrypted secrets, sessions you can review and end, password change, and the password check before turning two-factor on. |
+| [`test_account_security.py`](#test_account_securitypy) | 136 | Two-factor sign-in, recovery codes, encrypted secrets, sessions you can review and end, password change, and the password check before turning two-factor on. |
 | [`test_admin.py`](#test_adminpy) | 18 | Who may do what: admin-only actions, roles, retention cleanup, the chat on/off switch. |
 | [`test_agent_errors.py`](#test_agent_errorspy) | 2 | Helpful, non-leaking error messages from the AI assistant. |
 | [`test_agent_service.py`](#test_agent_servicepy) | 2 | The assistant can only run the fixed read-only checks. |
@@ -247,6 +247,12 @@ out of their own install.
 | `test_a_successful_sign_in_does_not_reset_the_address_counter` | Signing in to your own account doesn't give more guesses against someone else's: only the one allowed guess is left. |
 | `test_signing_in_successfully_does_not_use_up_the_addresss_allowance` | People behind one address can all sign in, 15 times in a row, without being locked out. |
 | `test_a_successful_sign_in_still_resets_that_accounts_own_counter` | A successful sign-in clears that account's own counter. |
+| `test_redis_never_holds_the_session_cookie_value_or_the_pending_login_token` | After signing in, and after a two-step sign-in has started, the cookie value and the pending-login token appear nowhere in Redis (keys, hash fields or values). |
+| `test_the_sessions_index_keeps_digests_not_session_ids` | The per-user session list stores 64-character digests, not session IDs. |
+| `test_a_session_stored_under_the_raw_cookie_value_is_not_accepted` | A session planted under the raw cookie value (the old format) is not accepted. |
+| `test_listing_and_ending_sessions_still_work_with_digests` | Listing sessions and ending another one still work, and the ended one stops working. |
+| `test_old_format_session_data_is_removed_at_start_and_new_data_is_kept` | At start, old-format session, pending-login, attempt and index records are deleted; live sessions are kept. |
+| `test_the_cleanup_of_old_session_data_never_stops_the_backend_from_starting` | If Redis fails during that cleanup, nothing is raised. |
 
 ### test_admin.py
 

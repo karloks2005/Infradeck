@@ -4,6 +4,7 @@ services:
     image: postgres:16-alpine
     container_name: homelab-postgres
     restart: unless-stopped
+    networks: [data]
     environment:
       POSTGRES_DB: homelab
       POSTGRES_USER: homelab
@@ -21,11 +22,16 @@ services:
     image: redis:7-alpine
     container_name: homelab-redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    networks: [data]
+    # Needs a password: Redis holds the login sessions, so nothing that can merely reach it on the network
+    # may use it. Generate one with `openssl rand -hex 24` (letters and digits only, so it fits in a URL).
+    command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env (generate one with openssl rand -hex 24)}
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -37,9 +43,10 @@ services:
     container_name: homelab-backend
     image: homelab-backend:latest
     restart: unless-stopped
+    networks: [data, front]
     environment:
       DATABASE_URL: postgresql+psycopg://homelab:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/homelab
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env (generate one with openssl rand -hex 24)}@redis:6379/0
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       AGENT_MODEL: ${AGENT_MODEL:-models/gemini-3.5-flash}
       # Set to true when the dashboard is served over HTTPS.
@@ -85,6 +92,7 @@ services:
     image: homelab-collector:latest
     container_name: homelab-collector
     restart: unless-stopped
+    networks: [front]
     environment:
       HOMELAB_API_URL: http://backend:8000
       # Marks this collector as the machine running the dashboard (the charts at the top).
@@ -165,6 +173,7 @@ services:
         VITE_API_BASE_URL: /api
     container_name: homelab-frontend
     restart: unless-stopped
+    networks: [front]
     # Serves the dashboard and proxies /api to the backend. Reach it directly over
     # LAN/VPN, or put the `https` profile's Caddy in front for a public domain.
     ports:
@@ -179,6 +188,7 @@ services:
     container_name: homelab-caddy
     profiles: ["https"]
     restart: unless-stopped
+    networks: [front]
     environment:
       DOMAIN: ${DOMAIN:-localhost}
     ports:
@@ -191,6 +201,12 @@ services:
       - caddy_config:/config
     depends_on:
       - frontend
+
+networks:
+  # Redis and PostgreSQL are reachable only by the backend; the collector can reach the backend and nothing else.
+  data:
+    internal: true
+  front:
 
 volumes:
   postgres_data:

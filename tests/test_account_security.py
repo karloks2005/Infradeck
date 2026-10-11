@@ -1,4 +1,6 @@
 import base64
+import json
+import re
 import os
 from types import SimpleNamespace
 
@@ -846,7 +848,7 @@ def test_turning_two_factor_off_gives_this_session_a_new_id(app):
 
     after = member.cookies.get(COOKIE)
     assert after and after != before
-    assert main.redis_client.get(f"homelab:session:{before}") is None and member.get("/auth/me").status_code == 200
+    assert main.redis_client.get(auth._session_key(before)) is None and member.get("/auth/me").status_code == 200
 
 
 def test_a_successful_sign_in_does_not_reset_the_address_counter(app):
@@ -875,3 +877,77 @@ def test_a_successful_sign_in_still_resets_that_accounts_own_counter(app):
 
     keys = [key for key in main.redis_client.keys("*") if "login-email" in key and "member" in key]
     assert keys == []
+
+
+# --- Redis never holds a working session ID -----------------------------------------------------------------
+
+def _everything_in_redis(redis):
+    """Every key, hash field and value Redis holds, as text."""
+    seen = list(redis.store) + [str(value) for value in redis.store.values()]
+    for name, mapping in redis.hashes.items():
+        seen += [name] + list(mapping) + [str(value) for value in mapping.values()]
+    return seen
+
+
+def test_redis_never_holds_the_session_cookie_value_or_the_pending_login_token(app):
+    client = _signed_in("member@example.com")
+    cookie = client.cookies.get(COOKIE)
+    assert client.get("/auth/sessions").status_code == 200                     # the list and index are in use too
+
+    assert cookie and not any(cookie in item for item in _everything_in_redis(app.redis))
+
+    secret, _ = _enroll(app, client)
+    pending = _login(TestClient(main.app), "member@example.com").json()["pending_token"]
+    assert not any(pending in item for item in _everything_in_redis(app.redis))
+
+
+def test_the_sessions_index_keeps_digests_not_session_ids(app):
+    _signed_in("member@example.com")
+
+    values = app.redis.hvals(auth._user_sessions_key(2))
+
+    assert len(values) == 1 and re.fullmatch(r"[0-9a-f]{64}", values[0])
+
+
+def test_a_session_stored_under_the_raw_cookie_value_is_not_accepted(app):
+    """What an old-format key (or a guess at one) looks like: the cookie value itself in the key."""
+    app.redis.set("homelab:session:planted-cookie-value", json.dumps({"user_id": 1, "email": "a@b.c", "name": "A", "role": "admin", "stage": "full", "public_id": "0" * 16}))
+    client = TestClient(main.app, cookies={COOKIE: "planted-cookie-value"})
+
+    assert client.get("/monitoring/overview").status_code == 401
+
+
+def test_listing_and_ending_sessions_still_work_with_digests(app):
+    first = _signed_in("member@example.com")
+    second = _signed_in("member@example.com")
+
+    listed = first.get("/auth/sessions").json()["sessions"]
+    other = next(item for item in listed if not item["current"])
+    assert len(listed) == 2 and first.delete(f"/auth/sessions/{other['id']}").status_code == 200
+
+    assert second.get("/auth/me").status_code == 401 and first.get("/auth/me").status_code == 200
+
+
+def test_old_format_session_data_is_removed_at_start_and_new_data_is_kept(app):
+    client = _signed_in("member@example.com")
+    old_session, old_pending, old_attempts = "homelab:session:" + "a" * 43, "homelab:2fa-pending:" + "b" * 43, "homelab:2fa-attempts:" + "c" * 43
+    for key in (old_session, old_pending, old_attempts):
+        app.redis.set(key, "x")
+    app.redis.hset("homelab:user-sessions:9", "0123456789abcdef", "raw-session-id-not-a-digest")
+    before = len(app.redis.keys("homelab:session:*"))
+
+    removed = auth.purge_legacy_session_keys(app.redis)
+
+    assert removed == 4
+    for key in (old_session, old_pending, old_attempts):
+        assert app.redis.get(key) is None
+    assert app.redis.hgetall("homelab:user-sessions:9") == {}
+    assert len(app.redis.keys("homelab:session:*")) == before - 1 and client.get("/auth/me").status_code == 200   # the live session survived
+
+
+def test_the_cleanup_of_old_session_data_never_stops_the_backend_from_starting(app):
+    class Broken:
+        def scan_iter(self, *args, **kwargs):
+            raise ConnectionError("redis is down")
+
+    assert auth.purge_legacy_session_keys(Broken()) == 0

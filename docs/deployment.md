@@ -23,6 +23,7 @@ Then set at least these:
 | Setting | Default | Meaning |
 |---|---|---|
 | `POSTGRES_PASSWORD` | *(required)* | A long random password for the bundled database. |
+| `REDIS_PASSWORD` | *(required)* | A long random password for Redis, which holds the login sessions. Letters and digits only (`openssl rand -hex 24`). |
 | `DASHBOARD_DOMAIN` | *(required)* | Your domain, without `https://`. Used for the Traefik router. |
 | `TRAEFIK_ENTRYPOINT` | `websecure` | Your Traefik HTTPS entrypoint name. |
 | `TRAEFIK_CERT_RESOLVER` | `letsencrypt` | Your Traefik certificate resolver name. |
@@ -115,6 +116,12 @@ Always rebuild **all** services (don't name individual ones). The backend,
 frontend, collector, Docker proxy and system helper each have their code built
 into their image, so a service that isn't rebuilt keeps running the old version.
 The database schema is updated automatically when the backend starts.
+
+**Upgrading from a version that had no `REDIS_PASSWORD`:** add one to `.env` first
+(`echo "REDIS_PASSWORD=$(openssl rand -hex 24)" >> .env`), then update as above. Compose refuses to start
+without it. This version also separates the containers onto three networks and stores login sessions
+only as hashes, so **everyone is signed out once** and signs in again; no data is lost. Back the password
+up with your other secrets; if you change it later, Redis is simply restarted with the new one.
 
 Collectors on other machines run the image digest from the command you generated.
 To update them, publish a new version tag, put the new digests in `.env`, and run a

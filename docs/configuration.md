@@ -7,6 +7,7 @@
 | Variable | Default | Description |
 |---|---|---|
 | `POSTGRES_PASSWORD` | *(required)* | PostgreSQL password. |
+| `REDIS_PASSWORD` | *(required)* | Redis password. Redis holds the login sessions, so nothing that can merely reach it may use it. Use letters and digits only (`openssl rand -hex 24`) because it is put into a URL. |
 | `GEMINI_API_KEY` | empty | Enables the Homie chat assistant. |
 | `AGENT_MODEL` | `models/gemini-3.5-flash` | Gemini model for the assistant. |
 | `ADMIN_ALERT_WEBHOOK_URL` | empty | Receives JSON alerts for critical `daily_checkup` findings. |
