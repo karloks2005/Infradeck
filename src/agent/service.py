@@ -12,6 +12,8 @@ from google.genai import types
 from .health_checks import HealthCheckRunner
 from .prompts import SYSTEM_PROMPT
 
+MAX_CACHED_CHATS = 200
+
 load_dotenv()
 
 
@@ -24,6 +26,8 @@ class AgentService:
             raise RuntimeError("GEMINI_API_KEY is not configured.")
         self.client = genai.Client(api_key=api_key)
         self.health_checks = health_checks or HealthCheckRunner()
+        # Least recently used first (a dict keeps insertion order). A chat only lives in memory so the assistant
+        # remembers the conversation; the cache is bounded so endless new conversations can't grow it without limit.
         self.chats = {}
         self.lock = threading.Lock()
 
@@ -51,7 +55,11 @@ class AgentService:
                         },
                     ),
                 )
-            return self.chats[chat_key]
+            chat = self.chats.pop(chat_key)
+            self.chats[chat_key] = chat   # now the most recently used
+            while len(self.chats) > MAX_CACHED_CHATS:
+                del self.chats[next(iter(self.chats))]
+            return chat
 
     def send(self, user_id: int, conversation_id: str, message: str, command_logger: Callable[[dict], None] | None = None) -> str:
         chat = self._get_chat(user_id, conversation_id)

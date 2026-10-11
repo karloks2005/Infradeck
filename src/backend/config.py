@@ -47,6 +47,8 @@ INGEST_MIN_SPACING_RATIO = float(os.getenv("INGEST_MIN_SPACING_RATIO", "0.25"))
 INGEST_MIN_SPACING_SECONDS = int(os.getenv("INGEST_MIN_SPACING_SECONDS", "5"))
 # The most servers an install will hold, whichever way they are added (enrollment, approval or by hand).
 MAX_SERVERS = int(os.getenv("MAX_SERVERS", "200"))
+# Enrollments per address (and twice that per key) per hour. Raise it if many collectors share one address.
+ENROLL_RATE_LIMIT = int(os.getenv("ENROLL_RATE_LIMIT", "30"))
 
 # Creating the first account (which becomes the admin) needs a setup token, so nobody else can claim a
 # fresh install. Leave unset to have one generated and printed in the backend log at every start until

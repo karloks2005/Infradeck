@@ -208,7 +208,7 @@ def test_mount_names_are_made_printable_and_bounded(app):
     ingest(app, 1, {"host": {"mounts": [{"mount": "/" + "d" * 600 + "\x00", "fs_type": "t" * 300}]}})
 
     [row] = mounts(app)
-    assert len(row.mount) == 255 and len(row.fs_type) == 64 and "\x00" not in row.mount
+    assert len(row.mount) == main.MAX_MOUNT_NAME == 200 and len(row.fs_type) == 64 and "\x00" not in row.mount
 
 
 # --- how often, and how many --------------------------------------------------------------------------

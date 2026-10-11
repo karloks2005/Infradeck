@@ -828,7 +828,10 @@ def save_credentials(server_id: int, token: str, path: Path | None = None) -> No
     path = path or _credentials_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps({"server_id": server_id, "collector_token": token}))
+    # Created with mode 0600 from the start, so there is no moment when the token sits in a file others can read.
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w") as handle:
+        handle.write(json.dumps({"server_id": server_id, "collector_token": token}))
     temporary.chmod(0o600)
     temporary.replace(path)
 

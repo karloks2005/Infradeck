@@ -177,7 +177,9 @@ the public side at all.
   known, which is what makes reinstalling easy. Because that key is long-lived, using it is rate limited
   (per address and per key), the number of servers is capped (`MAX_SERVERS`, default 200), and replacing an
   existing server's credentials is recorded: it appears in the server's System row, in the audit log, and
-  opens a **warning** for an hour, with advice to rotate the key if you didn't do it. Treat the key like a
+  opens a **warning** for an hour, with advice to rotate the key if you didn't do it. That warning and the
+  System-row entry are exempt from the "few per server" limits on the dashboard, so whoever holds the new
+  credentials can't crowd them out with what the server reports. Treat the key like a
   password and rotate it under *Connect a server → Advanced* if a host that holds it is compromised.
 - **No code comes from the dashboard.** The dashboard no longer serves `collector.py`. Remote
   hosts install the collector and the Docker proxy from container images you publish (the "Publish
@@ -201,13 +203,17 @@ What this still depends on:
 A compromised collector controls everything it reports, so the backend never trusts any of it. For the host
 itself, every number is range-checked (percentages 0 to 100, loads, sizes and counters within sane limits; NaN,
 infinity, text and booleans become "unknown"), so one bad value can't make pages fail for everyone. Server
-descriptions (hostname, address, operating system, core count, memory) are checked too, and a hostname that
-another server already uses is ignored, so one collector can't pose as another. Only the stack's own collector,
+descriptions (hostname, address, operating system, core count, memory) are checked too. A hostname is
+compared with other servers' names ignoring case, accents and width, a name that mixes Latin letters with a
+lookalike alphabet (Cyrillic or Greek, the usual way to impersonate another server) is refused, a
+rename to a name another server uses is ignored, and a new server whose name is taken gets a number
+(`raspberrypi (2)`), so two machines can always be told apart. Only the stack's own collector,
 which reaches the backend through the gate's internal listener, can claim to be the dashboard's machine. At most
-64 filesystems are accepted per check-in, check-ins must be spaced by a quarter of the check interval
+64 filesystems are accepted per check-in (names up to 200 characters), kernel-log events from the system helper at most 20 per check-in and 500 per server per week,  check-ins must be spaced by a quarter of the check interval
 (refused with 429 otherwise, and checked only after the token is verified, so nobody else can use up a
-server's slot), and the alerts list on the dashboard shows at most ten per server, so one noisy server can't
-push everyone else's off it.
+server's slot), and the alerts list on the dashboard shows at most ten per server and the System row ten events per server
+(chosen by the database, so thousands of stored events cost no more to show), so one noisy server can't
+push everyone else's off. A date a little in the future is treated as now.
 
 For containers, each record is reduced to known fields of the right type (text made printable and capped, numbers
 range-checked, timestamps parsed strictly, image IDs matched against `sha256:` plus 64 hex characters),
@@ -266,6 +272,11 @@ The collector's network checks are passive or opt-in, and add no privileges:
   talks to the backend directly.
 - **Redis has a password** (`REDIS_PASSWORD`, required). Without it, anything that could reach Redis could write
   a session for any user, administrator included, with no password or two-factor.
+- **Limits on what a signed-in user can run up.** Messages to the assistant (30 an hour per user), new
+  conversations (30 an hour, 100 in total) and audit-log entries (120 an hour) are limited, since each can cost
+  the administrator's Gemini quota or database space. Setting up two-factor from a normal session needs the
+  password again, and every try counts toward the lockout, the right password included. A limited
+  (set-up-only) session lasts 30 minutes, not a day.
 - **Sessions are stored hashed.** Redis holds only the SHA-256 of the cookie value, in the session key, the
   per-user index and the pending-login token. Reading Redis (a backup, a leaked dump) doesn't hand out working
   sessions. Note what this does and doesn't do: hashing protects against *reading* Redis. It does not stop

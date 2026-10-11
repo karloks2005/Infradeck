@@ -4,7 +4,7 @@ Vexion ships with an automated test suite. This page explains how to run it, wha
 covers (and what it doesn't), and what every single test is for, so you can decide
 whether a failure matters before you upgrade or change your setup.
 
-- **1041 test cases** from 529 test functions, plus 16 small tests of the chart helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
+- **1085 test cases** from 555 test functions, plus 16 small tests of the chart helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
 - **About two minutes** to run. No Docker, PostgreSQL, Redis, network or root access needed.
 - **Safe to run next to a live install.** The tests use a throwaway in-memory database
   and fakes; they never touch your running containers or your data. (Two collector
@@ -147,6 +147,7 @@ docker compose logs --tail 20 collector        # "Sent host metrics and N contai
 | [`test_pending_collectors.py`](#test_pending_collectorspy) | 28 | Adding servers: approval, join tokens, strict mode, re-pairing safety. |
 | [`test_rollups.py`](#test_rollupspy) | 31 | Summarised history: hourly, daily, weekly and monthly rollups, catching up, gaps, and purging only what has been summarised. |
 | [`test_rules.py`](#test_rulespy) | 20 | Alert thresholds: sustained breaches, per-mount disks, settings validation. |
+| [`test_second_review.py`](#test_second_reviewpy) | 44 | The second security review's findings: helper-event caps, lockouts, chat limits, lookalike hostnames, odd input. |
 | [`test_stats.py`](#test_statspy) | 46 | Fleet statistics (incidents over time, availability) and the busy-hours heatmap: grouping, ranges, caching and validation. |
 | [`test_system_checks.py`](#test_system_checkspy) | 17 | Reboot, OOM, kernel-fault, clock and pending-reboot detection, and the System row's event list. |
 | [`test_system_helper.py`](#test_system_helperpy) | 35 | The optional system helper: kernel-log parsing, `wtmp`, crash detection, hostile input. |
@@ -849,6 +850,39 @@ The alert thresholds, and the settings that control them.
 | `test_mount_thresholds_are_validated_audited_and_replaced` | Per-mount settings are validated (absolute paths, 1 to 100, warning below critical, no extras), audited, and replace the old set; an empty set clears them. |
 | `test_corrupt_mount_thresholds_are_ignored` | Damaged per-mount settings are ignored. |
 | `test_overview_shows_latest_mounts_and_disk_thresholds` | The dashboard shows the latest filesystems and the thresholds used to colour them. |
+
+### test_second_review.py
+
+Findings of the second security review (S2-01 to S2-07) and its smaller points: each test fails without its fix.
+
+| Test | What it checks |
+|---|---|
+| `test_one_check_in_stores_at_most_twenty_helper_events` | 50 helper events in one check-in: 20 are stored (S2-01). |
+| `test_the_rest_is_stored_by_later_check_ins_because_the_helper_republishes_its_buffer` | The same 50 offered again later: the rest are stored over the next check-ins. |
+| `test_a_flood_of_new_helper_events_stops_at_a_weekly_cap_and_says_so_once` | A flood of new events stops at 500 per server per week with a single notice; another server is unaffected. |
+| `test_the_overview_shows_a_few_events_per_server_whatever_is_stored` | With 3000 stored events the dashboard still shows only the newest 10 per server. |
+| `test_the_replaced_credentials_event_is_always_shown_even_among_many_newer_events` | The System-row entry about replaced credentials can't be pushed out by newer events (S2-03). |
+| `test_the_replaced_credentials_alert_is_always_listed_even_beside_a_flood_of_critical_ones` | The warning about replaced credentials is always listed, beside the usual 10 per server. |
+| `test_a_helper_event_dated_in_the_future_is_stored_as_happening_now` | An event dated a few minutes ahead is stored as happening now. |
+| `test_the_right_password_is_refused_once_the_two_factor_lockout_is_reached` | After 5 wrong passwords at two-factor setup, even the right one gets 429 and nothing is created (S2-02). |
+| `test_a_correct_password_below_the_limit_still_works_and_clears_the_count` | A right password below the limit works and starts the count again. |
+| `test_chat_messages_are_limited_per_user_per_hour` | The 31st assistant message in an hour gets 429 (S2-04). |
+| `test_a_user_can_only_hold_so_many_conversations` | A user can't hold more than the allowed number of conversations. |
+| `test_creating_conversations_is_rate_limited_too` | Creating conversations is limited per hour. |
+| `test_a_lookalike_of_another_servers_name_is_ignored` *(4 inputs)* | Renaming to a lookalike (Cyrillic or full-width letters) of another server's name is ignored (S2-05). |
+| `test_a_name_that_mixes_alphabets_is_ignored_even_when_nobody_else_has_it` | A name mixing Latin and Cyrillic letters is ignored. |
+| `test_names_in_one_alphabet_are_fine` | Names in a single alphabet (Croatian letters, all-Cyrillic) are accepted. |
+| `test_a_second_server_with_an_existing_name_gets_a_number_so_the_two_can_be_told_apart` | A new server whose name is taken is numbered (`raspberrypi (2)`, `(3)`), ignoring case. |
+| `test_a_mount_name_is_short_enough_for_every_incident_key_built_from_it` | A 255-character mount name is cut to 200 and no incident key exceeds 255 (S2-06). |
+| `test_unusual_values_in_a_check_in_are_ignored_not_a_server_error` *(10 inputs)* | Lists, objects, NUL characters and huge numbers in status fields give 200, not 500 (S2-07). |
+| `test_a_nul_character_in_the_boot_id_is_not_stored` | A NUL character in the boot ID is not stored. |
+| `test_ids_must_fit_what_the_database_holds` *(5 inputs)* | Server IDs of 0, negative or beyond the database range, and conversation IDs over 64 characters, give 422. |
+| `test_server_ids_in_the_address_must_fit_too` *(3 inputs)* | The same for server IDs in the address of history and statistics routes. |
+| `test_the_assistants_memory_of_chats_is_bounded_and_forgets_the_least_recently_used` | The assistant's in-memory chats are bounded and the least recently used is dropped. |
+| `test_a_user_cannot_write_the_log_entries_the_system_counts` | `/logs` refuses reserved event types such as `health_check_completed`. |
+| `test_a_limited_session_expires_sooner_than_a_full_one` | A set-up-only session lasts at most 30 minutes, a full one a day. |
+| `test_collector_credentials_are_created_private_from_the_start` | The collector's credentials file is created with mode 0600 and no temporary file is left. |
+| `test_the_enrollment_limit_is_configurable` | `ENROLL_RATE_LIMIT` is read from the settings. |
 
 ### test_stats.py
 

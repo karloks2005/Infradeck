@@ -16,6 +16,8 @@ from .models import AuditLog, RecoveryCode, User
 STAGE_FULL = "full"
 STAGE_ENROLLMENT = "enrollment"
 PENDING_TWO_FACTOR_TTL_SECONDS = 300
+# A limited session exists only to set up two-factor, so it doesn't need to last a day; a stolen one is worth less.
+ENROLLMENT_SESSION_TTL_SECONDS = 30 * 60
 MAX_PENDING_ATTEMPTS = 5
 _PUBLIC_ID = re.compile(r"[0-9a-f]{16}")
 # Checked against when the account doesn't exist, so that unknown emails cost the same time as wrong passwords.
@@ -50,7 +52,8 @@ def _key_for_digest(digest: str) -> str:
 
 
 def _store_session(redis_client, session_id: str, payload: dict):
-    redis_client.set(_session_key(session_id), json.dumps(payload), ex=SESSION_TTL_SECONDS)
+    lifetime = ENROLLMENT_SESSION_TTL_SECONDS if payload.get("stage") == STAGE_ENROLLMENT else SESSION_TTL_SECONDS
+    redis_client.set(_session_key(session_id), json.dumps(payload), ex=lifetime)
 
 
 def _read_session(redis_client, session_id: str):

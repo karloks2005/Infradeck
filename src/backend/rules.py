@@ -240,6 +240,7 @@ def validate_helper_events(raw, now: datetime) -> list[tuple[str, datetime, str,
             time = time.replace(tzinfo=timezone.utc)
         if not now - HELPER_EVENT_MAX_AGE <= time <= now + timedelta(minutes=5):
             continue
+        time = min(time, now)  # a collector's clock may run a little ahead; an event can't have happened in the future
         events.append((item["kind"], time, "".join(char if char.isprintable() else "?" for char in detail).strip()[:300], key))
     return events
 

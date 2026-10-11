@@ -221,7 +221,7 @@ def test_helper_event_count_and_text_are_bounded(db):
     _ingest(db, helper_events=many, last_shutdown="unknown")
 
     rows = db.query(SystemEvent).all()
-    assert len(rows) == 50 and all(len(row.detail) <= 300 for row in rows)
+    assert len(rows) == main.MAX_HELPER_EVENTS_PER_CHECKIN == 20 and all(len(row.detail) <= 300 for row in rows)   # the first 50 offered, 20 stored per check-in
 
 
 def test_unclean_shutdown_makes_the_reboot_critical(db):

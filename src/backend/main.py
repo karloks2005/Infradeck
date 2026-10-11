@@ -3,6 +3,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import math
+import unicodedata
 import re
 import hashlib
 import secrets
@@ -47,6 +48,7 @@ from .config import (
     DOCKER_PROXY_IMAGE,
     JOIN_TOKEN_TTL_SECONDS,
     ENABLE_API_DOCS,
+    ENROLL_RATE_LIMIT,
     INGEST_MIN_SPACING_RATIO,
     INGEST_MIN_SPACING_SECONDS,
     MAX_SERVERS,
@@ -55,7 +57,7 @@ from .config import (
     SESSION_COOKIE_SECURE,
     SESSION_TTL_SECONDS,
 )
-from .rules import DEFAULT_THRESHOLDS, HOST_RULE_PREFIX, container_rules, host_rules, validate_thresholds, detect_system_events, system_rules, SYSTEM_RULE_PREFIX, validate_mount_thresholds, validate_helper_events, REBOOT_DETAILS, REBOOT_KEY_PREFIX, detect_container_events, memory_trend_rules, CONTAINER_EVENT_KINDS, MAX_CONTAINER_EVENTS_PER_CHECKIN, MAX_CONTAINER_EVENTS_PER_HOUR, TREND_RULE_PREFIX, NETWORK_EVENT_KINDS, NETWORK_RULE_PREFIX, MAX_NETWORK_EVENTS_PER_CHECKIN, MAX_NETWORK_EVENTS_PER_HOUR, INTERNET_STATUSES, LISTENER_SCOPES, FIREWALL_LABELS, detect_listener_changes, detect_firewall_changes, network_rules, validate_listeners, validate_firewall
+from .rules import HELPER_EVENT_KINDS, DEFAULT_THRESHOLDS, HOST_RULE_PREFIX, container_rules, host_rules, validate_thresholds, detect_system_events, system_rules, SYSTEM_RULE_PREFIX, validate_mount_thresholds, validate_helper_events, REBOOT_DETAILS, REBOOT_KEY_PREFIX, detect_container_events, memory_trend_rules, CONTAINER_EVENT_KINDS, MAX_CONTAINER_EVENTS_PER_CHECKIN, MAX_CONTAINER_EVENTS_PER_HOUR, TREND_RULE_PREFIX, NETWORK_EVENT_KINDS, NETWORK_RULE_PREFIX, MAX_NETWORK_EVENTS_PER_CHECKIN, MAX_NETWORK_EVENTS_PER_HOUR, INTERNET_STATUSES, LISTENER_SCOPES, FIREWALL_LABELS, detect_listener_changes, detect_firewall_changes, network_rules, validate_listeners, validate_firewall
 from .rate_limit import enforce_ip_limit, enforce_limit, enforce_login_limit, enforce_register_limit, refund_attempt, reset_limits
 from ..agent.service import delete_agent_conversation, send_agent_message
 
@@ -97,13 +99,16 @@ class PasswordChangeRequest(BaseModel):
 
 
 class AgentChatRequest(BaseModel):
-    conversation_id: str = Field(max_length=255)
+    conversation_id: str = Field(max_length=64)
     message: str = Field(max_length=8000)
 
 
 class ConversationRequest(BaseModel):
-    conversation_id: str = Field(max_length=255)
+    conversation_id: str = Field(max_length=64)
     title: str = Field(default="New chat", max_length=255)
+
+
+RESERVED_EVENT_TYPES = {"health_check_completed", "credentials_replaced", "login", "logout"}
 
 
 class LogCreateRequest(BaseModel):
@@ -116,6 +121,14 @@ class LogCreateRequest(BaseModel):
     steps: list[Annotated[str, Field(max_length=1000)]] = Field(default_factory=list, max_length=50)
     conversation_id: str | None = Field(default=None, max_length=255)
     event_type: str | None = Field(default=None, max_length=50, pattern=r"^[a-z0-9_\-]*$")
+
+    @field_validator("event_type")
+    @classmethod
+    def _not_a_system_event(cls, value):
+        # These are counted on the dashboard (or mean something to the system), so a user can't write them.
+        if value in RESERVED_EVENT_TYPES:
+            raise ValueError("That event type is reserved.")
+        return value
 
     @field_validator("level", mode="before")
     @classmethod
@@ -158,7 +171,7 @@ class AdminSettingsRequest(BaseModel):
 
 
 class MetricsIngestRequest(BaseModel):
-    server_id: int
+    server_id: int = Field(ge=1, le=2**31 - 1)
     server: dict = {}
     host: dict = {}
     containers: list[dict] = []
@@ -592,11 +605,13 @@ def two_factor_enable(payload: CodeRequest, request: Request, response: Response
 
 
 def _confirm_password(db, user: User, password: str | None) -> None:
-    """Ask for the current password again before a sensitive change. Wrong tries share the two-factor lockout."""
+    """Ask for the current password again before a sensitive change. Every try counts toward the two-factor lockout,
+    the right password included, so a locked-out session can't keep guessing until it is right."""
+    limit_key = enforce_limit(redis_client, scope="2fa-user", subject=user.id, limit=TWO_FACTOR_ATTEMPTS, window_seconds=TWO_FACTOR_WINDOW_SECONDS)
     if not password or not verify_password(user, password):
-        enforce_limit(redis_client, scope="2fa-user", subject=user.id, limit=TWO_FACTOR_ATTEMPTS, window_seconds=TWO_FACTOR_WINDOW_SECONDS)
         record_audit_log(db, user_id=user.id, level="WARNING", message="A wrong or missing password was given while setting up two-factor", source="auth")
         raise HTTPException(status_code=401, detail="Enter your current password to set up two-factor.")
+    reset_limits(redis_client, limit_key)
 
 
 def _reauthenticate(db, user: User, password: str, code: str) -> None:
@@ -867,23 +882,32 @@ def agent_config(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_N
 OVERVIEW_ALERT_LIMIT = 50
 OVERVIEW_ALERTS_PER_SERVER = 10
 OVERVIEW_ALERT_SCAN = 1000
+CREDENTIALS_ALERT_KEY = "system:credentials"
 
 
 def _spread_alerts(alerts: list) -> list:
     """The most severe alerts first, but at most a few per server, so one server with a flood of alerts can't push
-    everybody else's off the list. The alert count shown elsewhere is still the true total."""
+    everybody else's off the list. The alert count shown elsewhere is still the true total.
+
+    The warning that a server's credentials were replaced is always listed, on top of that allowance: whoever
+    holds the new credentials decides what the server reports, so it must not be crowdable by what it reports."""
+    pinned = [alert for alert in alerts if alert.rule_key == CREDENTIALS_ALERT_KEY][:OVERVIEW_ALERT_LIMIT]
     per_server: dict[int, int] = {}
     chosen = []
     for alert in alerts:
+        if alert.rule_key == CREDENTIALS_ALERT_KEY:
+            continue
         per_server[alert.server_id] = per_server.get(alert.server_id, 0) + 1
         if per_server[alert.server_id] <= OVERVIEW_ALERTS_PER_SERVER:
             chosen.append(alert)
-        if len(chosen) >= OVERVIEW_ALERT_LIMIT:
+        if len(chosen) >= OVERVIEW_ALERT_LIMIT - len(pinned):
             break
-    return chosen
+    return pinned + chosen
 
 
 SYSTEM_EVENTS_SHOWN = 10
+# The note that a server's credentials were replaced is shown whatever else that server reports, so it can't be pushed out.
+CREDENTIALS_EVENTS_SHOWN = 3
 
 
 def recent_system_events(db, since: datetime) -> dict[int, list[dict]]:
@@ -894,10 +918,12 @@ def recent_system_events(db, since: datetime) -> dict[int, list[dict]]:
     OOM kills out of the list. Every other kind stays one row per occurrence.
     """
     result: dict[int, list[dict]] = {}
-    for event in db.query(SystemEvent).filter(SystemEvent.time >= since, SystemEvent.kind != "kernel_error", SystemEvent.kind.notin_(CONTAINER_EVENT_KINDS + NETWORK_EVENT_KINDS)).order_by(SystemEvent.time.desc()):
-        rows = result.setdefault(event.server_id, [])
-        if len(rows) < SYSTEM_EVENTS_SHOWN:
-            rows.append({"time": event.time.isoformat(), "first_time": event.time.isoformat(), "kind": event.kind, "detail": event.detail, "count": 1})
+    ordinary = (SystemEvent.time >= since, SystemEvent.kind != "kernel_error", SystemEvent.kind != CREDENTIALS_REPLACED_KIND, SystemEvent.kind.notin_(CONTAINER_EVENT_KINDS + NETWORK_EVENT_KINDS))
+    # The database picks the newest few per server, so a server with thousands of events costs no more to show.
+    for events, limit in (((ordinary), SYSTEM_EVENTS_SHOWN), ((SystemEvent.time >= since, SystemEvent.kind == CREDENTIALS_REPLACED_KIND), CREDENTIALS_EVENTS_SHOWN)):
+        ranked = db.query(SystemEvent.id.label("event_id"), func.row_number().over(partition_by=SystemEvent.server_id, order_by=SystemEvent.time.desc()).label("rank")).filter(*events).subquery()
+        for event in db.query(SystemEvent).join(ranked, ranked.c.event_id == SystemEvent.id).filter(ranked.c.rank <= limit):
+            result.setdefault(event.server_id, []).append({"time": event.time.isoformat(), "first_time": event.time.isoformat(), "kind": event.kind, "detail": event.detail, "count": 1})
     shown: dict[int, int] = {}
     grouped = (
         db.query(SystemEvent.server_id, SystemEvent.detail, func.count(), func.min(SystemEvent.time), func.max(SystemEvent.time))
@@ -1009,6 +1035,8 @@ def latest_containers(db, server_id: int, host_time: datetime | None) -> list[Co
 HISTORY_MAX_MINUTES = 24 * 60
 
 
+# An ID in the address must fit the database's INTEGER column, or the query itself fails with a server error.
+PathId = Annotated[int, PathParam(ge=1, le=2**31 - 1)]
 RangeName = Literal["1h", "6h", "24h", "7d", "30d", "90d", "1y", "all"]
 
 
@@ -1029,7 +1057,7 @@ def _history_response(db, spec, server: Server, key: str | None, range_name: str
 
 @app.get("/monitoring/servers/{server_id}/history")
 def server_history(
-    server_id: int, minutes: int = 30, range_name: Annotated[RangeName | None, Query(alias="range")] = None, metrics: str | None = None,
+    server_id: PathId, minutes: int = 30, range_name: Annotated[RangeName | None, Query(alias="range")] = None, metrics: str | None = None,
     session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db),
 ):
     """A server's metrics over time.
@@ -1074,7 +1102,7 @@ def fleet_statistics(range_name: Annotated[RangeName, Query(alias="range")] = "2
 
 @app.get("/stats/servers/{server_id}/heatmap")
 def server_heatmap(
-    server_id: int, metric: Literal["cpu", "ram"] = "cpu", offset: Annotated[int, Query(ge=-stats.MAX_OFFSET_MINUTES, le=stats.MAX_OFFSET_MINUTES)] = 0,
+    server_id: PathId, metric: Literal["cpu", "ram"] = "cpu", offset: Annotated[int, Query(ge=-stats.MAX_OFFSET_MINUTES, le=stats.MAX_OFFSET_MINUTES)] = 0,
     session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db),
 ):
     """When a server is busy: its average per hour of the day and weekday over the last 30 days."""
@@ -1100,7 +1128,7 @@ def server_heatmap(
 
 @app.get("/monitoring/servers/{server_id}/mounts/history")
 def mount_history(
-    server_id: int, mount: Annotated[str, Query(min_length=1, max_length=255)], range_name: Annotated[RangeName, Query(alias="range")] = "24h", metrics: str | None = None,
+    server_id: PathId, mount: Annotated[str, Query(min_length=1, max_length=255)], range_name: Annotated[RangeName, Query(alias="range")] = "24h", metrics: str | None = None,
     session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db),
 ):
     """One filesystem's usage over time (``mount`` is its path, for example ``/data``)."""
@@ -1117,7 +1145,7 @@ def mount_history(
 
 @app.get("/monitoring/servers/{server_id}/containers/{container_id}/history")
 def container_history(
-    server_id: int, container_id: Annotated[str, PathParam(min_length=1, max_length=128)], range_name: Annotated[RangeName, Query(alias="range")] = "24h", metrics: str | None = None,
+    server_id: PathId, container_id: Annotated[str, PathParam(min_length=1, max_length=128)], range_name: Annotated[RangeName, Query(alias="range")] = "24h", metrics: str | None = None,
     session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db),
 ):
     """One container's CPU and memory over time."""
@@ -1142,7 +1170,7 @@ CONTAINER_DETAIL_FIELDS = (
 
 
 @app.get("/monitoring/servers/{server_id}/containers/{container_id}")
-def container_detail(server_id: int, container_id: str, limit: int = 60, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+def container_detail(server_id: PathId, container_id: str, limit: int = 60, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     _current_user(session_id, db)
     server = db.query(Server).filter(Server.id == server_id).first()
     if not server:
@@ -1238,7 +1266,7 @@ def enroll_collector(payload: EnrollRequest, db=Depends(get_db), request: Reques
     if not _is_admin(db, key.owner_id):
         raise HTTPException(status_code=403, detail="Enrollment key belongs to an account that can no longer add servers.")
     _soft_limit(scope="enroll-key", subject=key.id, limit=ENROLL_RATE_LIMIT * 2, window_seconds=ENROLL_RATE_WINDOW_SECONDS)
-    hostname = _printable(payload.hostname, 255)
+    hostname = _hostname_or_error(payload.hostname)
     machine_id = (payload.machine_id or "").strip()[:64] or None
     if not hostname:
         raise HTTPException(status_code=400, detail="Hostname is required.")
@@ -1249,7 +1277,7 @@ def enroll_collector(payload: EnrollRequest, db=Depends(get_db), request: Reques
     replaced = server is not None
     if not server:
         _ensure_server_capacity(db)
-        server = Server(owner_id=key.owner_id, hostname=hostname, machine_id=machine_id)
+        server = Server(owner_id=key.owner_id, hostname=_unique_hostname(db, hostname), machine_id=machine_id)
         db.add(server)
         db.flush()
     token = secrets.token_urlsafe(32)
@@ -1305,9 +1333,7 @@ def register_collector(payload: CollectorRegisterRequest, request: Request, db=D
     via = _collector_via(request)
     ip_address = _client_ip(request)
     enforce_ip_limit(redis_client, scope="collector-register", ip_address=ip_address, limit=30, window_seconds=3600)
-    hostname = payload.hostname.strip()[:255]
-    if not hostname:
-        raise HTTPException(status_code=400, detail="Hostname is required.")
+    hostname = _hostname_or_error(payload.hostname)
     machine_id = (payload.machine_id or "").strip()[:64] or None
     join_token = None
     if payload.join_token:
@@ -1370,7 +1396,7 @@ def _pending_for_user(pending_id: int, db) -> PendingCollector:
 
 
 @app.post("/monitoring/pending-collectors/{pending_id}/approve")
-def approve_pending_collector(pending_id: int, payload: ApproveRequest | None = None, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+def approve_pending_collector(pending_id: PathId, payload: ApproveRequest | None = None, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     user = _require_admin(session_id, db)
     pending = _pending_for_user(pending_id, db)
     server = _server_for_machine(db, pending.machine_id)
@@ -1379,7 +1405,7 @@ def approve_pending_collector(pending_id: int, payload: ApproveRequest | None = 
         raise HTTPException(status_code=409, detail=f"This machine matches the existing server {server.hostname}. Approving replaces that server's credentials and signs its current collector out. Confirm to continue.")
     if not server:
         _ensure_server_capacity(db)
-        server = Server(owner_id=user["id"], hostname=pending.hostname, machine_id=pending.machine_id, ip_address=pending.ip_address, os_info=pending.os_info)
+        server = Server(owner_id=user["id"], hostname=_unique_hostname(db, _clean_hostname(pending.hostname) or "unnamed server"), machine_id=pending.machine_id, ip_address=pending.ip_address, os_info=pending.os_info)
         db.add(server)
         db.flush()
     pending.status = "approved"
@@ -1391,7 +1417,7 @@ def approve_pending_collector(pending_id: int, payload: ApproveRequest | None = 
 
 
 @app.post("/monitoring/pending-collectors/{pending_id}/dismiss")
-def dismiss_pending_collector(pending_id: int, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+def dismiss_pending_collector(pending_id: PathId, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     _require_admin(session_id, db)
     pending = _pending_for_user(pending_id, db)
     pending.status = "dismissed"
@@ -1500,13 +1526,13 @@ def add_monitored_server(payload: ServerRequest, session_id: Annotated[str | Non
     _ensure_server_capacity(db)
     token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
-    server = Server(owner_id=user["id"], hostname=payload.hostname.strip()[:255], ip_address=payload.ip_address, check_interval_seconds=payload.check_interval_seconds, collector_token_hash=token_hash)
+    server = Server(owner_id=user["id"], hostname=_unique_hostname(db, _hostname_or_error(payload.hostname)), ip_address=payload.ip_address, check_interval_seconds=payload.check_interval_seconds, collector_token_hash=token_hash)
     db.add(server); db.commit(); db.refresh(server)
     return {"id": server.id, "hostname": server.hostname, "check_interval_seconds": server.check_interval_seconds, "collector_token": token}
 
 
 @app.delete("/monitoring/servers/{server_id}")
-def delete_monitored_server(server_id: int, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+def delete_monitored_server(server_id: PathId, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     _require_admin(session_id, db)
     server = db.query(Server).filter(Server.id == server_id).first()
     if not server:
@@ -1528,7 +1554,7 @@ def delete_monitored_server(server_id: int, session_id: Annotated[str | None, Co
 
 
 @app.patch("/monitoring/servers/{server_id}/interval")
-def update_check_interval(server_id: int, payload: dict, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+def update_check_interval(server_id: PathId, payload: dict, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     _require_admin(session_id, db)
     server = db.query(Server).filter(Server.id == server_id).first()
     interval = payload.get("check_interval_seconds")
@@ -1540,16 +1566,36 @@ def update_check_interval(server_id: int, payload: dict, session_id: Annotated[s
     return {"id": server.id, "check_interval_seconds": server.check_interval_seconds}
 
 
+MAX_HELPER_EVENTS_PER_CHECKIN = 20
+MAX_HELPER_EVENTS_PER_WEEK = 500
+HELPER_NOTICE_KIND = "helper_notice"
+
+
 def record_helper_events(db, server_id: int, raw, now: datetime) -> None:
-    """Store the helper's kernel-log events once each; the helper republishes the whole ring buffer."""
+    """Store the helper's kernel-log events once each; the helper republishes the whole ring buffer.
+
+    A collector chooses the keys that make events "new", so without a cap it could add rows without end. At most
+    MAX_HELPER_EVENTS_PER_CHECKIN are stored per check-in (the rest are offered again by the next one, because the
+    helper republishes its buffer) and MAX_HELPER_EVENTS_PER_WEEK per server; past that there is one notice.
+    """
     events = validate_helper_events(raw, now)
     if not events:
         return
     known = {key for (key,) in db.query(SystemEvent.event_key).filter(SystemEvent.server_id == server_id, SystemEvent.event_key.in_([event[3] for event in events]))}
-    for kind, time, detail, key in events:
-        if key not in known:
-            known.add(key)
-            db.add(SystemEvent(server_id=server_id, time=time, kind=kind, detail=detail, event_key=key))
+    fresh, seen = [], set()
+    for event in events:
+        if event[3] not in known and event[3] not in seen:
+            seen.add(event[3])
+            fresh.append(event)
+    if not fresh:
+        return
+    week = now - timedelta(days=7)
+    stored = db.query(func.count(SystemEvent.id)).filter(SystemEvent.server_id == server_id, SystemEvent.kind.in_(HELPER_EVENT_KINDS), SystemEvent.event_key.isnot(None), SystemEvent.time >= week).scalar() or 0
+    room = max(0, MAX_HELPER_EVENTS_PER_WEEK - stored)
+    for kind, time, detail, key in fresh[:min(MAX_HELPER_EVENTS_PER_CHECKIN, room)]:
+        db.add(SystemEvent(server_id=server_id, time=time, kind=kind, detail=detail, event_key=key))
+    if room <= 0 and not db.query(SystemEvent.id).filter(SystemEvent.server_id == server_id, SystemEvent.kind == HELPER_NOTICE_KIND, SystemEvent.time >= now - timedelta(hours=1)).first():
+        db.add(SystemEvent(server_id=server_id, time=now, kind=HELPER_NOTICE_KIND, detail=f"This week's limit of {MAX_HELPER_EVENTS_PER_WEEK} kernel-log events was reached; newer ones are not recorded until older ones age out"))
 
 
 DOCKER_STATUSES = {"ok", "unreachable", "not_configured"}
@@ -1571,6 +1617,11 @@ def _whole_number(value, low: int, high: int) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and low <= value <= high else None
 
 
+def _one_of(value, allowed) -> bool:
+    """Whether a reported value is one of the allowed strings. A list or object is simply "no", not an error."""
+    return isinstance(value, str) and value in allowed
+
+
 def _finite_number(value, low: float, high: float) -> float | None:
     """A real number inside [low, high], or None for anything else: text, booleans, NaN, infinity, out of range."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -1590,6 +1641,8 @@ HOST_NUMBER_LIMITS = {
     "net_bytes_sent_mb": (0, 1e12), "net_bytes_recv_mb": (0, 1e12), "system_uptime_seconds": (0, 1e10),
 }
 MAX_MOUNTS_PER_CHECKIN = 64
+# A mount name ends up inside incident keys (255 characters with a prefix), so it is kept well under that.
+MAX_MOUNT_NAME = 200
 INT_MAX = 2**31 - 1  # the database's INTEGER columns
 
 
@@ -1605,7 +1658,7 @@ def _clean_mount(raw) -> dict | None:
     """One filesystem record reduced to known fields of the right type and size, or None if unusable."""
     if not isinstance(raw, dict) or not isinstance(raw.get("mount"), str):
         return None
-    mount = _printable(raw["mount"], 255)
+    mount = _printable(raw["mount"], MAX_MOUNT_NAME)
     if not mount.startswith("/"):
         return None
     fs_type = raw.get("fs_type")
@@ -1630,6 +1683,51 @@ def _clean_mounts(raw) -> list[dict]:
     return cleaned
 
 
+# Letters from these alphabets look like Latin ones, which is how a name poses as another (srv with a Cyrillic "a").
+_LOOKALIKE_SCRIPTS = {"CYRILLIC", "GREEK", "ARMENIAN", "CHEROKEE", "COPTIC"}
+
+
+def _clean_hostname(text: str) -> str | None:
+    """A hostname made printable and bounded, in its compatibility-normal form (so full-width letters become plain
+    ones), or None if it mixes Latin letters with a lookalike alphabet. A name written entirely in one alphabet is
+    fine; the mix is what is used to impersonate another server."""
+    name = _printable(unicodedata.normalize("NFKC", text), 255)
+    scripts = {unicodedata.name(char, "").split(" ")[0] for char in name if char.isalpha()}
+    if not name or ("LATIN" in scripts and scripts & _LOOKALIKE_SCRIPTS):
+        return None
+    return name
+
+
+def _name_key(name: str) -> str:
+    """What two hostnames are compared by: case, accents and width are ignored."""
+    decomposed = unicodedata.normalize("NFKD", name)
+    return "".join(char for char in decomposed if not unicodedata.combining(char)).casefold()
+
+
+def _hostname_in_use(db, name: str, *, excluding: int | None = None) -> bool:
+    key = _name_key(name)
+    return any(_name_key(existing) == key for (existing,) in db.query(Server.hostname).filter(Server.id != excluding if excluding else True))
+
+
+def _unique_hostname(db, name: str) -> str:
+    """The name for a new server: as given, or numbered ("pi (2)") if another server already has it, so two machines
+    can be told apart (default names such as "raspberrypi" are common) and nothing can sit behind a twin."""
+    if not _hostname_in_use(db, name):
+        return name
+    for number in range(2, 1000):
+        candidate = f"{name} ({number})"[:255]
+        if not _hostname_in_use(db, candidate):
+            return candidate
+    return name
+
+
+def _hostname_or_error(text: str) -> str:
+    name = _clean_hostname(text)
+    if not name:
+        raise HTTPException(status_code=400, detail="The hostname is empty, or mixes alphabets (for example Latin and Cyrillic letters), which is refused because it can be used to impersonate another server.")
+    return name
+
+
 def _apply_server_fields(db, server: Server, reported: dict) -> None:
     """Copy the descriptive fields a collector reports onto its server, each checked, never trusted.
 
@@ -1637,9 +1735,8 @@ def _apply_server_fields(db, server: Server, reported: dict) -> None:
     alert titles.
     """
     hostname = reported.get("hostname")
-    if isinstance(hostname, str) and (name := _printable(hostname, 255)):
-        taken = db.query(Server.id).filter(func.lower(Server.hostname) == name.lower(), Server.id != server.id).first()
-        if not taken:
+    if isinstance(hostname, str) and (name := _clean_hostname(hostname)):
+        if not _hostname_in_use(db, name, excluding=server.id):
             server.hostname = name
     address = reported.get("ip_address")
     if isinstance(address, str):
@@ -1656,7 +1753,6 @@ def _apply_server_fields(db, server: Server, reported: dict) -> None:
         server.total_ram_gb = ram
 
 
-ENROLL_RATE_LIMIT = 30
 ENROLL_RATE_WINDOW_SECONDS = 3600
 CREDENTIALS_REPLACED_KIND = "credentials_replaced"
 
@@ -1794,22 +1890,22 @@ def _clean_system_fields(fields: dict) -> None:
     for key in ("oom_kill_total", "kernel_tainted"):
         if key in fields:
             fields[key] = _whole_number(fields[key], 0, INT_MAX)
-    if "last_shutdown" in fields and fields["last_shutdown"] not in {"clean", "unclean", "unknown"}:
+    if "last_shutdown" in fields and not _one_of(fields["last_shutdown"], {"clean", "unclean", "unknown"}):
         fields["last_shutdown"] = None
-    if "docker_status" in fields and fields["docker_status"] not in DOCKER_STATUSES:
+    if "docker_status" in fields and not _one_of(fields["docker_status"], DOCKER_STATUSES):
         fields["docker_status"] = None
-    if "docker_reason" in fields and fields["docker_reason"] not in DOCKER_REASON_CODES:
+    if "docker_reason" in fields and not _one_of(fields["docker_reason"], DOCKER_REASON_CODES):
         fields["docker_reason"] = None
     if "docker_latency_ms" in fields:
         fields["docker_latency_ms"] = _whole_number(fields["docker_latency_ms"], 0, 600_000)
     if "collect_duration_ms" in fields:
         fields["collect_duration_ms"] = _whole_number(fields["collect_duration_ms"], 0, 3_600_000)
-    if "internet_status" in fields and fields["internet_status"] not in INTERNET_STATUSES:
+    if "internet_status" in fields and not _one_of(fields["internet_status"], INTERNET_STATUSES):
         fields["internet_status"] = None
     if "internet_latency_ms" in fields:
         fields["internet_latency_ms"] = _whole_number(fields["internet_latency_ms"], 0, 600_000)
     if "boot_id" in fields:
-        fields["boot_id"] = fields["boot_id"][:64] if isinstance(fields["boot_id"], str) and fields["boot_id"] else None
+        fields["boot_id"] = (_printable(fields["boot_id"], 64) or None) if isinstance(fields["boot_id"], str) else None
 
 
 @app.post("/monitoring/metrics/ingest", dependencies=[Depends(require_collector_listener)])
@@ -1933,8 +2029,11 @@ def create_conversation(payload: ConversationRequest, session_id: Annotated[str 
     user = get_user_from_session(redis_client, session_id)
     if not user:
         raise HTTPException(status_code=401, detail="Session is invalid or expired.")
+    enforce_limit(redis_client, scope="conversation-user", subject=user["id"], limit=CONVERSATION_CREATE_LIMIT, window_seconds=3600)
     if db.query(Conversation).filter(Conversation.id == payload.conversation_id).first():
         raise HTTPException(status_code=409, detail="Conversation already exists.")
+    if db.query(func.count(Conversation.id)).filter(Conversation.user_id == user["id"]).scalar() >= MAX_CONVERSATIONS_PER_USER:
+        raise HTTPException(status_code=409, detail=f"You already have {MAX_CONVERSATIONS_PER_USER} conversations. Delete some before starting a new one.")
     conversation = Conversation(id=payload.conversation_id, user_id=user["id"], title=payload.title.strip()[:255] or "New chat")
     db.add(conversation)
     db.commit()
@@ -1959,6 +2058,9 @@ def delete_conversation(conversation_id: str, session_id: Annotated[str | None, 
 
 
 LOG_WRITE_LIMIT = 120
+CHAT_MESSAGE_LIMIT = 30          # messages to the assistant per user per hour (each can cost the admin's Gemini quota)
+CONVERSATION_CREATE_LIMIT = 30   # new conversations per user per hour
+MAX_CONVERSATIONS_PER_USER = 100
 
 
 @app.post("/logs")
@@ -1992,6 +2094,7 @@ def agent_chat(payload: AgentChatRequest, session_id: Annotated[str | None, Cook
         raise HTTPException(status_code=401, detail="Session is invalid or expired.")
     if not is_agent_chat_enabled(db):
         raise HTTPException(status_code=403, detail="Chat with the agent has been turned off by an admin.")
+    enforce_limit(redis_client, scope="chat-user", subject=user["id"], limit=CHAT_MESSAGE_LIMIT, window_seconds=3600)
 
     message = payload.message.strip()
     if not message:
