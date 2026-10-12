@@ -1634,12 +1634,6 @@ const placeholderAdmin = {
     { name: 'PostgreSQL', status: 'ok', detail: '412 MB' },
     { name: 'Redis', status: 'ok', detail: '3 active sessions' },
   ],
-  storage: [
-    ['Host metrics', '1,204,332 rows'],
-    ['Container metrics', '8,930,118 rows'],
-    ['Incidents', '214 rows'],
-    ['Audit log', '3,871 rows'],
-  ],
   audit: [
     { id: 1, time: '2026-09-25T01:58:00', actor: 'Admin', event: 'Signed in' },
     { id: 2, time: '2026-09-25T01:31:00', actor: 'system', event: 'New server requested to join: raspberrypi' },
@@ -1754,10 +1748,6 @@ function AdminUsersTab() {
   return (
     <div className="space-y-5">
       <TwoFactorPolicySetting />
-
-      <AdminSection title="Registration" description="Controls whether new people can create an account.">
-        <Toggle label="Allow registration" description="When off, only the first account can be created. Replaces ALLOW_REGISTRATION in .env." />
-      </AdminSection>
 
       <AdminSection title="Users" description="Change roles, disable accounts or sign someone out everywhere.">
         <ul className="space-y-2 md:hidden">
@@ -2109,16 +2099,7 @@ function IncidentThresholdsSection() {
 
 function AdminAlertsTab() {
   return (
-    <div className="grid gap-5 xl:grid-cols-2">
-      <AdminSection title="Webhook" description="Receives a JSON POST for every critical incident. Replaces ADMIN_ALERT_WEBHOOK_URL in .env." action={<SaveButton />}>
-        <div className="space-y-3">
-          <input type="url" placeholder="https://your-alert-endpoint.example/hook" aria-label="Webhook URL" className={inputClass} />
-          <button type="button" className={secondaryButtonClass}>Send test alert</button>
-        </div>
-      </AdminSection>
-
-      <IncidentThresholdsSection />
-    </div>
+    <IncidentThresholdsSection />
   )
 }
 
@@ -2178,7 +2159,7 @@ function DataRetentionSection() {
 function AdminSystemTab() {
   return (
     <div className="space-y-5">
-      <div className="grid gap-5 xl:grid-cols-3">
+      <div className="grid gap-5 xl:grid-cols-2">
         <AdminSection title="Services">
           <div className="space-y-2">
             {placeholderAdmin.services.map((service) => (
@@ -2191,14 +2172,6 @@ function AdminSystemTab() {
         </AdminSection>
 
         <DataRetentionSection />
-
-        <AdminSection title="Database">
-          <div className="space-y-2">
-            {placeholderAdmin.storage.map(([label, value]) => (
-              <div key={label} className="flex items-center justify-between text-sm"><span className="text-[#9aa0a6]">{label}</span><span className="text-white">{value}</span></div>
-            ))}
-          </div>
-        </AdminSection>
       </div>
 
       <AdminSection title="Audit log" description="Who did what, and when.">

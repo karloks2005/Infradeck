@@ -13,6 +13,7 @@ Cilj je najmanji kod koji ispravno rješava zadatak i lako se čita i mijenja. K
 2. **Bez nezatraženih parametara i opcija.** Ne dodaji konfiguraciju, zastavice ni parametre za scenarije koje nitko nije spomenuo.
 3. **Obrada grešaka samo za stvarne ulaze.** Validiraj podatke koji dolaze izvana (korisnik, datoteka, mreža, API). Ne brani se od stanja koja se u kontekstu zadatka ne mogu dogoditi.
 4. **Bez dodataka koji nisu tražени.** Ne dodaji logiranje, testove, dokumentaciju ni README izmjene osim ako su tražene. Komentar samo tamo gdje nešto nije očito iz koda.
+   Kad se testovi pišu (jer su traženi ili ih projekt zahtijeva), spremaju se u odgovarajuću mapu unutar `tests/` prema području koje štite (`accounts`, `collectors`, `monitoring`, `history`, `assistant`, `security`; popis je u `TESTS.md`, odjeljak "Where the tests live"), nikad izravno u `tests/`. Ako nijedna mapa ne odgovara, napravi novu i dodaj je u taj popis. Nazivi datoteka moraju biti jedinstveni kroz sve mape.
 5. **Ne mijenjaj ono što nije dio zadatka.** Ako vidiš prostor za poboljšanje u susjednom kodu, spomeni ga u odgovoru, ali ga ne diraj.
 6. **Složenija struktura zahtijeva objašnjenje.** Ako misliš da je potreban veći dizajn, prvo kratko objasni zašto i pitaj, pa tek onda piši.
 

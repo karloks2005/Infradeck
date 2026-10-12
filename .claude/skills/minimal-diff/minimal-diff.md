@@ -14,6 +14,7 @@ Mijenjaj samo ono što je potrebno za zadatak.
 3. **Ne dodaji promjene koje nisu tražene**, uključujući popravke tuđih grešaka koje nisu u opsegu zadatka. Spomeni ih u odgovoru.
 4. **Drži diff malim.** Ako izmjena zahtijeva više od očekivanog, zaustavi se i objasni zašto prije nastavka.
 5. **Ne mijenjaj javna sučelja** (potpise funkcija, API odgovore, nazive polja) bez izričitog dopuštenja.
+6. **Test koji pratiš uz izmjenu ide u postojeću datoteku u odgovarajućoj mapi `tests/`** (vidi `TESTS.md`, "Where the tests live"). Novu datoteku napravi samo ako nijedna ne odgovara, u mapi područja, nikad izravno u `tests/`.
 
 ## Provjera prije predaje
 

@@ -93,5 +93,5 @@ src/
   frontend/                 React + Tailwind dashboard (Vite); charts.jsx and chartMath.js are the
                             charts (distributions.jsx: columns, donut, bars, heatmap), StatisticsPage.jsx,
                             FleetStatistics.jsx, ServerInsights.jsx and ContainerStatistics.jsx the page
-tests/                      pytest suite
+tests/                      pytest suite, in folders by area (accounts, collectors, monitoring, history, assistant, security); see TESTS.md
 ```

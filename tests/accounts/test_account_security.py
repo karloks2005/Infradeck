@@ -787,7 +787,7 @@ def test_a_reset_admin_is_asked_to_enrol_again_when_it_is_required(app):
 
 
 def test_the_reset_script_asks_for_exactly_one_email():
-    script = os.path.join(os.path.dirname(__file__), "..", "src", "backend", "reset_2fa.py")
+    script = os.path.join(os.path.dirname(__file__), "..", "..", "src", "backend", "reset_2fa.py")
     source = open(script).read()
     assert "reset_two_factor" in source and "len(argv) != 2" in source
 

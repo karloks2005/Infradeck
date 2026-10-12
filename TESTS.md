@@ -16,6 +16,7 @@ whether a failure matters before you upgrade or change your setup.
 - [How the tests work](#how-the-tests-work)
 - [What the tests do not cover](#what-the-tests-do-not-cover)
 - [Words used below](#words-used-below)
+- [Where the tests live](#where-the-tests-live)
 - [What each test file protects](#what-each-test-file-protects)
 - [Every test, explained](#every-test-explained)
 - [Adding a test](#adding-a-test)
@@ -48,9 +49,10 @@ Useful variations:
 |---|---|
 | `pytest -x` | Stop at the first failure. |
 | `pytest -v` | List every test case with its result. |
-| `pytest tests/test_rules.py` | Run one file. |
+| `pytest tests/monitoring/test_rules.py` | Run one file. |
+| `pytest tests/history` | Run one folder (see [Where the tests live](#where-the-tests-live)). |
 | `pytest -k "oom"` | Run only tests whose name contains `oom`. |
-| `pytest tests/test_rules.py::test_single_spike_does_not_alert` | Run one test. |
+| `pytest tests/monitoring/test_rules.py::test_single_spike_does_not_alert` | Run one test. |
 | `pytest --lf` | Re-run only the tests that failed last time. |
 | `pytest --collect-only -q` | List all tests without running them. |
 
@@ -119,6 +121,24 @@ docker compose logs --tail 20 collector        # "Sent host metrics and N contai
 | **System helper** | The optional container that reads the kernel log and `wtmp` for OOM process names and crash detection. |
 | **Docker proxy** | The read-only middleman that is the only thing touching the Docker socket. |
 | **Strict / open mode** | `COLLECTOR_ACCESS=strict` (server stack) or `open` (development stack). |
+
+## Where the tests live
+
+Tests are grouped by the part of the product they protect, not by which source file they call: several
+features (container checks, network checks, the system helper) are tested from the collector's
+side and the backend's side in one file, because the feature only works when both do.
+
+| Folder | What is in it |
+|---|---|
+| `tests/accounts/` | Sign-in, two-factor, sessions, passwords, roles and the admin settings. |
+| `tests/collectors/` | Adding and trusting collectors (enrollment, approval, pending servers, the dashboard's own machine), what they report and how it is validated, the filesystems they report, and the read-only Docker proxy. |
+| `tests/monitoring/` | What is watched and how it turns into incidents: the alert engine and its rules, system, container and network checks, the system helper and the container details. |
+| `tests/history/` | Long-term history: rollups, the history API, statistics and the database indexes behind them. |
+| `tests/assistant/` | The AI assistant: its fixed health checks, error messages and conversations. |
+| `tests/security/` | Tests written from security reviews that cut across areas: request size limits and the second review's findings. |
+
+`tests/conftest.py` (settings every test shares) and `tests/fakes.py` (the fake Redis) stay at the top.
+The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 
 ## What each test file protects
 
@@ -995,8 +1015,9 @@ they were checked by hand in a real browser.
 
 ## Adding a test
 
-1. Put it in the file for the area it belongs to, or a new `tests/test_<area>.py`
-   (files must start with `test_`, functions with `test_`).
+1. Put it in the file for the area it belongs to, inside the matching folder of [Where the tests live](#where-the-tests-live),
+   or in a new `tests/<folder>/test_<area>.py` (files must start with `test_`, functions with `test_`). Never put a test
+   directly in `tests/`; if no folder fits, create one and add it to that table. File names must be unique across folders.
 2. Follow the existing style: build a fresh in-memory database, call the code
    directly, assert on the result. Look at a similar test and copy its setup.
 3. For anything that handles outside input, add the awkward cases too (empty,
