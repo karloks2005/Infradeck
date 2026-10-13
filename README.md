@@ -1,4 +1,6 @@
-# Infradeck
+<img width="8000" height="2000" alt="infradeck-banner-dark" src="https://github.com/user-attachments/assets/34d3011c-cecb-4708-a88b-822d91f6af3c" />
+
+# Infradeck | Know What's Healthy - Fix What Isn't
 
 A self-hosted dashboard for monitoring all your homelab machines in one place.
 One machine runs the dashboard; every other machine runs a small collector that
