@@ -69,7 +69,7 @@ def test_new_secrets_are_random_and_authenticator_friendly():
 
 def test_the_otpauth_link_names_the_account_and_issuer_safely():
     uri = totp.otpauth_uri("ABCDEFGH", "a+b@example.com&x=1")
-    assert uri.startswith("otpauth://totp/Vexion%3Aa%2Bb%40example.com%26x%3D1?secret=ABCDEFGH&issuer=Vexion") and "&x=1&" not in uri
+    assert uri.startswith("otpauth://totp/Infradeck%3Aa%2Bb%40example.com%26x%3D1?secret=ABCDEFGH&issuer=Infradeck") and "&x=1&" not in uri
 
 
 def test_recovery_codes_are_random_formatted_and_normalised():

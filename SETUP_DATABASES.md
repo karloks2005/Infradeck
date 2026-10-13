@@ -5,7 +5,7 @@ This project includes a simple local PostgreSQL + Redis stack for development.
 ## Start services
 
 ```bash
-cd /media/karlo/data/Documents/programming/homelab-agent
+cd /media/karlo/data/Documents/programming/Infradeck
 docker compose up -d
 ```
 

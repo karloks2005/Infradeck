@@ -1,4 +1,4 @@
-# Vexion
+# Infradeck
 
 A self-hosted dashboard for monitoring all your homelab machines in one place.
 One machine runs the dashboard; every other machine runs a small collector that

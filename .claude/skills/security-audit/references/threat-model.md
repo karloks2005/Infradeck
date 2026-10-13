@@ -1,4 +1,4 @@
-# Model prijetnji (Homelab Agent)
+# Model prijetnji (Infradeck)
 
 Sažetak arhitekture i povjerenja, izveden iz `SECURITY.md` i koda. Ako se kod i ovaj dokument
 razilaze, **vjeruj kodu** i to prijavi kao nalaz o dokumentaciji.

@@ -1,4 +1,4 @@
-"""Read-only host and Docker metrics collector for a registered Homelab server.
+"""Read-only host and Docker metrics collector for a registered Infradeck server.
 
 Only HOMELAB_API_URL is required. On first start the collector asks to join and
 appears on the dashboard under "New servers detected"; once someone clicks Add

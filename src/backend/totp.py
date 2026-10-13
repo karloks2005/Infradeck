@@ -66,7 +66,7 @@ def verify(secret: str, code, last_step: int | None = None, now: float | None = 
     return matched
 
 
-def otpauth_uri(secret: str, account: str, issuer: str = "Vexion") -> str:
+def otpauth_uri(secret: str, account: str, issuer: str = "Infradeck") -> str:
     label = quote(f"{issuer}:{account}", safe="")
     return f"otpauth://totp/{label}?secret={secret}&issuer={quote(issuer, safe='')}&algorithm=SHA1&digits={DIGITS}&period={PERIOD_SECONDS}"
 

@@ -1,6 +1,6 @@
 # Tests
 
-Vexion ships with an automated test suite. This page explains how to run it, what it
+Infradeck ships with an automated test suite. This page explains how to run it, what it
 covers (and what it doesn't), and what every single test is for, so you can decide
 whether a failure matters before you upgrade or change your setup.
 
@@ -192,7 +192,7 @@ out of their own install.
 | `test_malformed_codes_are_rejected` *(12 inputs)* | Empty, short, long, non-numeric, huge and non-string codes are refused without errors. |
 | `test_spaces_and_a_hyphen_in_a_typed_code_are_ignored` | `123 456` and `123-456` are accepted as `123456`. |
 | `test_new_secrets_are_random_and_authenticator_friendly` | Every secret is different and uses the base32 letters authenticator apps expect. |
-| `test_the_otpauth_link_names_the_account_and_issuer_safely` | The link you paste into an authenticator carries the account and "Vexion", with odd characters escaped. |
+| `test_the_otpauth_link_names_the_account_and_issuer_safely` | The link you paste into an authenticator carries the account and "Infradeck", with odd characters escaped. |
 | `test_recovery_codes_are_random_formatted_and_normalised` | Ten distinct recovery codes in `XXXX-XXXX-XXXX-XXXX` form; typing them in lower case or without hyphens still matches. |
 | `test_things_that_are_not_recovery_codes_are_refused` *(7 inputs)* | Wrong length, wrong characters and non-strings are not treated as recovery codes. |
 | `test_secrets_are_encrypted_and_round_trip` | A secret is encrypted with `SECRETS_KEY` and decrypts back; the stored text doesn't contain it. |

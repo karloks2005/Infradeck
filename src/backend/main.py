@@ -201,7 +201,7 @@ def agent_error_message(exc: Exception) -> str:
 
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 # The interactive API documentation is a map of every endpoint, so it is off unless ENABLE_API_DOCS=true.
-app = FastAPI(title="Homelab Agent API", docs_url="/docs" if ENABLE_API_DOCS else None, redoc_url=None, openapi_url="/openapi.json" if ENABLE_API_DOCS else None)
+app = FastAPI(title="Infradeck API", docs_url="/docs" if ENABLE_API_DOCS else None, redoc_url=None, openapi_url="/openapi.json" if ENABLE_API_DOCS else None)
 
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -2160,4 +2160,4 @@ def agent_chat(payload: AgentChatRequest, session_id: Annotated[str | None, Cook
 
 @app.get("/")
 def root():
-    return {"message": "Homelab Agent API"}
+    return {"message": "Infradeck API"}

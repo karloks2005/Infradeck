@@ -1,6 +1,6 @@
 # Security
 
-Homelab Agent is meant to be self-hosted by people who care about the machines it watches.
+Infradeck is meant to be self-hosted by people who care about the machines it watches.
 This page says what each component can reach, so you can decide what to run.
 
 ## Components and what they can touch
