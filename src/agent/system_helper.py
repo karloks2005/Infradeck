@@ -10,6 +10,12 @@ with fixed patterns, strings are reduced to printable text and truncated, and th
 fixed schema. The helper is stateless; each run re-reads the kernel ring buffer and publishes
 a snapshot, and the backend de-duplicates events by their key.
 
+A second, separate mode (``HOMELAB_HELPER_MODE=port-owners``, the ``port-owners`` compose profile) names the
+process behind each listening port. That needs far more than the kernel log does: the host's /proc and the
+right to look at other users' processes (CAP_SYS_PTRACE and CAP_DAC_READ_SEARCH), which together can read
+any file on the host. It therefore runs as its own container, so enabling the kernel-log helper never grants
+it, and it publishes nothing but protocol, port and process name.
+
 Standard library only. Run with ``python -m src.agent.system_helper`` or as a standalone script.
 """
 from __future__ import annotations
@@ -136,6 +142,90 @@ def classify_last_shutdown(records: list[tuple[int, str, int]], boot_time: float
     return "unclean" if any(is_shutdown(record) for record in records[:latest]) else "unknown"
 
 
+PORTS_OUTPUT_PATH = Path(os.getenv("HOMELAB_PORT_OWNERS_OUTPUT", "/out/ports.json"))
+# Where the host's /proc is mounted for the port-owners mode (its own /proc only shows this container).
+PORTS_HOST_PROC = Path(os.getenv("HOMELAB_PORT_OWNERS_PROC", "/host/proc"))
+MAX_SOCKET_LINES = 200_000
+MAX_PROCESSES = 20_000
+MAX_FDS_PER_PROCESS = 4096
+MAX_PORT_OWNERS = 512
+PORT_SCAN_BUDGET_SECONDS = 8.0
+_SOCKET_LINK = re.compile(r"socket:\[(\d{1,20})\]")
+_ZERO_V6 = "0" * 32
+
+
+def listening_sockets(proc: Path = PORTS_HOST_PROC) -> dict[int, tuple[str, int]]:
+    """{socket inode: (protocol, port)} for every listening TCP socket and bound UDP socket on the host."""
+    sockets: dict[int, tuple[str, int]] = {}
+    for table, proto in (("tcp", "tcp"), ("tcp6", "tcp"), ("udp", "udp"), ("udp6", "udp")):
+        try:
+            handle = open(proc / "1/net" / table, "r", encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        with handle:
+            for number, line in enumerate(handle):
+                if number > MAX_SOCKET_LINES:
+                    break
+                fields = line.split()
+                if not number or len(fields) < 10:
+                    continue
+                listening = fields[3] == "0A" if proto == "tcp" else fields[3] == "07" and fields[2].startswith(("00000000:0000", _ZERO_V6 + ":0000"))
+                if not listening:
+                    continue
+                try:
+                    port, inode = int(fields[1].rpartition(":")[2], 16), int(fields[9])
+                except ValueError:
+                    continue
+                if inode and 1 <= port <= 65535:
+                    sockets[inode] = (proto, port)
+    return sockets
+
+
+def port_owners(proc: Path = PORTS_HOST_PROC, deadline: float | None = None) -> list[dict[str, Any]]:
+    """[{proto, port, process}] for the listening ports whose process could be found, lowest port first.
+
+    Only the link target of each file descriptor is read (never the file behind it), and only the process's
+    short name is kept: no arguments, no paths, no user.
+    """
+    wanted = listening_sockets(proc)
+    if not wanted:
+        return []
+    deadline = time.monotonic() + PORT_SCAN_BUDGET_SECONDS if deadline is None else deadline
+    found: dict[tuple[str, int], str] = {}
+    try:
+        pids = sorted((entry for entry in os.listdir(proc) if entry.isdigit()), key=int)[:MAX_PROCESSES]
+    except OSError:
+        return []
+    for pid in pids:
+        if len(found) == len(set(wanted.values())) or time.monotonic() > deadline:
+            break
+        try:
+            descriptors = os.listdir(proc / pid / "fd")[:MAX_FDS_PER_PROCESS]
+        except OSError:
+            continue  # the process ended, or this container lacks the capabilities
+        name = None
+        for descriptor in descriptors:
+            try:
+                match = _SOCKET_LINK.fullmatch(os.readlink(proc / pid / "fd" / descriptor))
+            except OSError:
+                continue
+            key = wanted.get(int(match.group(1))) if match else None
+            if key is None or key in found:
+                continue
+            if name is None:
+                try:
+                    name = sanitize((proc / pid / "comm").read_text().strip(), MAX_PROCESS_NAME)
+                except OSError:
+                    name = ""
+            if name:
+                found[key] = name
+    return [{"proto": proto, "port": port, "process": name} for (proto, port), name in sorted(found.items(), key=lambda item: (item[0][1], item[0][0]))][:MAX_PORT_OWNERS]
+
+
+def build_port_snapshot() -> dict[str, Any]:
+    return {"version": 1, "generated_at": datetime.fromtimestamp(time.time(), timezone.utc).isoformat(timespec="seconds"), "listeners": port_owners()}
+
+
 def build_snapshot() -> dict[str, Any]:
     boot_id = (HOST_PROC / "sys/kernel/random/boot_id").read_text().strip()[:64]
     wall_now, monotonic_now = time.time(), time.monotonic()
@@ -165,11 +255,13 @@ def write_snapshot(snapshot: dict[str, Any], path: Path = OUTPUT_PATH) -> None:
 
 def run() -> None:
     interval = max(10, int(os.getenv("HOMELAB_HELPER_INTERVAL_SECONDS", "30")))
-    print(f"System helper started; writing {OUTPUT_PATH} every {interval}s", flush=True)
+    ports_mode = os.getenv("HOMELAB_HELPER_MODE", "").strip().lower() == "port-owners"
+    output = PORTS_OUTPUT_PATH if ports_mode else OUTPUT_PATH
+    print(f"{'Port-owners' if ports_mode else 'System'} helper started; writing {output} every {interval}s", flush=True)
     while True:
         started = time.monotonic()
         try:
-            write_snapshot(build_snapshot())
+            write_snapshot(build_port_snapshot() if ports_mode else build_snapshot(), output)
         except (OSError, ValueError) as error:
             print(f"Snapshot failed ({type(error).__name__}): {error}", flush=True)
         time.sleep(max(1, interval - (time.monotonic() - started)))

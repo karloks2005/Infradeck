@@ -416,17 +416,30 @@ class _Timex(ctypes.Structure):
 _TIME_ERROR = 5
 
 
+_STA_NANO = 0x2000
+
+
+def _read_clock() -> tuple[int, float] | None:
+    """(kernel clock state, offset from the time source in milliseconds) from a read-only adjtimex, or None."""
+    try:
+        libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+        timex = _Timex()
+        state = libc.adjtimex(ctypes.byref(timex))
+    except (OSError, AttributeError):
+        return None
+    if state < 0:
+        return None
+    # The offset is in nanoseconds when the kernel says so, microseconds otherwise.
+    return state, timex.offset / (1_000_000 if timex.status & _STA_NANO else 1_000)
+
+
 def _ntp_synced() -> bool | None:
     """Whether the kernel clock is disciplined by a time service; None when it can't be read."""
     # A read-only adjtimex (modes=0) covers chrony, ntpd and timesyncd alike. Docker's default
     # seccomp profile may refuse it, in which case timesyncd's marker file is the fallback.
-    try:
-        libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
-        state = libc.adjtimex(ctypes.byref(_Timex()))
-        if state >= 0:
-            return state != _TIME_ERROR
-    except (OSError, AttributeError):
-        pass
+    clock = _read_clock()
+    if clock is not None:
+        return clock[0] != _TIME_ERROR
     if (HOST_ROOT / "run/systemd/timesyncd/synchronized").exists():
         return True
     return None
@@ -489,6 +502,293 @@ def collect_system() -> dict[str, Any]:
     }
 
 
+COLLECTOR_VERSION = "0.9.2"
+MAX_INTERFACES = 16
+MAX_TEMPERATURES = 8
+_KERNEL_IMAGE = re.compile(r"vmlinuz-(\d[\w.+~-]*)")
+_UPDATES_PENDING = re.compile(r"(\d+) (?:updates?|packages?) can be (?:applied|updated|installed)")
+_UPDATES_SECURITY = re.compile(r"(\d+) (?:of these updates|additional security updates?|updates?) (?:is a|are|can be applied with)[^\n]*security", re.IGNORECASE)
+# Counters from the previous check-in, per interface: (received bytes, sent bytes, monotonic time).
+_interface_previous: dict[str, tuple[int, int, float]] = {}
+
+
+def _version_key(version: str) -> list[tuple[int, Any]]:
+    """Sorts 6.8.0-9 before 6.8.0-85: digit runs compare as numbers."""
+    return [(0, int(part)) if part.isdigit() else (1, part) for part in re.split(r"(\d+)", version) if part]
+
+
+def _mtime(relative: str) -> float | None:
+    try:
+        return (HOST_ROOT / relative).stat().st_mtime
+    except OSError:
+        return None
+
+
+def _cpu_model() -> str | None:
+    for line in (_read_text(HOST_PROC / "cpuinfo") or "").splitlines():
+        if line.lower().startswith(("model name", "hardware")) and ":" in line:
+            return " ".join(line.split(":", 1)[1].split())[:128] or None
+    return None
+
+
+def _swap_total_gb() -> float | None:
+    for line in (_read_text(HOST_PROC / "meminfo") or "").splitlines():
+        if line.startswith("SwapTotal:"):
+            return round(int(line.split()[1]) * 1024 / GiB, 2)
+    return None
+
+
+def _timezone() -> str | None:
+    name = _read_text(HOST_ROOT / "etc/timezone")
+    if not name:
+        try:
+            name = os.readlink(HOST_ROOT / "etc/localtime").partition("zoneinfo/")[2]
+        except OSError:
+            name = None
+    return name[:64] if name else None
+
+
+def _time_service() -> str | None:
+    for service, marker in (("chrony", "run/chrony"), ("systemd-timesyncd", "run/systemd/timesync"), ("ntpd", "var/lib/ntp"), ("chrony", "var/lib/chrony")):
+        if (HOST_ROOT / marker).exists():
+            return service
+    return None
+
+
+def collect_updates(kernel: str | None, reboot_required: bool | None) -> dict[str, Any]:
+    """Pending package updates, from the files apt leaves behind (Debian and Ubuntu); {} elsewhere.
+
+    Nothing is run on the host, so the numbers are as old as apt's last own check.
+    """
+    if not (HOST_ROOT / "etc/debian_version").exists():
+        return {}
+    info: dict[str, Any] = {"updates_manager": "apt", "updates_checked_at": _mtime("var/lib/apt/periodic/update-success-stamp"), "updates_applied_at": _mtime("var/log/apt/history.log")}
+    summary = _read_regular_file(HOST_ROOT / "var/lib/update-notifier/updates-available", 16 * 1024)
+    if summary is not None:
+        text = summary.decode("utf-8", errors="replace")
+        pending, security = _UPDATES_PENDING.search(text), _UPDATES_SECURITY.search(text)
+        info["updates_pending"] = int(pending.group(1)) if pending else 0
+        info["updates_security"] = int(security.group(1)) if security else 0
+    settings = _read_regular_file(HOST_ROOT / "etc/apt/apt.conf.d/20auto-upgrades", 16 * 1024)
+    if settings is not None:
+        info["auto_updates"] = bool(re.search(r'Unattended-Upgrade\s+"1"', settings.decode("utf-8", errors="replace")))
+    if reboot_required and kernel:
+        try:
+            installed = [match.group(1) for entry in (HOST_ROOT / "boot").iterdir() if (match := _KERNEL_IMAGE.fullmatch(entry.name))]
+        except OSError:
+            installed = []
+        newest = max(installed, key=_version_key, default=None)
+        if newest and _version_key(newest) > _version_key(kernel):
+            info["reboot_kernel"] = newest[:64]
+    return info
+
+
+def collect_temperatures() -> list[dict[str, Any]]:
+    """Hardware temperature sensors the kernel exposes in sysfs; [] when sysfs isn't visible or has none."""
+    found: list[dict[str, Any]] = []
+    try:
+        sensors = sorted((HOST_ROOT / "sys/class/hwmon").iterdir())
+    except OSError:
+        return found
+    for sensor in sensors:
+        label, reading = _read_text(sensor / "name"), _read_text(sensor / "temp1_input")
+        if label and reading and reading.lstrip("-").isdigit() and -50_000 <= int(reading) <= 200_000:
+            found.append({"label": label[:32], "celsius": round(int(reading) / 1000, 1)})
+    return found[:MAX_TEMPERATURES]
+
+
+def _interface_networks() -> dict[str, str]:
+    """The directly connected IPv4 network of each interface, from the host's routing table."""
+    networks: dict[str, str] = {}
+    for line in (_read_net_table("route") or [])[1:]:
+        fields = line.split()
+        if len(fields) < 8 or fields[2] != "00000000" or fields[1] == "00000000":
+            continue  # routes through a gateway and the default route say nothing about the interface's own network
+        try:
+            destination = socket.inet_ntoa(bytes.fromhex(fields[1])[::-1])
+            prefix = bin(int.from_bytes(bytes.fromhex(fields[7])[::-1], "big")).count("1")
+        except (ValueError, OSError):
+            continue
+        networks.setdefault(fields[0], f"{destination}/{prefix}")
+    return networks
+
+
+def collect_interfaces(now: float | None = None) -> list[dict[str, Any]]:
+    """The host's network interfaces with their current traffic; veth pairs (one per container) are left out."""
+    lines = _read_net_table("dev")
+    if lines is None:
+        return []
+    now = time.monotonic() if now is None else now
+    networks = _interface_networks()
+    interfaces, seen = [], set()
+    for line in lines[2:]:
+        name, _, raw = line.partition(":")
+        name = name.strip()
+        if not raw or name == "lo" or name.startswith("veth"):
+            continue
+        try:
+            fields = [int(value) for value in raw.split()]
+        except ValueError:
+            continue
+        if len(fields) < 9:
+            continue
+        seen.add(name)
+        received, sent = fields[0], fields[8]
+        entry: dict[str, Any] = {"name": name[:16], "network": networks.get(name)}
+        previous = _interface_previous.get(name)
+        if previous and now > previous[2] and received >= previous[0] and sent >= previous[1]:
+            elapsed = now - previous[2]
+            entry["rx_mbps"] = round((received - previous[0]) / MiB / elapsed, 3)
+            entry["tx_mbps"] = round((sent - previous[1]) / MiB / elapsed, 3)
+        speed = _read_text(HOST_ROOT / "sys/class/net" / name / "speed")
+        if speed and speed.isdigit() and int(speed) > 0:
+            entry["speed_mbit"] = int(speed)
+        _interface_previous[name] = (received, sent, now)
+        # Interfaces that carry an address or have ever moved data; idle bridges without either are noise.
+        if entry["network"] or received or sent:
+            interfaces.append(entry)
+    for stale in set(_interface_previous) - seen:
+        del _interface_previous[stale]
+    interfaces.sort(key=lambda item: (item["network"] is None, item["name"]))
+    return interfaces[:MAX_INTERFACES]
+
+
+_PORT_LIST = r"\{?\s*((?:\d{1,5}(?:\s*[-:]\s*\d{1,5})?\s*,?\s*)+)\}?"
+_NFT_ACCEPT = re.compile(rf"\b(tcp|udp)\s+dport\s+{_PORT_LIST}[^\n;]*\baccept\b")
+_IPTABLES_ACCEPT = re.compile(r"^-A \S*(?:input|INPUT)\S*\s.*-p (tcp|udp)\b.*--dports? ([\d,:]+).*-j ACCEPT", re.MULTILINE)
+
+
+def _ports_in(spec: str) -> set[int]:
+    ports: set[int] = set()
+    for part in re.split(r"[,\s]+", spec.strip()):
+        low, _, high = part.replace(":", "-").partition("-")
+        if low.isdigit() and (not high or high.isdigit()):
+            first, last = int(low), int(high or low)
+            if 1 <= first <= last <= 65535 and last - first <= 4096:
+                ports.update(range(first, last + 1))
+    return ports
+
+
+def firewall_allowed(listeners: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Which of the listening ports a firewall configuration file explicitly accepts, and in which file.
+
+    Only ports the host is already reported to listen on are named, so this adds nothing about the rest of the
+    ruleset. Like the fingerprint, it reads configuration, not the live rules.
+    """
+    wanted = {(item["proto"], item["port"]) for item in listeners or []}
+    allowed: dict[tuple[str, int], str] = {}
+    for name, relative in FIREWALL_FILES:
+        data = _read_regular_file(HOST_ROOT / relative, MAX_FIREWALL_FILE_BYTES) if name != "ufw-conf" else None
+        if data is None:
+            continue
+        text = data.decode("utf-8", errors="replace")
+        for proto, spec in (_NFT_ACCEPT if name == "nftables" else _IPTABLES_ACCEPT).findall(text):
+            for port in _ports_in(spec):
+                if (proto, port) in wanted:
+                    allowed.setdefault((proto, port), name)
+    return [{"proto": proto, "port": port, "file": name} for (proto, port), name in sorted(allowed.items())]
+
+
+def disk_io_errors() -> int | None:
+    """I/O errors the kernel has counted on SCSI and SATA disks since boot, or None when no disk exposes a counter
+    (NVMe drives don't)."""
+    total, found = 0, False
+    try:
+        disks = list((HOST_ROOT / "sys/block").iterdir())
+    except OSError:
+        return None
+    for disk in disks:
+        raw = _read_text(disk / "device/ioerr_cnt")
+        if raw:
+            try:
+                total += int(raw, 16)
+                found = True
+            except ValueError:
+                continue
+    return total if found else None
+
+
+PORT_OWNERS_MAX_AGE_SECONDS = 300
+MAX_PORT_OWNERS = 512
+
+
+def _port_owners_path() -> Path:
+    return Path(os.getenv("HOMELAB_PORT_OWNERS_FILE", "/helper/ports.json"))
+
+
+def collect_port_owners(path: Path | None = None, now: float | None = None) -> list[dict[str, Any]] | None:
+    """Which process listens on each port, from the optional port-owners helper; None when it isn't running.
+
+    Read like the system helper's file: no symlinks, a size cap, and nothing older than a few minutes.
+    """
+    path = path or _port_owners_path()
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        raw = os.read(fd, HELPER_FILE_MAX_BYTES + 1)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    try:
+        data = json.loads(raw) if len(raw) <= HELPER_FILE_MAX_BYTES else None
+        generated = datetime.fromisoformat(data["generated_at"]).timestamp()
+    except (ValueError, KeyError, TypeError):
+        return None
+    if abs((now if now is not None else time.time()) - generated) > PORT_OWNERS_MAX_AGE_SECONDS or not isinstance(data.get("listeners"), list):
+        return None
+    owners = []
+    for item in data["listeners"][:MAX_PORT_OWNERS]:
+        if isinstance(item, dict) and item.get("proto") in ("tcp", "udp") and isinstance(item.get("port"), int) and isinstance(item.get("process"), str):
+            owners.append({"proto": item["proto"], "port": item["port"], "process": item["process"][:64]})
+    return owners
+
+
+def collect_system_info(listeners: list[dict[str, Any]] | None, reboot_required: bool | None, mounts: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Facts about the machine for the dashboard's System and Network tabs. Everything is read from /proc, sysfs and
+    a few world-readable files; what can't be read is simply left out."""
+    kernel = _read_text(HOST_PROC / "sys/kernel/osrelease")
+    clock = _read_clock()
+    reported = {mount["mount"] for mount in mounts or []}
+    info: dict[str, Any] = {
+        "kernel": kernel[:64] if kernel else None,
+        "arch": platform.machine()[:16] or None,
+        "cpu_model": _cpu_model(),
+        "swap_total_gb": _swap_total_gb(),
+        "timezone": _timezone(),
+        "time_service": _time_service(),
+        "clock_offset_ms": round(clock[1], 3) if clock else None,
+        "collector_version": COLLECTOR_VERSION,
+        "docker_version": _docker_version["value"],
+        "helper_installed": _helper_path().exists(),
+        "temperatures": collect_temperatures(),
+        "interfaces": collect_interfaces(),
+        "mount_devices": {mount[:255]: source.rsplit("/", 1)[-1][:64] for source, mount, _ in _mount_entries() if source.startswith("/dev/") and mount in reported},
+        "firewall_allowed": firewall_allowed(listeners),
+        "docker_disk": _docker_disk["value"],
+        "disk_io_errors": disk_io_errors(),
+        "listener_owners": collect_port_owners(),
+        **collect_updates(kernel, reboot_required),
+    }
+    return {key: value for key, value in info.items() if value is not None}
+
+
+def registration_details() -> dict[str, Any]:
+    """What a collector found on its machine, shown next to the Add button before anyone approves it."""
+    socket_path = os.getenv("HOMELAB_DOCKER_HOST") or os.getenv("DOCKER_SOCKET_PATH", "/var/run/docker.sock")
+    try:
+        containers = len(_docker_request(socket_path, "/containers/json?all=1")) if Path(socket_path).exists() else None
+    except (OSError, ValueError, TypeError, http.client.HTTPException):
+        containers = None
+    return {
+        "cpu_cores": _host_cpu_cores(), "containers": containers, "mounts": len(collect_mounts()),
+        "helper_installed": _helper_path().exists(),
+        "dashboard_host": os.getenv("HOMELAB_DASHBOARD_HOST", "").lower() in {"1", "true", "yes"},
+    }
+
+
 def collect_host() -> tuple[dict[str, Any], dict[str, Any]]:
     before_total, before_idle = _cpu_times()
     time.sleep(0.15)
@@ -529,6 +829,7 @@ def collect_host() -> tuple[dict[str, Any], dict[str, Any]]:
         "os_info": _host_os_info(),
         "cpu_cores": _host_cpu_cores(),
         "total_ram_gb": round(_memory_total_gb(), 3),
+        "system": collect_system_info(host["listeners"], host.get("reboot_required"), host["mounts"]),
     }
     # Set only on the collector in the dashboard's own compose stack; the dashboard's top charts follow it.
     if os.getenv("HOMELAB_DASHBOARD_HOST", "").lower() in {"1", "true", "yes"}:
@@ -659,16 +960,61 @@ def collect_containers(socket_path: str | None = None, info: dict[str, Any] | No
             "healthcheck_status": health,
             "started_at": state.get("StartedAt") if status == "running" else None,
             "ports": _format_ports((detail.get("NetworkSettings") or {}).get("Ports")),
+            "project": _compose_project(detail),
+            "volumes": _format_volumes(detail.get("Mounts")),
             "exit_code": exit_code if stopped and isinstance(exit_code, int) and not isinstance(exit_code, bool) and -1 <= exit_code <= 65535 else None,
             "oom_killed": state.get("OOMKilled") if stopped and isinstance(state.get("OOMKilled"), bool) else None,
             "finished_at": _docker_time(state.get("FinishedAt")) if stopped else None,
             "image_id": image_id if isinstance(image_id, str) and _IMAGE_ID.fullmatch(image_id) else None,
             **usage_stats,
+            **({"swap_mb": swap} if status == "running" and (swap := container_swap_mb(container_id)) is not None else {}),
         })
     if containers and not result:
         # Listing worked but nothing could be inspected: the daemon is failing, not empty.
         raise OSError("no container could be inspected")
     return result
+
+
+# The Docker daemon's version, asked for rarely: it only changes when Docker is upgraded.
+_docker_version: dict[str, Any] = {"value": None, "countdown": 0}
+DOCKER_VERSION_EVERY = 120
+
+
+def _remember_docker_version(socket_path: str) -> None:
+    if _docker_version["countdown"] > 0:
+        _docker_version["countdown"] -= 1
+        return
+    _docker_version["countdown"] = DOCKER_VERSION_EVERY
+    try:
+        version = _docker_request(socket_path, "/version").get("Version")
+    except (OSError, ValueError, AttributeError, http.client.HTTPException):
+        return  # an older proxy image refuses the request; the version just stays unknown
+    _docker_version["value"] = version[:32] if isinstance(version, str) and version else None
+
+
+# What Docker's images and build cache take on disk. Asking makes the daemon walk every layer, which can take
+# seconds on a big host, so it is asked for rarely and never delays a check-in by more than its own timeout.
+_docker_disk: dict[str, Any] = {"value": None, "next": 0.0}
+DOCKER_DISK_EVERY_SECONDS = 30 * 60
+_DOCKER_DISK_KEYS = ("images_bytes", "images_unused_bytes", "build_cache_bytes", "build_cache_unused_bytes")
+
+
+def _remember_docker_disk(socket_path: str, now: float | None = None) -> None:
+    now = time.monotonic() if now is None else now
+    if now < _docker_disk["next"]:
+        return
+    _docker_disk["next"] = now + DOCKER_DISK_EVERY_SECONDS
+    try:
+        usage = _docker_request(socket_path, "/system/df")
+    except (OSError, ValueError, http.client.HTTPException):
+        return  # refused by an older proxy image, too slow or too large: stays unknown
+    if not isinstance(usage, dict) or not all(isinstance(usage.get(key), int) for key in _DOCKER_DISK_KEYS):
+        return
+    _docker_disk["value"] = {
+        **{key.replace("_bytes", "_gb"): round(usage[key] / GiB, 2) for key in _DOCKER_DISK_KEYS},
+        "images": usage.get("images") if isinstance(usage.get("images"), int) else None,
+        "images_unused": usage.get("images_unused") if isinstance(usage.get("images_unused"), int) else None,
+    }
 
 
 def collect_docker(socket_path: str | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -687,10 +1033,50 @@ def collect_docker(socket_path: str | None = None) -> tuple[list[dict[str, Any]]
     info: dict[str, Any] = {}
     try:
         containers = collect_containers(target, info)
+        _remember_docker_version(target)
+        _remember_docker_disk(target)
     except (OSError, ValueError, http.client.HTTPException) as error:
         print(f"Docker metrics unavailable ({type(error).__name__}); sending host metrics only", flush=True)
         return [], {"docker_status": "unreachable", "docker_reason": _docker_failure_reason(error), "docker_latency_ms": info.get("latency_ms")}
     return containers, {"docker_status": "ok", "docker_reason": None, "docker_latency_ms": info.get("latency_ms")}
+
+
+COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
+_CONTAINER_ID = re.compile(r"[0-9a-f]{64}")
+
+
+def container_swap_mb(container_id: str) -> float | None:
+    """How much of a container's memory is swapped out, from its cgroup (v2), or None when that can't be read.
+
+    Docker's stats don't report it. The cgroup files are world-readable and sit under the host's /sys, at a path
+    that depends on whether Docker uses the systemd or the cgroupfs driver.
+    """
+    if not _CONTAINER_ID.fullmatch(container_id):
+        return None
+    for relative in (f"sys/fs/cgroup/system.slice/docker-{container_id}.scope/memory.swap.current", f"sys/fs/cgroup/docker/{container_id}/memory.swap.current"):
+        raw = _read_text(HOST_ROOT / relative)
+        if raw and raw.isdigit():
+            return round(int(raw) / MiB, 2)
+    return None
+
+
+def _compose_project(detail: dict[str, Any]) -> str | None:
+    """The compose project a container belongs to, or None for one started on its own."""
+    labels = (detail.get("Config") or {}).get("Labels")
+    project = labels.get(COMPOSE_PROJECT_LABEL) if isinstance(labels, dict) else None
+    return project[:128] if isinstance(project, str) and project else None
+
+
+def _format_volumes(mounts: Any) -> str | None:
+    """Where a container's data lives on the host: bind-mount paths and volume names, never what is in them."""
+    sources = set()
+    for mount in mounts if isinstance(mounts, list) else []:
+        if not isinstance(mount, dict):
+            continue
+        source = mount.get("Name") if mount.get("Type") == "volume" else mount.get("Source")
+        if isinstance(source, str) and source:
+            sources.add(source)
+    return ", ".join(sorted(sources))[:512] or None
 
 
 def _format_ports(ports: dict[str, Any] | None) -> str | None:
@@ -871,7 +1257,7 @@ def request_approval(api_url: str) -> tuple[int, str]:
     base = api_url.rstrip("/")
     while True:
         try:
-            registration = _post_json(f"{base}/monitoring/collectors/register", {"hostname": _host_hostname(), "machine_id": _machine_id(), "os_info": _host_os_info(), "join_token": os.getenv("HOMELAB_JOIN_TOKEN", "").strip() or None})
+            registration = _post_json(f"{base}/monitoring/collectors/register", {"hostname": _host_hostname(), "machine_id": _machine_id(), "os_info": _host_os_info(), "join_token": os.getenv("HOMELAB_JOIN_TOKEN", "").strip() or None, "details": registration_details()})
         except urllib.error.HTTPError as exc:
             print(f"Registration refused (HTTP {exc.code}): {_error_detail(exc)}; retrying in 5 minutes", flush=True)
             time.sleep(300)

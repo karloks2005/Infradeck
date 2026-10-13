@@ -6,17 +6,17 @@ import { availabilityRows, bucketLabel, containerStateSlices, formatDuration, in
 const LIVE_RANGES = new Set(['1h', '6h', '24h'])
 const REFRESH_SECONDS = 30
 const SEVERITIES = [
-  { key: 'critical', label: 'Critical', color: '#f87171' },
-  { key: 'warning', label: 'Warning', color: '#fbbf24' },
-  { key: 'info', label: 'Info', color: '#7dd3fc' },
+  { key: 'critical', label: 'Critical', color: '#FF5A1F' },
+  { key: 'warning', label: 'Warning', color: '#E2B04A' },
+  { key: 'info', label: 'Info', color: '#6F6D69' },
 ]
 
 function Figure({ label, value, detail }) {
   return (
-    <div className="rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 px-4 py-3">
-      <div className="text-xs uppercase tracking-[0.18em] text-[#9aa0a6]">{label}</div>
-      <div className="mt-1 text-2xl font-semibold text-white">{value}</div>
-      {detail && <div className="text-xs text-[#7f8589]">{detail}</div>}
+    <div className="card px-4 py-3">
+      <div className="text-xs text-soft">{label}</div>
+      <div className="mt-1 text-2xl font-semibold leading-none text-paper">{value}</div>
+      {detail && <div className="text-xs text-muted">{detail}</div>}
     </div>
   )
 }
@@ -48,7 +48,7 @@ export default function FleetStatistics({ request, servers, range }) {
 
   return (
     <div className="space-y-5">
-      {error && <div role="alert" className="rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">{error}</div>}
+      {error && <div role="alert" className="rounded-md border border-warn/40 px-3.5 py-2.5 text-xs text-warn">{error}</div>}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Figure label="Servers online" value={`${online} of ${servers.length}`} />
         <Figure label="Containers running" value={`${running} of ${containerTotal}`} />
@@ -73,10 +73,10 @@ export default function FleetStatistics({ request, servers, range }) {
       )}
 
       <div className="grid gap-4 lg:grid-cols-2">
-        {current && <BarList title="What the incidents were about" subtitle="Opened in this range" rows={current.incidents.by_kind.slice(0, 10).map((item) => ({ label: item.kind, value: item.count }))} color="#a78bfa" empty="No incidents opened in this range." />}
+        {current && <BarList title="What the incidents were about" subtitle="Opened in this range" rows={current.incidents.by_kind.slice(0, 10).map((item) => ({ label: item.kind, value: item.count }))} color="#D0CEC8" empty="No incidents opened in this range." />}
         <BarList title="Servers by disk usage" subtitle="Root disk, right now" rows={serversByDisk(servers)} max={100} unit="%" decimals={0} />
-        <BarList title="Containers using the most memory" subtitle="Right now" rows={topContainers(servers, 'memory_used_mb')} unit=" MB" color="#a78bfa" />
-        <BarList title="Containers using the most CPU" subtitle="Right now" rows={topContainers(servers, 'cpu_pct')} unit="%" decimals={1} color="#34d399" />
+        <BarList title="Containers using the most memory" subtitle="Right now" rows={topContainers(servers, 'memory_used_mb')} unit=" MB" color="#D0CEC8" />
+        <BarList title="Containers using the most CPU" subtitle="Right now" rows={topContainers(servers, 'cpu_pct')} unit="%" decimals={1} color="#D0CEC8" />
       </div>
 
       {current && (

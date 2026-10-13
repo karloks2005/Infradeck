@@ -18,6 +18,8 @@ STAGE_ENROLLMENT = "enrollment"
 PENDING_TWO_FACTOR_TTL_SECONDS = 300
 # A limited session exists only to set up two-factor, so it doesn't need to last a day; a stolen one is worth less.
 ENROLLMENT_SESSION_TTL_SECONDS = 30 * 60
+# "Keep me signed in for 30 days" on the sign-in page. Never shorter than the ordinary session.
+REMEMBER_SESSION_TTL_SECONDS = max(30 * 24 * 3600, SESSION_TTL_SECONDS)
 MAX_PENDING_ATTEMPTS = 5
 _PUBLIC_ID = re.compile(r"[0-9a-f]{16}")
 # Checked against when the account doesn't exist, so that unknown emails cost the same time as wrong passwords.
@@ -51,9 +53,15 @@ def _key_for_digest(digest: str) -> str:
     return f"homelab:session:{digest}"
 
 
+def session_lifetime(stage: str, remember: bool) -> int:
+    """How long a session lasts, in seconds. A limited (enrollment) session is always short, whatever was ticked."""
+    if stage == STAGE_ENROLLMENT:
+        return ENROLLMENT_SESSION_TTL_SECONDS
+    return REMEMBER_SESSION_TTL_SECONDS if remember else SESSION_TTL_SECONDS
+
+
 def _store_session(redis_client, session_id: str, payload: dict):
-    lifetime = ENROLLMENT_SESSION_TTL_SECONDS if payload.get("stage") == STAGE_ENROLLMENT else SESSION_TTL_SECONDS
-    redis_client.set(_session_key(session_id), json.dumps(payload), ex=lifetime)
+    redis_client.set(_session_key(session_id), json.dumps(payload), ex=session_lifetime(payload.get("stage"), payload.get("remember") is True))
 
 
 def _read_session(redis_client, session_id: str):
@@ -81,7 +89,7 @@ def _printable(text: str | None, limit: int) -> str | None:
     return cleaned or None
 
 
-def create_session(redis_client, user: User, *, stage: str = STAGE_FULL, ip: str | None = None, user_agent: str | None = None) -> tuple[str, str]:
+def create_session(redis_client, user: User, *, stage: str = STAGE_FULL, ip: str | None = None, user_agent: str | None = None, remember: bool = False) -> tuple[str, str]:
     """Open a session and index it under its user. Returns (session_id, public_id).
 
     The session ID is the secret in the cookie and is never shown to a client. The public ID is a separate
@@ -89,12 +97,14 @@ def create_session(redis_client, user: User, *, stage: str = STAGE_FULL, ip: str
     """
     session_id, public_id = secrets.token_urlsafe(32), secrets.token_hex(8)
     _store_session(redis_client, session_id, {
-        "user_id": user.id, "email": user.email, "name": user.name, "role": user.role, "stage": stage, "public_id": public_id,
+        "user_id": user.id, "email": user.email, "name": user.name, "role": user.role, "stage": stage, "public_id": public_id, "remember": bool(remember),
         "created_at": datetime.now(timezone.utc).isoformat(), "ip": _printable(ip, 64), "user_agent": _printable(user_agent, 120),
     })
     index = _user_sessions_key(user.id)
     redis_client.hset(index, public_id, _digest(session_id))
-    redis_client.expire(index, SESSION_TTL_SECONDS)
+    # The index must outlive the longest session it can list, or a 30-day session would vanish from the list (and
+    # from "sign out everywhere") after a day. Entries for sessions that have ended are dropped when it is read.
+    redis_client.expire(index, REMEMBER_SESSION_TTL_SECONDS)
     return session_id, public_id
 
 
@@ -178,11 +188,22 @@ def revoke_other_sessions(redis_client, user_id: int, keep_public_id: str | None
     return revoked
 
 
-def create_pending_two_factor(redis_client, user_id: int) -> str:
+def create_pending_two_factor(redis_client, user_id: int, remember: bool = False) -> str:
     """The short-lived token that carries a login between the password step and the code step."""
     token = secrets.token_urlsafe(32)
-    redis_client.set(_pending_key(token), json.dumps({"user_id": user_id}), ex=PENDING_TWO_FACTOR_TTL_SECONDS)
+    redis_client.set(_pending_key(token), json.dumps({"user_id": user_id, "remember": bool(remember)}), ex=PENDING_TWO_FACTOR_TTL_SECONDS)
     return token
+
+
+def pending_two_factor_remember(redis_client, token) -> bool:
+    """Whether the login waiting behind this token asked to stay signed in. The choice is made at the password step
+    and kept on the server, so the code step can't be used to lengthen someone's session."""
+    if not isinstance(token, str) or not 20 <= len(token) <= 100:
+        return False
+    try:
+        return json.loads(redis_client.get(_pending_key(token)) or "{}").get("remember") is True
+    except (TypeError, ValueError, AttributeError):
+        return False
 
 
 def read_pending_two_factor(redis_client, token) -> int | None:
@@ -323,7 +344,7 @@ def validate_password(password: str) -> None:
 
 
 def register_user(db, redis_client, *, name: str, email: str, password: str, admin_requires_two_factor: bool = False,
-                  ip: str | None = None, user_agent: str | None = None):
+                  everyone_requires_two_factor: bool = False, role: str | None = None, ip: str | None = None, user_agent: str | None = None):
     normalized_name = name.strip()
     normalized_email = email.strip().lower()
 
@@ -344,7 +365,7 @@ def register_user(db, redis_client, *, name: str, email: str, password: str, adm
         name=normalized_name,
         email=normalized_email,
         password_hash=password_hash,
-        role="admin" if is_first_user else "user",
+        role="admin" if is_first_user else role if role in ("admin", "user") else "user",
         is_active=True,
     )
     db.add(user)
@@ -353,7 +374,7 @@ def register_user(db, redis_client, *, name: str, email: str, password: str, adm
 
     record_audit_log(db, user_id=user.id, level="INFO", message="New account registered", source="auth")
 
-    stage = STAGE_ENROLLMENT if user.role == "admin" and admin_requires_two_factor else STAGE_FULL
+    stage = STAGE_ENROLLMENT if everyone_requires_two_factor or (user.role == "admin" and admin_requires_two_factor) else STAGE_FULL
     session_id, _public_id = create_session(redis_client, user, stage=stage, ip=ip, user_agent=user_agent)
 
     return {"session_id": session_id, "user": _serialize_user(user), "setup_required": stage == STAGE_ENROLLMENT}

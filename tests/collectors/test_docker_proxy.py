@@ -13,10 +13,10 @@ SECRET = "SUPER_SECRET_TOKEN_123"
 
 INSPECT = {
     "Id": CID, "Name": "/web", "RestartCount": 2, "Image": "sha256:" + "ab" * 32,
-    "Config": {"Image": "nginx:1", "Env": [f"DB_PASSWORD={SECRET}"], "Labels": {"k": "v"}, "Cmd": ["nginx"]},
+    "Config": {"Image": "nginx:1", "Env": [f"DB_PASSWORD={SECRET}"], "Labels": {"k": "v", "secret": SECRET, "com.docker.compose.project": "shop"}, "Cmd": ["nginx"]},
     "State": {"Status": "running", "StartedAt": "2026-01-01T00:00:00Z", "Pid": 99, "ExitCode": 137, "OOMKilled": True, "FinishedAt": "2026-01-02T03:04:05.123456789Z", "Error": f"failed: {SECRET}", "Health": {"Status": "healthy", "Log": [{"Output": SECRET}]}},
     "NetworkSettings": {"Ports": {"80/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8080"}]}, "SecondaryIPAddresses": None, "Networks": {"x": {"Gateway": "1"}}},
-    "Mounts": [{"Source": "/etc/shadow"}], "HostConfig": {"Privileged": True}, "GraphDriver": {"Data": {}},
+    "Mounts": [{"Type": "bind", "Source": "/srv/web", "Destination": "/data", "Mode": SECRET, "RW": True}, {"Type": "volume", "Name": "web_cache", "Source": "/var/lib/docker/volumes/web_cache/_data", "Destination": "/cache", "Driver": "local"}, "junk"], "HostConfig": {"Privileged": True}, "GraphDriver": {"Data": {}},
 }
 LISTING = [{"Id": CID, "Names": ["/web"], "Image": "nginx:1", "State": "running", "Labels": {"secret": SECRET}, "Mounts": []}]
 STATS = {"cpu_stats": {"cpu_usage": {"total_usage": 10}, "system_cpu_usage": 100, "online_cpus": 2}, "precpu_stats": {"cpu_usage": {"total_usage": 5}, "system_cpu_usage": 50},
@@ -41,9 +41,9 @@ def _fresh_collector_state():
 
 @pytest.mark.parametrize("target", [
     "/containers/json?all=1", f"/containers/{CID}/json", f"/containers/{CID}/stats?stream=false", f"/containers/{CID[:12]}/json",
-    f"/containers/{CID}/stats?stream=false&one-shot=true",
+    f"/containers/{CID}/stats?stream=false&one-shot=true", "/version", "/system/df",
 ])
-def test_the_four_read_requests_are_allowed(target):
+def test_the_six_read_requests_are_allowed(target):
     assert proxy.route("GET", target) is not None
 
 
@@ -55,7 +55,7 @@ def test_only_get_is_allowed(method):
 @pytest.mark.parametrize("target", [
     # other endpoints, including the ones that read container contents or start things
     "/containers/json",   # only the full list the collector asks for (?all=1) is allowed
-    "/", "/version", "/info", "/images/json", "/volumes", "/networks", "/system/df", "/events", "/_ping", "/containers", "/containers/",
+    "/", "/version?x=1", "/v1.43/version", "/info", "/images/json", "/volumes", "/networks", "/system/df?type=image", "/system/info", "/events", "/_ping", "/containers", "/containers/",
     f"/containers/{CID}/export", f"/containers/{CID}/archive?path=/etc/passwd", f"/containers/{CID}/logs", f"/containers/{CID}/top",
     f"/containers/{CID}/attach", f"/containers/{CID}/exec", f"/containers/{CID}/start", f"/containers/{CID}/kill", f"/containers/{CID}/changes",
     "/containers/create", "/containers/prune", "/exec/abc/start", "/build", "/commit", "/swarm", "/secrets", "/configs",
@@ -88,10 +88,34 @@ def test_inspect_output_drops_environment_and_everything_unneeded():
 
     assert SECRET not in json.dumps(result)
     assert result == {
-        "Id": CID, "Name": "/web", "RestartCount": 2, "Image": "sha256:" + "ab" * 32, "Config": {"Image": "nginx:1"},
+        "Id": CID, "Name": "/web", "RestartCount": 2, "Image": "sha256:" + "ab" * 32, "Config": {"Image": "nginx:1", "Labels": {"com.docker.compose.project": "shop"}},
+        # Of a mount only where it comes from and where it lands; of the labels only the compose project.
+        "Mounts": [{"Type": "bind", "Source": "/srv/web", "Destination": "/data"}, {"Type": "volume", "Name": "web_cache", "Source": "/var/lib/docker/volumes/web_cache/_data", "Destination": "/cache"}],
         "State": {"Status": "running", "StartedAt": "2026-01-01T00:00:00Z", "ExitCode": 137, "OOMKilled": True, "FinishedAt": "2026-01-02T03:04:05.123456789Z", "Health": {"Status": "healthy"}},
         "NetworkSettings": {"Ports": {"80/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8080"}]}},
     }
+
+
+def test_version_output_keeps_only_the_version_numbers():
+    assert proxy.project_version({"Version": "27.3.1", "ApiVersion": "1.47", "KernelVersion": "6.8.0", "Os": "linux", "Components": [{"Details": {"x": SECRET}}]}) == {"Version": "27.3.1", "ApiVersion": "1.47"}
+    assert proxy.project_version(None) == {}
+
+
+def test_disk_usage_is_reduced_to_totals_with_no_names():
+    usage = {
+        "LayersSize": 9_000, "Images": [
+            {"Id": "sha256:a", "RepoTags": [SECRET], "Size": 5_000, "SharedSize": 1_000, "Containers": 2},
+            {"Id": "sha256:b", "RepoTags": ["old:1"], "Size": 4_000, "SharedSize": 1_000, "Containers": 0},
+            {"Id": "sha256:c", "Size": 500, "SharedSize": 900, "Containers": 0}, "junk",
+        ],
+        "Containers": [{"Names": [SECRET]}], "Volumes": [{"Name": SECRET, "UsageData": {"Size": 7}}],
+        "BuildCache": [{"ID": SECRET, "Size": 300, "InUse": True, "Shared": False}, {"Size": 200, "InUse": False, "Shared": False}, {"Size": 999, "InUse": False, "Shared": True}],
+    }
+    result = proxy.project_disk_usage(usage)
+
+    assert SECRET not in json.dumps(result)
+    assert result == {"images_bytes": 9_000, "images_unused_bytes": 3_000, "images_unused": 2, "images": 3, "build_cache_bytes": 500, "build_cache_unused_bytes": 200}
+    assert proxy.project_disk_usage([]) == {} and proxy.project_disk_usage({"Images": "x", "LayersSize": -5})["images_bytes"] == 0
 
 
 def test_list_and_stats_output_are_cut_down():
@@ -156,6 +180,7 @@ def test_collector_works_through_the_proxy_and_never_sees_secrets(stack):
 
     assert (container["name"], container["image"], container["status"], container["restart_count"], container["healthcheck_status"]) == ("web", "nginx:1", "running", 2, "healthy")
     assert container["ports"] == "8080->80/tcp" and container["memory_used_mb"] == 1.0 and container["pids"] == 3
+    assert container["project"] == "shop" and container["volumes"] == "/srv/web, web_cache"
     assert SECRET not in json.dumps(container)
 
 

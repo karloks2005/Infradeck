@@ -24,6 +24,11 @@ class User(Base):
     # The newest time step already accepted, so an intercepted code can't be replayed.
     totp_last_step: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     password_changed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    username: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    avatar_color: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    # Display and notification choices, as checked JSON.
+    preferences: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -121,6 +126,10 @@ class Server(Base):
     machine_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     # The machine running the dashboard itself, as reported by the collector in its compose stack.
     is_dashboard_host: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Facts the collector reports about the machine (kernel, CPU model, interfaces, pending updates), as checked JSON.
+    system_info: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Set when someone named the server on the dashboard, so the collector's own hostname no longer replaces it.
+    name_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
@@ -139,6 +148,8 @@ class PendingCollector(Base):
     ip_address: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     os_info: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)  # pending | dismissed | approved
+    # What the collector found on its machine (cores, containers, mounts), as checked JSON, shown before approval.
+    details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     approved_server_id: Mapped[Optional[int]] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"), nullable=True)
     # The join token this request presented, if any (shown as "verified" on the dashboard).
     join_token_id: Mapped[Optional[int]] = mapped_column(ForeignKey("join_tokens.id", ondelete="SET NULL"), nullable=True)
@@ -300,6 +311,11 @@ class ContainerMetric(Base):
     pids: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     started_at: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     ports: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    # The compose project the container belongs to, and the host paths or volume names it mounts.
+    project: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    # Memory swapped out, from the container's cgroup; Docker's own stats don't include it.
+    swap_mb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    volumes: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     healthcheck_status: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     # How a stopped container ended, and the ID of the image it runs (to notice it changing).
     exit_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -322,6 +338,15 @@ class IncidentAlert(Base):
     rule_key: Mapped[Optional[str]] = mapped_column(String(255), index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True, nullable=False)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # How it ended, in a few words ("Marked resolved by Ana"); empty when the condition simply cleared.
+    resolution: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    acknowledged_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # While this is in the future the incident is out of the inbox and nobody is notified about it.
+    muted_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # When the notifier handled its opening and its resolving, so each is sent once.
+    notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolve_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class HostRollup(Base):
@@ -415,4 +440,55 @@ class ContainerRollup(Base):
     n_memory_pct: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_memory_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     max_memory_limit_mb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    avg_swap_mb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    n_swap_mb: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_swap_mb: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     max_restarts: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+
+class ApiToken(Base):
+    """A personal access token for scripts. Only its hash is stored; the token is shown once, when created."""
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)  # read | write
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    hint: Mapped[str] = mapped_column(String(8), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class NotificationChannel(Base):
+    """Where one user's alerts go. The address (a URL or an email) is stored encrypted."""
+
+    __tablename__ = "notification_channels"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)  # ntfy | discord | webhook | email
+    target_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    # A shortened form that is safe to show (the host and the end of the path).
+    display: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    last_status: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    last_ok: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Invite(Base):
+    """An invitation an admin hands to someone: a single-use link that lets them register while registration is closed."""
+
+    __tablename__ = "invites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(50), default="user", nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

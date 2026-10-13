@@ -7,21 +7,21 @@ import { donutSlices } from './chartMath.js'
 function ChartFrame({ title, subtitle, table, children, empty }) {
   const [asTable, setAsTable] = useState(false)
   return (
-    <figure className="min-w-0 rounded-2xl border border-[#1f2326] bg-[#0d1013]/60 p-4">
+    <figure className="min-w-0 card p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <figcaption className="text-sm font-medium text-white">{title}</figcaption>
-          {subtitle && <div className="text-xs text-[#7f8589]">{subtitle}</div>}
+          <figcaption className="text-sm font-medium text-paper">{title}</figcaption>
+          {subtitle && <div className="text-xs text-muted">{subtitle}</div>}
         </div>
-        {!empty && table && <button type="button" onClick={() => setAsTable((value) => !value)} className="shrink-0 rounded-lg border border-white/10 px-2 py-1 text-[11px] text-[#9aa0a6] hover:text-white">{asTable ? 'View as chart' : 'View as table'}</button>}
+        {!empty && table && <button type="button" onClick={() => setAsTable((value) => !value)} className="shrink-0 rounded-md border border-edge px-2 py-1 text-[11px] text-muted hover:text-paper">{asTable ? 'View as chart' : 'View as table'}</button>}
       </div>
       {empty ? (
-        <div className="mt-3 flex min-h-32 items-center justify-center rounded-xl border border-dashed border-neutral-800 px-3 text-center text-xs text-[#7f8589]">{empty}</div>
+        <div className="mt-3 flex min-h-32 items-center justify-center rounded-md border border-dashed border-line px-3 text-center text-xs text-muted">{empty}</div>
       ) : asTable && table ? (
-        <div className="mt-3 max-h-64 overflow-auto rounded-xl border border-[#1f2326]">
-          <table className="w-full text-left text-xs text-[#bcbcbc]">
-            <thead className="sticky top-0 bg-[#111417] text-[#9aa0a6]"><tr>{table.head.map((cell) => <th key={cell} className="px-3 py-2 font-medium">{cell}</th>)}</tr></thead>
-            <tbody>{table.rows.map((row, index) => <tr key={index} className="border-t border-[#1f2326]">{row.map((cell, cellIndex) => <td key={cellIndex} className="px-3 py-1.5">{cell}</td>)}</tr>)}</tbody>
+        <div className="mt-3 max-h-64 overflow-auto rounded-md border border-line">
+          <table className="w-full text-left text-xs text-soft">
+            <thead className="sticky top-0 bg-ink text-muted"><tr>{table.head.map((cell) => <th key={cell} className="px-3 py-2 font-medium">{cell}</th>)}</tr></thead>
+            <tbody>{table.rows.map((row, index) => <tr key={index} className="border-t border-line">{row.map((cell, cellIndex) => <td key={cellIndex} className="px-3 py-1.5">{cell}</td>)}</tr>)}</tbody>
           </table>
         </div>
       ) : <div className="mt-3">{children}</div>}
@@ -31,8 +31,8 @@ function ChartFrame({ title, subtitle, table, children, empty }) {
 
 function Legend({ items }) {
   return (
-    <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#bcbcbc]">
-      {items.map((item) => <li key={item.label} className="flex items-center gap-1.5"><span aria-hidden="true" className="h-2.5 w-2.5 rounded-sm" style={{ background: item.color }} />{item.label}{item.value !== undefined && <span className="text-[#7f8589]">{item.value}</span>}</li>)}
+    <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-soft">
+      {items.map((item) => <li key={item.label} className="flex items-center gap-1.5"><span aria-hidden="true" className="h-2.5 w-2.5 rounded-sm" style={{ background: item.color }} />{item.label}{item.value !== undefined && <span className="text-muted">{item.value}</span>}</li>)}
     </ul>
   )
 }
@@ -98,9 +98,9 @@ export function ColumnChart({ title, subtitle, categories, series, height = 190,
           })}
         </svg>
         {hover && (
-          <div role="status" className="pointer-events-none absolute z-10 rounded-xl border border-white/10 bg-[#111417]/95 px-3 py-2 text-xs text-[#e6e7ea] shadow-lg" style={{ top: 0, left: Math.min(Math.max(hover.x - 60, 0), Math.max(width - 140, 0)) }}>
-            <div className="text-[#9aa0a6]">{categories[hover.index].label}</div>
-            {series.map((item) => <div key={item.key}><span aria-hidden="true" className="mr-1.5 inline-block h-2 w-2 rounded-sm" style={{ background: item.color }} />{item.label} <span className="font-medium text-white">{categories[hover.index].values[item.key] || 0}{unit}</span></div>)}
+          <div role="status" className="pointer-events-none absolute z-10 rounded-md border border-edge bg-ink/95 px-3 py-2 text-xs text-[#e6e7ea] shadow-lg" style={{ top: 0, left: Math.min(Math.max(hover.x - 60, 0), Math.max(width - 140, 0)) }}>
+            <div className="text-muted">{categories[hover.index].label}</div>
+            {series.map((item) => <div key={item.key}><span aria-hidden="true" className="mr-1.5 inline-block h-2 w-2 rounded-sm" style={{ background: item.color }} />{item.label} <span className="font-medium text-paper">{categories[hover.index].values[item.key] || 0}{unit}</span></div>)}
           </div>
         )}
       </div>
@@ -135,7 +135,7 @@ export function Donut({ title, subtitle, slices, centreLabel = 'total', empty = 
 }
 
 // Ranked horizontal bars (top containers, servers by disk usage ...). rows: [{label, value, detail?}].
-export function BarList({ title, subtitle, rows, max = null, unit = '', color = '#7dd3fc', decimals = 0, empty = 'Nothing to show yet' }) {
+export function BarList({ title, subtitle, rows, max = null, unit = '', color = '#D0CEC8', decimals = 0, empty = 'Nothing to show yet' }) {
   const scale = max ?? Math.max(1, ...rows.map((row) => row.value))
   const table = { head: ['', `Value${unit ? ` (${unit.trim()})` : ''}`], rows: rows.map((row) => [row.label, row.value.toFixed(decimals)]) }
   return (
@@ -144,10 +144,10 @@ export function BarList({ title, subtitle, rows, max = null, unit = '', color = 
         {rows.map((row) => (
           <li key={row.label}>
             <div className="flex items-baseline justify-between gap-3 text-xs">
-              <span className="min-w-0 truncate text-[#cfcfcf]">{row.label}</span>
-              <span className="shrink-0 text-white">{row.value.toFixed(decimals)}{unit}{row.detail ? <span className="text-[#7f8589]"> {row.detail}</span> : null}</span>
+              <span className="min-w-0 truncate text-soft">{row.label}</span>
+              <span className="shrink-0 text-paper">{row.value.toFixed(decimals)}{unit}{row.detail ? <span className="text-muted"> {row.detail}</span> : null}</span>
             </div>
-            <div className="mt-1 h-2 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full" style={{ width: `${Math.min(Math.max((row.value / scale) * 100, 0), 100)}%`, background: row.color || color }} /></div>
+            <div className="mt-1 h-2 overflow-hidden rounded-full bg-edge"><div className="h-full rounded-full" style={{ width: `${Math.min(Math.max((row.value / scale) * 100, 0), 100)}%`, background: row.color || color }} /></div>
           </li>
         ))}
       </ul>
@@ -158,7 +158,7 @@ export function BarList({ title, subtitle, rows, max = null, unit = '', color = 
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 // Average by hour of day (columns) and weekday (rows). grid: 7 rows of 24 numbers or null.
-export function Heatmap({ title, subtitle, grid, unit = '%', color = '#7dd3fc', empty = 'Not enough history yet' }) {
+export function Heatmap({ title, subtitle, grid, unit = '%', color = '#D0CEC8', empty = 'Not enough history yet' }) {
   const [hover, setHover] = useState(null)
   const values = grid.flat().filter((value) => value !== null)
   const top = Math.max(1, ...values)
@@ -170,7 +170,7 @@ export function Heatmap({ title, subtitle, grid, unit = '%', color = '#7dd3fc', 
           <div className="min-w-[420px]">
             {grid.map((row, day) => (
               <div key={DAY_NAMES[day]} className="flex items-center gap-1 py-px">
-                <span className="w-8 shrink-0 text-[10px] text-[#7f8589]">{DAY_NAMES[day]}</span>
+                <span className="w-8 shrink-0 text-[10px] text-muted">{DAY_NAMES[day]}</span>
                 {row.map((value, hour) => (
                   <button
                     key={hour}
@@ -185,10 +185,10 @@ export function Heatmap({ title, subtitle, grid, unit = '%', color = '#7dd3fc', 
                 ))}
               </div>
             ))}
-            <div className="mt-1 flex gap-1 pl-9 text-[10px] text-[#7f8589]">{[0, 6, 12, 18, 23].map((hour) => <span key={hour} style={{ position: 'relative', left: `${(hour / 24) * 100 - (hour === 23 ? 3 : 0)}%`, width: 0 }}>{hour}h</span>)}</div>
+            <div className="mt-1 flex gap-1 pl-9 text-[10px] text-muted">{[0, 6, 12, 18, 23].map((hour) => <span key={hour} style={{ position: 'relative', left: `${(hour / 24) * 100 - (hour === 23 ? 3 : 0)}%`, width: 0 }}>{hour}h</span>)}</div>
           </div>
         </div>
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-[#9aa0a6]">
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
           <span role="status">{hover ? `${DAY_NAMES[hover.day]} ${hover.hour}:00 · ${hover.value === null ? 'no data' : `${hover.value.toFixed(1)}${unit} on average`}` : `Brighter is busier, up to ${top.toFixed(0)}${unit}.`}</span>
           <span aria-hidden="true" className="flex items-center gap-1.5">less
             {[0, 0.25, 0.5, 0.75, 1].map((step) => <span key={step} className="h-3 w-5 rounded-[3px]" style={{ background: color, opacity: 0.15 + 0.85 * step }} />)}

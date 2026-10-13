@@ -2,14 +2,16 @@
 
 The Docker socket is all-or-nothing: whatever can talk to it can start a privileged container,
 which is root on the host. Only this proxy mounts the socket. It listens on a Unix socket in a
-volume that only the collector shares (no network port at all), and answers exactly four kinds of request:
+volume that only the collector shares (no network port at all), and answers exactly six kinds of request:
 
     GET /containers/json?all=1
     GET /containers/<id>/json
     GET /containers/<id>/stats?stream=false
     GET /containers/<id>/stats?stream=false&one-shot=true
+    GET /version
+    GET /system/df
 
-The last one returns immediately instead of waiting a second for Docker to take a second CPU reading.
+The one-shot request returns immediately instead of waiting a second for Docker to take a second CPU reading.
 
 Everything else is refused, and the answers are cut down to the fields the collector uses: the
 inspect output is where a container's environment variables (often secrets) live, and they never
@@ -40,6 +42,10 @@ _ID = r"[0-9a-f]{12,64}"
 _LIST = re.compile(r"/containers/json\?all=1")
 _INSPECT = re.compile(rf"/containers/{_ID}/json")
 _STATS = re.compile(rf"/containers/{_ID}/stats\?stream=false(&one-shot=true)?")
+_VERSION = re.compile(r"/version")
+_DISK_USAGE = re.compile(r"/system/df")
+# The one label that passes: which compose project a container belongs to, so the dashboard can group them.
+COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
 
 
 def _pick(source: Any, keys: tuple[str, ...]) -> dict[str, Any]:
@@ -51,19 +57,55 @@ def project_list(data: Any) -> list[dict[str, Any]]:
 
 
 def project_inspect(data: Any) -> dict[str, Any]:
-    """The inspect fields the collector reads. Config.Env, mounts, labels and the rest are dropped."""
+    """The inspect fields the collector reads. Config.Env, every label but the compose project, and the rest are dropped.
+
+    Of a mount only where it comes from and where it lands passes (paths and volume names, never contents or options).
+    """
     if not isinstance(data, dict):
         return {}
     state = data.get("State") if isinstance(data.get("State"), dict) else {}
     health = state.get("Health") if isinstance(state.get("Health"), dict) else {}
     network = data.get("NetworkSettings") if isinstance(data.get("NetworkSettings"), dict) else {}
     config = data.get("Config") if isinstance(data.get("Config"), dict) else {}
+    labels = config.get("Labels") if isinstance(config.get("Labels"), dict) else {}
+    mounts = data.get("Mounts") if isinstance(data.get("Mounts"), list) else []
     return {
         # Image is the ID of the image the container runs. State.Error is free text, so it stays out.
         **_pick(data, ("Id", "Name", "RestartCount", "Image")),
-        "Config": _pick(config, ("Image",)),
+        "Config": {**_pick(config, ("Image",)), "Labels": _pick(labels, (COMPOSE_PROJECT_LABEL,))},
+        "Mounts": [_pick(mount, ("Type", "Name", "Source", "Destination")) for mount in mounts if isinstance(mount, dict)],
         "State": {**_pick(state, ("Status", "StartedAt", "ExitCode", "OOMKilled", "FinishedAt")), "Health": _pick(health, ("Status",))},
         "NetworkSettings": _pick(network, ("Ports",)),
+    }
+
+
+def project_version(data: Any) -> dict[str, Any]:
+    """Only the daemon's version numbers; the rest of /version describes the host."""
+    return _pick(data, ("Version", "ApiVersion"))
+
+
+def _size(value: Any) -> int:
+    return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value < 2**62 else 0
+
+
+def project_disk_usage(data: Any) -> dict[str, int]:
+    """How much disk Docker's images and build cache take and how much of it nothing uses: six numbers.
+
+    /system/df lists every image, container, volume and build step by name; none of those leave the proxy.
+    """
+    if not isinstance(data, dict):
+        return {}
+    images = [item for item in data.get("Images") or [] if isinstance(item, dict)] if isinstance(data.get("Images"), list) else []
+    cache = [item for item in data.get("BuildCache") or [] if isinstance(item, dict)] if isinstance(data.get("BuildCache"), list) else []
+    unused = [item for item in images if item.get("Containers") == 0]
+    return {
+        "images_bytes": _size(data.get("LayersSize")),
+        # What only that image holds: layers it shares with an image still in use stay after a prune.
+        "images_unused_bytes": sum(max(0, _size(item.get("Size")) - _size(item.get("SharedSize"))) for item in unused),
+        "images_unused": len(unused),
+        "images": len(images),
+        "build_cache_bytes": sum(_size(item.get("Size")) for item in cache if not item.get("Shared")),
+        "build_cache_unused_bytes": sum(_size(item.get("Size")) for item in cache if not item.get("Shared") and not item.get("InUse")),
     }
 
 
@@ -77,7 +119,7 @@ def route(method: str, target: str) -> tuple[str, Callable[[Any], Any]] | None:
     """The upstream request and response filter for an allowed request, or None to refuse it."""
     if method != "GET" or not target.isascii() or not target.isprintable():
         return None
-    for pattern, project in ((_LIST, project_list), (_INSPECT, project_inspect), (_STATS, project_stats)):
+    for pattern, project in ((_LIST, project_list), (_INSPECT, project_inspect), (_STATS, project_stats), (_VERSION, project_version), (_DISK_USAGE, project_disk_usage)):
         if pattern.fullmatch(target):
             return target, project
     return None

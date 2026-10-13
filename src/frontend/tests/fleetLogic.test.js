@@ -33,8 +33,8 @@ test('top containers rank across servers, skip unknown values and honour the cou
 })
 
 test('servers are ranked by disk usage and coloured by the thresholds; servers without data are left out', () => {
-  assert.deepEqual(serversByDisk(servers).map((row) => [row.label, row.value, row.color]), [['web01', 97, '#f87171'], ['nas', 91, '#fbbf24']])
-  assert.equal(serversByDisk([{ hostname: 'x', host: { disk_usage_pct: 40 } }])[0].color, '#7dd3fc')
+  assert.deepEqual(serversByDisk(servers).map((row) => [row.label, row.value, row.color]), [['web01', 97, '#FF5A1F'], ['nas', 91, '#E2B04A']])
+  assert.equal(serversByDisk([{ hostname: 'x', host: { disk_usage_pct: 40 } }])[0].color, '#D0CEC8')
 })
 
 test('a server is online while it keeps reporting', () => {
@@ -46,7 +46,7 @@ test('a server is online while it keeps reporting', () => {
 
 test('availability rows skip unknown servers, put the worst first and colour by how bad it is', () => {
   const rows = availabilityRows([{ hostname: 'a', percent: 100, checkins: 10, expected: 10 }, { hostname: 'b', percent: 96.5, checkins: 9, expected: 10 }, { hostname: 'c', percent: null, checkins: 0, expected: 5 }, { hostname: 'd', percent: 80, checkins: 8, expected: 10 }])
-  assert.deepEqual(rows.map((row) => [row.label, row.color]), [['d', '#f87171'], ['b', '#fbbf24'], ['a', '#34d399']])
+  assert.deepEqual(rows.map((row) => [row.label, row.color]), [['d', '#FF5A1F'], ['b', '#E2B04A'], ['a', '#6DBE8F']])
 })
 
 test('durations read naturally', () => {

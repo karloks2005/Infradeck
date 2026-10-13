@@ -1,0 +1,144 @@
+# Odstupanja od dizajna
+
+Popis svega što se u implementaciji redizajna razlikuje od PDF-ova u `design/web/` i `design/mobile/`,
+s razlogom i, gdje postoji, GitHub issueom. Stanje: 13. 10. 2026.
+
+Mobilni prikazi nisu odstupanja nego preostali posao; popisani su na kraju.
+
+Narančasti brojevi u krugovima, oznake „STATE 1", „LOGIN · A" i blokovi „What changed" u PDF-ovima
+su anotacije dizajna i namjerno nisu ugrađeni.
+
+## Okvir aplikacije (sidebar, top bar)
+
+| Dizajn | Implementacija | Razlog | Issue |
+| --- | --- | --- | --- |
+| „karlo's homelab" kao ime instance | Ime se izvodi iz imena prvog admina; može se promijeniti samo kroz API (`instance_name`), u Adminu nema polja | Admin stranica još nije redizajnirana | #106 |
+| „Owner" ispod imena korisnika | „Owner" se prikazuje svakom adminu, „Member" svima ostalima | Ne postoji uloga vlasnika | #106 |
+| Verzija `v0.9.2` | Konstanta u `src/backend/config.py` i druga u `src/agent/collector.py` | Nema jednog izvora verzije pri buildu | #106 |
+| Prečac `⌘K` | Na Linuxu i Windowsu piše `Ctrl K` | Prikazuje se prečac koji stvarno radi na tom sustavu | – |
+
+## Overview (`01-dashboard.pdf`, `06-dashboard-empty-states.pdf`)
+
+| Dizajn | Implementacija | Razlog | Issue |
+| --- | --- | --- | --- |
+| Agentova bilješka na svakom incidentu („Agent: limit is 4 GB…") | Stupac postoji i puni se ako backend pošalje `agent_note`; backend ga još ne šalje, pa je prazan | Agent još ne dijagnosticira incidente | #95, #93 |
+| „Open diagnosis" i „Ask the agent" otvaraju taj incident / razgovor o tom kontejneru | Vode na `/agent` bez konteksta | Agent stranica je još placeholder | #95 |
+| Zadnji incident: „Resolved 2 h ago · memory limit raised to 6 GB" | Piše samo kada je riješen i na kojem serveru | Nitko ne bilježi kako je incident riješen | #95 |
+| „You'll get a push on ntfy if that changes" | Rečenica je izostavljena | Infradeck nema ntfy obavijesti | #50 |
+| Gumbi Logs i Restart u proširenom redu kontejnera | Prikazani, ali onemogućeni, s objašnjenjem u tooltipu | Dogovoreno: aplikacija ostaje read-only dok se to sigurnosno ne pregleda | #100 |
+| „Monitor this machine": „Check every 15 s · change later in Admin" | „Checks every minute at first · change it once it reports" | Novi server počinje s intervalom od 60 s; interval se mijenja na Overviewu | #97 |
+| „Another machine": jedna `docker run` naredba | Dvije `docker run` naredbe (collector i docker-proxy) | Collector namjerno nema Docker socket; drži ga zaseban read-only proxy | – |
+| „Another machine": polje samo za ime | Dodano je i polje za adresu na koju se novi stroj javlja | Bez ispravne adrese naredba ne radi (localhost, VPN) | – |
+| Brisanje servera nije na Overviewu | „Remove this server" je u System tabu | Admin još nema pravi popis servera | #97 |
+| Kartica „What you'll get": „Kept for a year as 30-minute points" | „Kept as rolled-up points for as long as you set in Admin" | Zadržavanje je postavka, a točke nisu uvijek 30-minutne | – |
+| „The agent only sends data to your model provider when it diagnoses an incident" | „…when you ask it something" | Automatska dijagnoza ne postoji | #93 |
+
+## Tabovi servera (`08-server-tabs.pdf`)
+
+| Dizajn | Implementacija | Razlog | Issue |
+| --- | --- | --- | --- |
+| Containers: „Restarts · 24 h" | „Restarts · since created" | Postoji samo Dockerov ukupni brojač | #105 |
+| Network: imena host procesa (`sshd`, `vite dev server`) | Ime se vidi kad port objavljuje kontejner; host procesi samo uz opcionalni `port-owners` helper; bez njega `sshd` je pretpostavka po portu 22 | Čitanje tuđih procesa traži velike privilegije, pa je isključeno po defaultu | – |
+| Network: „Bound to" s pravom adresom (`10.0.0.12`) | `0.0.0.0`, `127.0.0.1` ili „one address" | Collector šalje samo opseg (svi, loopback, jedna adresa) | #103 |
+| Network: „Reachable from: LAN + VPN" | „every network", „one network" ili „this machine" | Isto kao gore | #103 |
+| Network: sučelja s opisom („WireGuard", „9 bridges") | Ime, mreža, brzina i promet | Vrsta sučelja se ne prikuplja | #39 |
+| System: „Security: 4 · openssl, libc6, sudo…" | Samo broj („4 waiting") | Imena paketa nisu ni u jednoj datoteci koju collector smije čitati | #104 |
+| System: ažuriranja za sve distribucije | Samo Debian i Ubuntu (apt) | dnf i pacman nemaju čitač | #104 |
+| System: „Failed units: 0 systemd units" | Red je izostavljen | Jedini put je D-Bus, koji može i mijenjati servise | #102 |
+| System: „Disk errors: None · SMART healthy" | Brojač I/O grešaka iz kernela; NVMe ga nema | SMART traži sirov pristup diskovima | #101 |
+| System: stupac Health po disku („SMART ok · 3% worn") | Stupac Inodes | Isto kao gore | #101 |
+| System: „Last shutdown: Clean, by reboot command" | „Clean" ili „Unclean" | Uzrok gašenja se ne bilježi | – |
+| System: „Proxy: docker-socket-proxy" | „Docker socket proxy, read-only" | Proxy je vlastiti, ne projekt tog imena | – |
+| System: `/var/lib/docker` s uređajem i tipom `overlay2` | Uređaj „—", tip „images + cache" | `/system/df` je namjerno sveden na šest brojeva | – |
+| Events: „Events are kept for 90 days, then only alerts are kept for a year" | „Events are kept for N days" (postavka zadržavanja) | Ne postoji zasebno pravilo za alerte | #58 |
+| Events: „watchtower pulled new images…", „restarted by a user through Portainer" | Generičke rečenice („now run a different image build") | Infradeck ne zna tko je pokrenuo promjenu | – |
+| Events: „alert sent to ntfy and email" | Ne piše kamo je alert poslan | Nema kanala obavijesti | #50 |
+
+## Prijava i registracija (`09-login.pdf`, `mobile/06-login.pdf`)
+
+| Dizajn | Implementacija | Razlog | Issue |
+| --- | --- | --- | --- |
+| „Forgot it?" vodi na reset lozinke | Otvara objašnjenje: pitaj admina ili napravi novog admina sa servera | Reset lozinke ne postoji; Infradeck ne šalje e-mail | #108 |
+| Stanje greške nije nacrtano | Tihi žuti okvir iznad gumba | Dizajn ga ne prikazuje | – |
+| `/register` uz zatvorenu registraciju nije nacrtan | Kratka poruka s poveznicom na prijavu | Dizajn ga ne prikazuje | – |
+| Mobitel, 2FA: sustavska tipkovnica i „From Messages" | Polja traže numeričku tipkovnicu i `one-time-code`; što se prikaže ovisi o uređaju | To crta operativni sustav, ne stranica | – |
+| 30 dana ostaje nakon promjene lozinke | Sesija se nakon promjene lozinke ili uključivanja 2FA vraća na jedan dan | Te radnje otvaraju novu sesiju bez oznake „remember" | – |
+
+## Statistics (`02-statistics.pdf`)
+
+| Dizajn | Implementacija | Razlog | Issue |
+| --- | --- | --- | --- |
+| Birač servera: samo serveri | Dodana je stavka „All" s prikazom flote | Dogovoreno, da se ne izgube incidenti i dostupnost | – |
+| Prikaz flote nije nacrtan | Stari sadržaj (incidenti, dostupnost, rang-liste) u novim bojama; krafne i stupci zadržavaju zelenu, žutu i narančastu | Za taj prikaz nema dizajna | – |
+| Events red: „nightly backup" | Oznaka „nightly <kontejner> peak" na svakom skoku koji se ponavlja | Infradeck ne zna što je backup; zna samo koji je kontejner tada najzaposleniji | – |
+| Events red: oznake uz svaki događaj | Tekst se prikazuje samo gdje ima mjesta do sljedećeg događaja; ostalo je u tooltipu | Inače se oznake preklapaju | – |
+| Events red: „apt upgrade · 41 packages" | Isto, ali tek od trenutka kad collector to počne javljati; samo Debian i Ubuntu | Događaj nastaje kad se apt-ov log promijeni između dva javljanja | #104 |
+| Nalaz: „line up with the gitlab backup job" | „gitlab is the busiest container each time" | Isto kao gore | – |
+| Nalaz: „Spikes last 8 to 14 minutes" | Isto, ali samo za raspone do 7 dana | Trajanje se čita iz pojedinačnih javljanja, a ona se čuvaju tjedan dana | #58 |
+| Tablica: Swap po kontejneru | Prosjek kroz raspon; samo cgroup v2 i tek nakon rebuilda collectora; za razdoblja prije toga prazno | Docker ne daje swap po kontejneru, čita se iz cgroupa | – |
+| Tooltip: „Busiest gitlab 94%" | Najviši CPU jednog kontejnera u tom razdoblju; za raspone od 30 dana naviše po satu, tjednu ili mjesecu | Čita se iz sažetaka | – |
+| „Not measured before collector 0.9.0" | „Not measured before <datum>" | Povijest verzija collectora se ne bilježi | – |
+| Raspon boja u heatmapu „0% – 15%+" | Gornja granica se računa iz podataka | Fiksna granica ne odgovara svakom serveru | – |
+| Export CSV | Izvozi točke Timelinea odabranog servera i raspona | Dizajn ne kaže što se izvozi | #67 |
+| Povijest kontejnera nije nacrtana | Klik na red otvara Timeline za taj kontejner (CPU, Memory, Restart count) ispod reda | Dogovoreno | – |
+
+## Agent (`03-agent.pdf`)
+
+| Dizajn | Implementacija | Razlog | Issue |
+| --- | --- | --- | --- |
+| Dijagnozu piše jezični model („watchtower updated the image to 17.4.1…") | Dijagnoza se gradi fiksnim pravilima iz spremljenih metrika i događaja; sažetak je opis pravila | Automatska LLM dijagnoza ne postoji; ovako ne košta ništa i ništa ne šalje van | #93 |
+| Evidence: retci iz loga kontejnera i `docker events` | Događaji koje je Infradeck zabilježio na tom serveru | Docker proxy ne može čitati logove | #100 |
+| „Confidence: high · 3 of 3 signals agree" | „3 of 3 checks against the data hold" | Nema modela koji bi procijenio pouzdanost | #93 |
+| Koraci s točnom putanjom (`/opt/gitlab/docker-compose.yml`) i brojkama iz povijesti verzija | Koraci iz fiksnog priručnika po vrsti pravila, s imenom kontejnera i izračunatim limitom | Infradeck ne zna gdje je compose datoteka ni koju verziju slike je kontejner imao prije | – |
+| „Notified ntfy, email" | „sent to the channels people chose" ili „nobody yet" | Ne bilježi se po kanalu | – |
+| Chat: odgovori s oznakama izvora („memory 12:30–13:55", „docker events") | Običan tekst odgovora | Model ne vraća izvore | #93 |
+| Chat: prijedlozi pitanja vezani uz incident | Tri općenita prijedloga | Isto | – |
+| „Resolved 14" po tjednima, s opisom kako je riješeno | Zadnjih 200 riješenih; opis je „Marked resolved by …" ili „Cleared on its own" | Nitko ne upisuje kako je riješeno | – |
+| „Mark resolved" trajno zatvara | Ako je uzrok još tu, na sljedećem javljanju otvara se novi incident | Pravilo i dalje vrijedi | – |
+| Viewer ne može ništa mijenjati | Isto; gumbi su onemogućeni s objašnjenjem | – | – |
+
+## Account (`04-account.pdf`)
+
+| Dizajn | Implementacija | Razlog | Issue |
+| --- | --- | --- | --- |
+| Email „Verified" | Bez oznake | Infradeck ne šalje e-mail, pa nema provjere | – |
+| Recovery codes: „Show" | Samo „Regenerate" | Kodovi su spremljeni kao hash | – |
+| Recovery codes: „8 of 10 left · generated 25 Sep" | „8 left" | Datum generiranja se ne bilježi | – |
+| Passkeys: „Add passkey" | Gumb je onemogućen | WebAuthn nije napravljen | #77 |
+| Sessions: lokacija („Zagreb, HR") i „Last active" | IP adresa i vrijeme prijave | Nema geolokacije; zadnja aktivnost se ne bilježi | – |
+| „Sessions expire after 30 days without activity" | „A session lasts a day, or 30 days…" | Sesija istječe od prijave, ne od zadnje aktivnosti | – |
+| Kanali: Telegram, Slack, Gotify, Pushover | ntfy, Discord webhook, bilo koji webhook, e-mail (ako je SMTP postavljen) | Ostali idu kroz generički webhook | #50 |
+| Kanal: „Fix" kod neuspjeha | „Send test" i „Remove" | Adresa se ne može urediti jer je spremljena šifrirano; kanal se ukloni i doda ponovno | – |
+| Matrica: „Agent diagnosis ready", „Daily digest 08:00", „Weekly report" | Redovi su prikazani, ali onemogućeni | Ne postoje | #33 |
+| Display: Time format i Sizes mijenjaju prikaz | Spremaju se, ali se još ne primjenjuju | Vremena i veličine se formatiraju na puno mjesta | – |
+| Display: Time zone za grafove | Vrijedi samo za tihe sate; grafovi prate preglednik | Isto | – |
+| „Change initials color" | Mijenja boju kroz šest ponuđenih | Dizajn ne kaže kako | – |
+
+## Admin (`05-admin.pdf`)
+
+| Dizajn | Implementacija | Razlog | Issue |
+| --- | --- | --- | --- |
+| „Update available · 0.9.3" | Nema; About ima poveznice na changelog | Infradeck ne zove van | – |
+| Connect a server kao tri numerirana koraka | Iste kartice kao na Overviewu (ime, naredba, čekanje, Add) | Jedna implementacija umjesto dvije | – |
+| „Removing a server keeps its history" | Brisanje servera briše i njegove metrike i incidente | Tako radi postojeće brisanje | – |
+| Users: „Invite pending · Resend" | Poveznica se prikaže jednom; „Cancel" i nova pozivnica | Infradeck ne šalje e-mail | – |
+| Uloge Owner / Admin / Viewer | Owner je prvi admin i ne može se mijenjati; ostalo Admin ili Viewer | Nema zasebne uloge vlasnika | #106 |
+| Alert rules: „Disk forecast full in < 30 days", „CPU > 90%" | Ne postoje; popis ima 16 stvarnih pravila | Ta pravila nisu napravljena | – |
+| Alert rules: stupac Servers s izborom servera | Uvijek „All" | Pravila vrijede za sve servere | – |
+| Alert rules: „New rule" | Gumb je onemogućen | Vlastita pravila ne postoje | – |
+| Alert rules: bilješka zašto je pravilo isključeno | Samo broj isključenih pravila | Razlog se ne upisuje | – |
+| Incident agent: „Anthropic API · key ending 4f2a", „Change" | Google Gemini, model iz `.env`; „Change" je onemogućen | Pružatelj i ključ se postavljaju u `.env` | #91 |
+| „Diagnose new incidents automatically" prekidač | Uvijek uključeno i onemogućeno | Dijagnoza je lokalna i ne može se isključiti | #93 |
+| „Read container logs" s iznimkama | Onemogućeno | Proxy ne čita logove | #100 |
+| „Redact IPs and hostnames" | Onemogućeno | Nije napravljeno | – |
+| „$1.84 estimated provider cost · cap $10" | „— · not tracked" | Potrošnja se ne mjeri | #91 |
+| Retention: tri zasebna roka | Jedan rok za sažetke; javljanja se čuvaju tjedan dana | Tako radi postojeće zadržavanje | #58 |
+| Database: putanja, rast po tjednu, „Last backup", „Export", „Back up now" | Veličina baze i broj zapisa; gumbi su onemogućeni | Backup ne postoji | – |
+| About: „built 2 Oct 2026" | Samo verzija | Datum builda se ne bilježi | #106 |
+
+## Još nije napravljeno
+
+| Što | Dizajn | Issue |
+| --- | --- | --- |
+| Mobilni prikazi (osim prijave) | `design/mobile/` | #98 |
+| Provjera na pravom stacku s pravim podacima | – | #107 |

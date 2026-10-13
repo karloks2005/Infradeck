@@ -61,6 +61,7 @@ CONTAINER_COLUMNS = (
     ("avg_memory_mb", "avg", "memory_used_mb"), ("max_memory_mb", "max", "memory_used_mb"),
     ("avg_memory_pct", "avg", "memory_pct"), ("max_memory_pct", "max", "memory_pct"),
     ("max_memory_limit_mb", "max", "memory_limit_mb"), ("max_restarts", "max", "restart_count"),
+    ("avg_swap_mb", "avg", "swap_mb"), ("max_swap_mb", "max", "swap_mb"),
 )
 # What each kind of rollup groups by and builds from.
 KINDS = (

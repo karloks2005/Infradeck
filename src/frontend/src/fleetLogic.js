@@ -4,10 +4,10 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 const pad = (value) => String(value).padStart(2, '0')
 
 export const CONTAINER_STATES = [
-  { key: 'running', label: 'Running', color: '#34d399' },
-  { key: 'unhealthy', label: 'Unhealthy', color: '#f87171' },
-  { key: 'restarting', label: 'Restarting', color: '#fbbf24' },
-  { key: 'stopped', label: 'Stopped', color: '#94a3b8' },
+  { key: 'running', label: 'Running', color: '#6DBE8F' },
+  { key: 'unhealthy', label: 'Unhealthy', color: '#FF5A1F' },
+  { key: 'restarting', label: 'Restarting', color: '#E2B04A' },
+  { key: 'stopped', label: 'Stopped', color: '#6F6D69' },
 ]
 
 export function containerState(container) {
@@ -37,7 +37,7 @@ export function topContainers(servers, key, count = 10) {
 export function serversByDisk(servers, warning = 85, critical = 95) {
   return servers
     .filter((server) => typeof server.host?.disk_usage_pct === 'number')
-    .map((server) => ({ label: server.hostname, value: server.host.disk_usage_pct, color: server.host.disk_usage_pct >= critical ? '#f87171' : server.host.disk_usage_pct >= warning ? '#fbbf24' : '#7dd3fc' }))
+    .map((server) => ({ label: server.hostname, value: server.host.disk_usage_pct, color: server.host.disk_usage_pct >= critical ? '#FF5A1F' : server.host.disk_usage_pct >= warning ? '#E2B04A' : '#D0CEC8' }))
     .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label))
 }
 
@@ -49,7 +49,7 @@ export function isOnline(server, now = Date.now()) {
 export function availabilityRows(availability) {
   return availability
     .filter((item) => item.percent !== null && item.percent !== undefined)
-    .map((item) => ({ label: item.hostname, value: item.percent, color: item.percent >= 99 ? '#34d399' : item.percent >= 95 ? '#fbbf24' : '#f87171', detail: `${item.checkins} of about ${item.expected} check-ins` }))
+    .map((item) => ({ label: item.hostname, value: item.percent, color: item.percent >= 99 ? '#6DBE8F' : item.percent >= 95 ? '#E2B04A' : '#FF5A1F', detail: `${item.checkins} of about ${item.expected} check-ins` }))
     .sort((a, b) => a.value - b.value || a.label.localeCompare(b.label))
 }
 

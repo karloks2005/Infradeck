@@ -6,6 +6,9 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parents[2]
 load_dotenv(BASE_DIR / ".env")
 
+# Shown in the sidebar and compared with what each collector reports.
+APP_VERSION = "0.9.2"
+
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql+psycopg://homelab:homelab_dev@localhost:5432/homelab",

@@ -60,7 +60,7 @@ MOUNT_METRICS = {
 }
 CONTAINER_METRICS = {
     "cpu": _m("cpu_pct", "cpu"), "memory_mb": _m("memory_used_mb", "memory_mb"), "memory_pct": _m("memory_pct", "memory_pct"),
-    "memory_limit_mb": _m("memory_limit_mb", "memory_limit_mb", avg=False), "restarts": _m("restart_count", "restarts", avg=False),
+    "swap_mb": _m("swap_mb", "swap_mb"), "memory_limit_mb": _m("memory_limit_mb", "memory_limit_mb", avg=False), "restarts": _m("restart_count", "restarts", avg=False),
 }
 DEFAULT_HOST_METRICS = ("cpu", "ram", "swap", "load", "disk")
 
@@ -217,8 +217,15 @@ def _tiered_items(db, spec, wanted, server_id, key, tier: str, window_start: dat
     return sorted(grouped.items()), NATURAL_SECONDS[tier]
 
 
+def previous_end(range_name: str, now: datetime | None = None) -> datetime | None:
+    """Where the period before ``range_name`` ends (which is where the range itself starts), for "compare with the
+    previous 7 days". None for "all", which has nothing before it."""
+    length = RANGES[range_name]
+    return rollups._utc(now or datetime.now(timezone.utc)) - length if length else None
+
+
 def history(db, spec: Series, server_id: int, key: str | None, range_name: str, wanted, interval_seconds: int, now: datetime | None = None) -> dict:
-    """The chart series for one server (and mount or container) over ``range_name``."""
+    """The chart series for one server (and mount or container) over ``range_name``, ending at ``now``."""
     now = rollups._utc(now or datetime.now(timezone.utc))
     since = data_since(db, spec, server_id, key)
     length = RANGES[range_name]

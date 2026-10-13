@@ -36,7 +36,7 @@ services:
       - no-new-privileges:true
 
   # The only container that mounts the Docker socket (a mount flag can't make it read-only).
-  # It answers three read requests and nothing else. It has no network at all: the collector
+  # It answers a handful of read requests and nothing else. It has no network at all: the collector
   # reaches it through a Unix socket in a volume only the two of them share. See SECURITY.md.
   docker-proxy:
     build:
@@ -76,6 +76,34 @@ services:
       - no-new-privileges:true
     volumes:
       - /var/log/wtmp:/host/wtmp:ro
+      - system_events:/out
+
+  # Optional and off by default: names the process behind each listening port for the Network tab.
+  # Enable with: docker compose --profile port-owners up -d
+  # This is the most privileged piece of the stack. Seeing which process holds a socket means looking into
+  # other users' processes, which needs the host's /proc, CAP_SYS_PTRACE, CAP_DAC_READ_SEARCH and no
+  # AppArmor confinement. Together those can read any file on the host, so it gets no network, a
+  # read-only filesystem, and publishes only protocol, port and process name. Read SECURITY.md first.
+  port-owners:
+    profiles: ["port-owners"]
+    build:
+      context: .
+      dockerfile: docker/system-helper.Dockerfile
+    image: homelab-system-helper:latest
+    container_name: homelab-port-owners
+    restart: unless-stopped
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [SYS_PTRACE, DAC_READ_SEARCH]
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+      - apparmor=unconfined
+    environment:
+      HOMELAB_HELPER_MODE: port-owners
+    volumes:
+      - /proc:/host/proc:ro
       - system_events:/out
 
 volumes:

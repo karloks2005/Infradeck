@@ -13,6 +13,63 @@ This page says what each component can reach, so you can decide what to run.
 | Collector gate (server stack) | nginx container, no capabilities | the backend; publishes one port on your VPN address | The only way to reach collector endpoints. See below. |
 | Backend / frontend / database / Redis | containers | each other, over separate networks | Only the frontend port is published. Redis and PostgreSQL are on a network with no route out and are reachable only by the backend. Redis needs a password. |
 
+## What the sign-in page shows before anyone signs in
+
+The sign-in page says which install it belongs to, so `GET /auth/config` answers without a session.
+Anyone who can reach the dashboard can read: the install's name (by default "<first admin's first
+name>'s homelab"; change it with `instance_name` in the admin settings), how many servers it watches,
+the Infradeck version, and whether registration is open. If the dashboard faces the internet, that is
+what a stranger learns; keep it behind a VPN if that is too much.
+
+"Keep me signed in for 30 days" makes that one session, and its cookie, last 30 days instead of
+`SESSION_TTL_SECONDS` (a day by default). The choice is made at the password step and kept on the
+server, so the two-factor step cannot lengthen a session. The limited session an admin gets before
+setting up two-factor is always 30 minutes. Long sessions are listed with the rest under Account and
+end with "sign out everywhere".
+
+## API tokens, notification channels and invitations
+
+**API tokens** (Account › API tokens) let a script read what a signed-in user can read.
+
+- A token is shown once and stored only as a SHA-256 hash. It is sent as `Authorization: Bearer idk_…`.
+- A *read* token may only `GET`. A *write* token may also acknowledge, resolve, mute and unmute
+  incidents, and only an admin can create one. If the owner's role or account changes, the token follows.
+- No token, whatever its scope, reaches `/account`, `/auth`, `/admin`, the chat or anything that
+  changes servers. A leaked token can't create another token, change a password, read the pending
+  servers' pairing codes or spend the model provider's quota.
+- Tokens can expire; revoking one works at once.
+
+**Notification channels** (Account › Notifications) make the backend connect to an address a user
+typed, so that address is treated as hostile:
+
+- Only `http` and `https`, no user name or password in the address, no redirects followed, a 5 second
+  timeout, and the answer is never shown to the user, only its status code.
+- Every address the name resolves to is checked, when the channel is saved and again each time
+  something is sent. Loopback, link-local (which includes cloud metadata addresses), multicast and
+  reserved ranges are always refused.
+- Private LAN ranges are allowed **only for admins**, because a homelab's ntfy usually lives there.
+  That means an admin can make the backend send a small POST to any host on the networks the backend
+  container can reach, including the stack's own services. Admins can already do far more; other
+  users can only reach public addresses.
+- Addresses are stored encrypted with `SECRETS_KEY` and shown afterwards only as the host and the last
+  few characters. Without `SECRETS_KEY`, channels can't be saved at all.
+- Email is sent only to the account's own address, and only if `SMTP_HOST` and `SMTP_FROM` are set.
+- What is sent: the incident's title, its description, the server's name and the incident number.
+  If those must not leave your network, use a channel inside it.
+
+**Invitations** (Admin › Users) are single-use links for one email address that work while registration
+is closed. Infradeck sends no email, so the admin passes the link on; whoever holds it and knows the
+address can register, so send it over a channel you trust. It expires after 7 days and is stored hashed.
+
+**Incident actions** (acknowledge, resolve, mute) are for admins only and each is written to the audit
+log. Muting hides an incident from the Overview and stops notifications for it; it does not stop the
+rule. An admin can also switch a rule off entirely in Admin › Alert rules, which closes its incidents.
+
+**The chat about an incident** sends your question together with that incident's title, description
+and the facts Infradeck worked out (signals and recorded events, which contain container and host
+names) to the model provider. Turn Chat off in Admin › Incident agent if that must not happen. The
+diagnosis itself is built locally by fixed rules and sends nothing anywhere.
+
 ## The optional system helper
 
 Reading the kernel log (`dmesg`) needs a privilege, and crash-vs-clean-shutdown detection needs
@@ -45,30 +102,62 @@ How its output is treated as untrusted:
   from the current boot, and forwards only the expected fields.
 - The backend validates everything again (event kinds, key format, timestamps, lengths, counts).
 
+## The optional port-owners helper
+
+The Network tab can name the process behind each listening port (`sshd`, `mariadbd`), but only if
+something looks into other users' processes. That is a much bigger privilege than anything else here,
+so it is a **separate container, off by default**, and enabling the kernel-log helper above never
+grants it. Enable it with `docker compose --profile port-owners up -d`.
+
+Be clear about what you are granting:
+
+- **The host's `/proc`, `CAP_SYS_PTRACE`, `CAP_DAC_READ_SEARCH` and no AppArmor confinement.** All four
+  are needed to read which sockets a process holds, and together they are enough to read any file on
+  the host (through `/proc/<pid>/root`) and the memory of any process. Treat this container as able
+  to read everything on the machine. If that is not acceptable, leave it off: ports published by
+  containers are still named, and the rest show as "not published by a container".
+- **No network, read-only filesystem, no new privileges.** It cannot send anything anywhere; its only
+  way out is the file it writes to the volume it shares with the collector.
+- **What it actually reads:** the host's socket tables, the link target of each process's file
+  descriptors (never the files behind them) and each matching process's short name. No arguments,
+  paths, users or environment.
+- **What leaves it:** protocol, port and process name, at most 512 entries. A process can name itself
+  anything, so the name is reduced to printable characters and 64 characters; the collector reads the
+  file with `O_NOFOLLOW`, a size cap and a freshness check, and the backend validates it again.
+- It is the same single file as the system helper (`src/agent/system_helper.py`), in a different mode.
+
 ## The Docker socket and the read-only proxy
 
 A Docker socket mount is root on the host: the `:ro` flag only protects the socket file, not the
 API behind it, and anything that can reach the API can start a privileged container. So in the
 compose files the collector **does not mount the socket**. A separate `docker-proxy` container does:
 
-- It answers exactly four requests: `GET /containers/json?all=1`, `GET /containers/<id>/json`,
-  `GET /containers/<id>/stats?stream=false` and the same stats request with `&one-shot=true` (which makes
+- It answers exactly six requests: `GET /containers/json?all=1`, `GET /containers/<id>/json`,
+  `GET /containers/<id>/stats?stream=false`, the same stats request with `&one-shot=true` (which makes
   Docker answer at once instead of waiting a second for a second CPU reading; the collector works out CPU %
-  from the change since its previous check-in). Everything else (other endpoints, other methods, extra
+  from the change since its previous check-in) `GET /version`, of which only the daemon's version numbers pass, and `GET /system/df`, which is cut
+  down to six numbers (how much disk images and the build cache take, and how much of that nothing
+  uses; no image, volume or container names). Everything else (other endpoints, other methods, extra
   query parameters, encoded or padded paths) gets a 403 and is logged. Matching is literal against the
   whole request target, with no decoding.
 - It cuts the answers down to a fixed list of fields. For container inspect that is the ID, name,
   restart count, image name and ID, state, health, exit code, out-of-memory flag, start and finish
-  times, and published ports. Container inspect output includes each container's environment
-  variables (often secrets), labels, mounts and Docker's free-text error message; none of them leave
-  the proxy. Adding a field means changing the proxy and its tests on purpose.
+  times, published ports, one label and where its mounts come from. Container inspect output also
+  includes each container's environment variables (often secrets), every other label and Docker's
+  free-text error message; none of them leave the proxy. Adding a field means changing the proxy and
+  its tests on purpose.
+- The one label that passes is `com.docker.compose.project`, so the dashboard can group containers by
+  compose project. Of a mount, only its type, its source (a host path or a volume name) and its
+  destination pass: never its contents, options or driver settings. That means **host paths that
+  containers mount, and volume names, are visible to everyone who can sign in**, like container names
+  and images already are. If a path itself is sensitive, don't put it in a container's mounts.
 - It runs with all capabilities dropped, a read-only filesystem and `no-new-privileges`, with no
   network at all. It listens on a Unix socket (mode 0660) in a volume that only the collector shares.
 - It is one standard-library file, `src/agent/docker_proxy.py`, built from this repository. Review it
   before trusting it: it is the one piece that holds the socket.
 
 A compromised collector can therefore read what it already reports (container names, states,
-stats) and nothing more through Docker.
+stats, compose project, mount sources) and nothing more through Docker.
 
 ## Protecting a fresh install
 
@@ -240,8 +329,17 @@ The collector's network checks are passive or opt-in, and add no privileges:
 - **Firewall configuration** is read from a fixed list of files (`/etc/ufw/*.rules`, `ufw.conf`,
   `nftables.conf`, `iptables/rules.v4` and `rules.v6`), never following symlinks and never reading more than
   1 MB. Only a short hash and a rule count leave the host, because the rules themselves reveal your
-  network layout. This sees configuration, not the live ruleset: reading that needs `CAP_NET_ADMIN`,
+  network layout, plus one more thing: for ports the host is already reported to listen on, whether one of
+  those files has a rule accepting that port (and which file), so the Network tab can say "no rule" next to
+  an exposed port. Rules about anything else are never named. This sees configuration, not the live ruleset: reading that needs `CAP_NET_ADMIN`,
   which can also change the firewall, so the collector doesn't have it.
+- **Machine facts** for the System tab (kernel release, CPU model, time zone, interface names with their
+  network and traffic, temperatures from sysfs, and on Debian and Ubuntu the pending-update counts apt
+  leaves in world-readable files) are read the same passive way. Nothing is executed on the host, and the
+  backend keeps only known fields of the right type and size.
+- **Swap per container** is read from each container's cgroup file under the host's `/sys/fs/cgroup`
+  (world-readable), because Docker's stats don't report it. Only containers Docker already listed are
+  looked up, by their full ID.
 - **The internet check is off by default.** When enabled it only opens a TCP connection and looks the
   name up, sending nothing. Its targets come from the collector's own environment
   (`HOMELAB_CONNECTIVITY_TARGETS`), never from the dashboard, so a compromised dashboard can't point

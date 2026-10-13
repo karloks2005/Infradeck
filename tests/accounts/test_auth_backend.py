@@ -98,10 +98,12 @@ def test_registration_closed_still_allows_first_account(monkeypatch):
     session = sessionmaker(bind=engine)()
     monkeypatch.setattr(main, "ALLOW_REGISTRATION", False)
 
-    assert main.auth_config(db=session) == {"registration_enabled": True, "bootstrap_required": True}
+    public = {"server_count": 0, "version": main.APP_VERSION}
+    assert main.auth_config(db=session) == {"registration_enabled": True, "bootstrap_required": True, "instance_name": None, **public}
     session.add(User(name="Owner", email="owner@example.com", password_hash="x"))
     session.commit()
-    assert main.auth_config(db=session) == {"registration_enabled": False, "bootstrap_required": False}
+    # The first account is not an admin here, so there is nobody to name the install after.
+    assert main.auth_config(db=session) == {"registration_enabled": False, "bootstrap_required": False, "instance_name": None, **public}
 
     with pytest.raises(HTTPException) as exc:
         main.auth_register(main.RegisterRequest(name="Stranger", email="s@example.com", password="correct-horse-battery-staple"), request=None, response=None, db=session)

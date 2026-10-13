@@ -951,3 +951,76 @@ def test_the_cleanup_of_old_session_data_never_stops_the_backend_from_starting(a
             raise ConnectionError("redis is down")
 
     assert auth.purge_legacy_session_keys(Broken()) == 0
+
+
+# --- staying signed in, and what the sign-in page may know ----------------------------------------------
+
+def _session_ttls(app):
+    return sorted(ttl for key, ttl in app.redis.ttls.items() if key.startswith("homelab:session:"))
+
+
+def _cookie_max_age(response):
+    header = next(value for name, value in response.headers.multi_items() if name == "set-cookie" and value.startswith(COOKIE))
+    return int(header.split("Max-Age=")[1].split(";")[0])
+
+
+def test_a_session_lasts_a_day_unless_you_ask_to_stay_signed_in(app):
+    plain = _login(TestClient(main.app), "member@example.com")
+    assert _session_ttls(app) == [auth.SESSION_TTL_SECONDS] and _cookie_max_age(plain) == auth.SESSION_TTL_SECONDS
+
+    kept = TestClient(main.app).post("/auth/login", json={"email": "member@example.com", "password": PASSWORD, "remember": True})
+    assert _session_ttls(app) == [auth.SESSION_TTL_SECONDS, auth.REMEMBER_SESSION_TTL_SECONDS] and _cookie_max_age(kept) == auth.REMEMBER_SESSION_TTL_SECONDS
+    assert auth.REMEMBER_SESSION_TTL_SECONDS >= 30 * 24 * 3600
+    assert any("staying signed in for 30 days" in message for message in _audit(app))
+    # Both still show up in the list of sessions, so the long one can be signed out.
+    assert len(auth.list_user_sessions(app.redis, 2, None)) == 2
+
+
+def test_a_limited_setup_session_is_short_even_when_staying_signed_in_was_ticked(app):
+    response = TestClient(main.app).post("/auth/login", json={"email": "admin@example.com", "password": PASSWORD, "remember": True})
+
+    assert response.json()["setup_required"] is True
+    assert _session_ttls(app) == [auth.ENROLLMENT_SESSION_TTL_SECONDS] and _cookie_max_age(response) == auth.ENROLLMENT_SESSION_TTL_SECONDS
+
+
+def test_the_choice_to_stay_signed_in_is_kept_across_the_two_factor_step_on_the_server(app):
+    secret, _codes = _enroll(app, _signed_in())
+    app.redis.ttls.clear()
+    client = TestClient(main.app)
+    first = client.post("/auth/login", json={"email": "admin@example.com", "password": PASSWORD, "remember": True}).json()
+    # The code step has no say in it: an extra field there is ignored.
+    second = client.post("/auth/login/2fa", json={"pending_token": first["pending_token"], "code": _code(app, secret, 30), "remember": False})
+    assert second.status_code == 200 and _cookie_max_age(second) == auth.REMEMBER_SESSION_TTL_SECONDS
+
+    app.redis.ttls.clear()
+    client = TestClient(main.app)
+    first = client.post("/auth/login", json={"email": "admin@example.com", "password": PASSWORD}).json()
+    second = client.post("/auth/login/2fa", json={"pending_token": first["pending_token"], "code": _code(app, secret, 30), "remember": True})
+    assert second.status_code == 200 and _cookie_max_age(second) == auth.SESSION_TTL_SECONDS
+    assert auth.pending_two_factor_remember(app.redis, "x" * 30) is False and auth.pending_two_factor_remember(app.redis, None) is False
+
+
+def test_the_sign_in_page_learns_the_installs_name_and_nothing_private(app):
+    config = TestClient(main.app).get("/auth/config").json()
+
+    assert config == {"registration_enabled": False, "bootstrap_required": False, "instance_name": "admin's homelab", "server_count": 0, "version": main.APP_VERSION}
+
+
+def test_an_admin_can_name_the_install_and_reset_the_name(app):
+    admin = _signed_in()
+    _enroll(app, admin)
+
+    assert admin.put("/admin/settings", json={"instance_name": "  Basement rack  "}).json()["instance_name"] == "Basement rack"
+    assert TestClient(main.app).get("/auth/config").json()["instance_name"] == "Basement rack"
+    assert admin.get("/monitoring/overview").json()["instance_name"] == "Basement rack"
+    assert admin.put("/admin/settings", json={"instance_name": "x" * 61}).status_code == 400
+    assert admin.put("/admin/settings", json={"instance_name": ""}).json()["instance_name"] == "admin's homelab"
+    assert _signed_in("member@example.com").put("/admin/settings", json={"instance_name": "mine"}).status_code == 403
+
+
+def test_a_new_install_has_no_name_yet(app):
+    app.db.query(User).delete()
+    app.db.commit()
+
+    config = TestClient(main.app).get("/auth/config").json()
+    assert config["bootstrap_required"] is True and config["instance_name"] is None
