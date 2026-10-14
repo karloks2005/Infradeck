@@ -372,7 +372,7 @@ The collector's network checks are passive or opt-in, and add no privileges:
   a session for any user, administrator included, with no password or two-factor.
 - **Limits on what a signed-in user can run up.** Messages to the assistant (30 an hour per user), new
   conversations (30 an hour, 100 in total) and audit-log entries (120 an hour) are limited, since each can cost
-  the administrator's Gemini quota or database space. Setting up two-factor from a normal session needs the
+  the administrator's OpenAI quota or database space. Setting up two-factor from a normal session needs the
   password again, and every try counts toward the lockout, the right password included. A limited
   (set-up-only) session lasts 30 minutes, not a day.
 - **Sessions are stored hashed.** Redis holds only the SHA-256 of the cookie value, in the session key, the

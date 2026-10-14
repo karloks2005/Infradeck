@@ -89,7 +89,7 @@ src/
     docker_proxy.py         read-only Docker API proxy (standard library only)
     system_helper.py        optional kernel-log / wtmp helper (standard library only)
     health_checks.py        read-only checks available to the assistant
-    service.py, prompts.py  Gemini assistant
+    service.py, prompts.py, providers.py  incident agent chat (OpenAI)
   frontend/                 React + Tailwind dashboard (Vite); charts.jsx and chartMath.js are the
                             charts (distributions.jsx: columns, donut, bars, heatmap), StatisticsPage.jsx,
                             FleetStatistics.jsx, ServerInsights.jsx and ContainerStatistics.jsx the page

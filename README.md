@@ -7,7 +7,7 @@ One machine runs the dashboard; every other machine runs a small collector that
 reports host and Docker container metrics back to it. It works the same whether
 the machines share a LAN or are spread across sites and VPSes.
 
-It also includes **VertexAI**, an optional monitoring-only AI assistant (Gemini)
+It also includes an optional, monitoring-only incident agent (OpenAI API, set `OPENAI_API_KEY`)
 that can run a fixed set of read-only health checks and never executes commands.
 It's main purpose is to report errors, diagnose errors and propose optimal fixes.
 

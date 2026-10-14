@@ -337,3 +337,131 @@ def test_a_server_is_renamed_and_keeps_the_name_and_the_install_describes_itself
 
     system = owner.get("/admin/system").json()
     assert system["version"] == main.APP_VERSION and system["database"]["host_rows"] == 30 and system["agent"]["incidents_this_month"] >= 1
+
+
+def test_admin_tests_the_agent_connection_and_the_key_never_comes_back(app, monkeypatch):
+    owner = signed_in(app, 1)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-secret-value")
+    monkeypatch.setattr(main, "check_provider_connection", lambda: {"provider": "OpenAI", "model": "gpt-test"})
+
+    system = owner.get("/admin/system")
+    assert system.json()["agent"]["key_configured"] is True and system.json()["agent"]["provider"] == "OpenAI"
+    result = owner.post("/admin/agent/test")
+    assert result.json() == {"ok": True, "provider": "OpenAI", "model": "gpt-test"}
+    assert "sk-test-secret-value" not in system.text + result.text
+    assert signed_in(app, 3).post("/admin/agent/test").status_code == 403
+
+
+def test_a_failed_agent_connection_test_explains_itself_without_the_key(app, monkeypatch):
+    owner = signed_in(app, 1)
+
+    def rejected():
+        raise RuntimeError("Error code: 401 - Incorrect API key provided: sk-test-secret-value")
+    monkeypatch.setattr(main, "check_provider_connection", rejected)
+
+    response = owner.post("/admin/agent/test")
+    assert response.status_code == 502 and "rejected the API key" in response.json()["detail"]
+    assert "sk-test-secret-value" not in response.text
+
+
+# --- the agent's spending (#112) ---------------------------------------------------------------------------------
+
+from src.agent.providers import Completion
+from src.backend.models import AgentRun
+
+
+def _fake_agent(monkeypatch, tokens=(1000, 200), fail=None):
+    def fake(user_id, conversation_id, message, command_logger=None, usage_logger=None):
+        if fail:
+            raise fail
+        # A dated model name, as the API reports it: it must still use the price set for "gpt-test".
+        usage_logger(Completion(text="{}", model="gpt-test-2026-01-01", input_tokens=tokens[0], output_tokens=tokens[1]), 1500)
+        return "Here is the answer."
+    monkeypatch.setattr(main, "send_agent_message", fake)
+    monkeypatch.setattr(main, "is_agent_chat_enabled", lambda db: True)
+
+
+def _ask(client, conversation="c1"):
+    client.post("/conversations", json={"conversation_id": conversation, "title": "t"})
+    return client.post("/agent/chat", json={"conversation_id": conversation, "message": "Why did it restart?", "incident_id": 42})
+
+
+def test_every_chat_call_is_counted_with_its_tokens_and_cost(app, monkeypatch):
+    _fake_agent(monkeypatch)
+    owner = signed_in(app, 1)
+    assert owner.put("/admin/settings", json={"agent_prices": {"gpt-test": {"input": 1, "output": 10}}}).status_code == 200
+
+    assert _ask(owner).status_code == 200
+
+    run = app.db.query(AgentRun).one()
+    assert (run.kind, run.status, run.input_tokens, run.output_tokens, run.duration_ms, run.user_id, run.incident_id) == ("chat", "ok", 1000, 200, 1500, 1, 42)
+    assert run.cost_usd == pytest.approx(0.003)   # 1000 × $1 + 200 × $10 per million tokens
+    usage = owner.get("/admin/agent/usage").json()
+    assert usage["calls"] == 1 and usage["cost"] == pytest.approx(0.003) and usage["by_model"][0]["model"] == "gpt-test-2026-01-01"
+    assert usage["daily"][-1]["cost"] == pytest.approx(0.003)
+    assert signed_in(app, 3).get("/admin/agent/usage").status_code == 403
+
+
+def test_calls_made_before_a_price_was_entered_are_priced_later(app, monkeypatch):
+    _fake_agent(monkeypatch)
+    owner = signed_in(app, 1)
+    _ask(owner)
+    assert owner.get("/admin/agent/usage").json()["unpriced_runs"] == 1
+
+    owner.put("/admin/settings", json={"agent_prices": {"gpt-test": {"input": 1, "output": 10}}})
+
+    usage = owner.get("/admin/agent/usage").json()
+    assert usage["cost"] == pytest.approx(0.003) and usage["unpriced_runs"] == 0
+
+
+def test_the_monthly_budget_pauses_the_chat_and_tells_the_admins_once(app, monkeypatch):
+    _fake_agent(monkeypatch)
+    sent = []
+    monkeypatch.setattr(main, "_deliver", lambda db, channel, owner, title, body, severity: sent.append((owner.id, title)) or True)
+    app.db.add(NotificationChannel(user_id=1, kind="ntfy", target_enc=secrets_box.encrypt("https://ntfy.sh/x"), display="ntfy.sh/x"))
+    app.db.add(NotificationChannel(user_id=3, kind="ntfy", target_enc=secrets_box.encrypt("https://ntfy.sh/y"), display="ntfy.sh/y"))
+    app.db.commit()
+    owner = signed_in(app, 1)
+    owner.put("/admin/settings", json={"agent_prices": {"gpt-test": {"input": 1, "output": 10}}, "agent_monthly_cap_usd": 0.005})
+
+    assert _ask(owner).status_code == 200           # $0.003 of $0.005
+    assert _ask(owner).status_code == 200           # $0.006: over the budget
+    paused = _ask(owner)
+
+    assert paused.status_code == 429 and "budget" in paused.json()["detail"]
+    assert app.db.query(AgentRun).count() == 2      # the paused request never reached the model
+    assert sent == [(1, "The incident agent paused: its monthly budget is used up")]   # admins only, once
+    assert owner.get("/agent/config").json()["budget_paused"] is True
+
+    owner.put("/admin/settings", json={"agent_monthly_cap_usd": 0})   # removing the budget lets it run again
+    assert _ask(owner).status_code == 200
+
+
+def test_the_daily_limit_counts_messages_per_person(app, monkeypatch):
+    _fake_agent(monkeypatch)
+    owner = signed_in(app, 1)
+    owner.put("/admin/settings", json={"agent_daily_chat_limit": 2})
+
+    assert [_ask(owner).status_code for _ in range(3)] == [200, 200, 429]
+    assert _ask(signed_in(app, 2), conversation="c2").status_code == 200   # someone else still can
+
+
+def test_a_failed_call_is_recorded_without_tokens(app, monkeypatch):
+    _fake_agent(monkeypatch, fail=TimeoutError("timed out"))
+    owner = signed_in(app, 1)
+
+    assert _ask(owner).status_code == 503
+
+    run = app.db.query(AgentRun).one()
+    assert (run.status, run.input_tokens, run.cost_usd) == ("error", 0, None) and "timed out" in run.error
+
+
+@pytest.mark.parametrize("body", [
+    {"agent_prices": {"gpt test": {"input": 1, "output": 2}}},
+    {"agent_prices": {"gpt-test": {"input": -1, "output": 2}}},
+    {"agent_prices": {"gpt-test": {"input": 1}}},
+    {"agent_monthly_cap_usd": -5},
+    {"agent_daily_chat_limit": 0},
+])
+def test_spending_settings_are_checked(app, body):
+    assert signed_in(app, 1).put("/admin/settings", json=body).status_code == 400

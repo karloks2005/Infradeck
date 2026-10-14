@@ -160,7 +160,7 @@ function Incident({ incident, canAct, onChanged }) {
 
 const SUGGESTIONS = { default: ['Is anything else close to its limit?', 'What changed on this server today?', 'Explain this incident in one paragraph'], none: ['Is anything close to its limit?', 'Which server needs attention first?', 'What happened overnight?'] }
 
-function Chat({ user, incident, enabled, phone = false, back }) {
+function Chat({ user, incident, enabled, offReason, phone = false, back }) {
   const conversationId = `${incident ? `incident-${incident.id}` : 'general'}-u${user.id}`
   const [messages, setMessages] = useState(null)
   const [draft, setDraft] = useState('')
@@ -204,7 +204,7 @@ function Chat({ user, incident, enabled, phone = false, back }) {
     return <>
       <PhoneHeader back={back} title="Ask the agent" action={incident ? <span className="chip mono shrink-0 text-paper">{incident.reference}</span> : <button type="button" className="h-11 border-0 bg-transparent px-1 text-[13px] text-muted" onClick={restart}>New chat</button>} />
       <div className="space-y-5 px-4 pb-[190px] pt-4" aria-live="polite">
-        {!enabled && <Notice tone="plain">Chat with the agent has been turned off by an admin.</Notice>}
+        {!enabled && <Notice tone="plain">{offReason}</Notice>}
         {enabled && messages === null && <p className="m-0 text-xs text-muted">Loading…</p>}
         {enabled && messages?.length === 0 && <p className="m-0 text-[13px] leading-5 text-muted">{incident ? 'The agent is given this incident\'s facts with your question.' : 'Ask about any server.'}</p>}
         {enabled && (messages || []).map((message) => (message.role === 'user'
@@ -232,7 +232,7 @@ function Chat({ user, incident, enabled, phone = false, back }) {
         <div className="mt-2 flex items-center gap-2 text-xs text-muted">About <span className="chip max-w-full truncate text-paper">{incident ? `${incident.reference} · ${incident.hostname}` : 'any server'}</span></div>
       </div>
       <div className="custom-scroll min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
-        {!enabled && <Notice tone="plain">Chat with the agent has been turned off by an admin. The diagnosis on the left doesn't need it.</Notice>}
+        {!enabled && <Notice tone="plain">{offReason} The diagnosis on the left doesn't need it.</Notice>}
         {enabled && messages === null && <p className="m-0 text-xs text-muted">Loading…</p>}
         {enabled && messages?.length === 0 && <div className="space-y-2">
           <p className="m-0 text-xs text-muted">{incident ? 'The agent is given this incident\'s facts with your question.' : 'Ask about any server.'} Suggestions:</p>
@@ -401,13 +401,17 @@ export default function AgentPage({ user, onLogout }) {
   useEffect(() => { if (selected) setTab(selected.status === 'resolved' ? 'resolved' : selected.muted_until ? 'muted' : 'open') }, [selected?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   const list = inbox ? inbox[tab] : []
   const crumbs = selected ? [{ label: 'Agent', to: '/agent' }, { label: selected.reference }] : [{ label: 'Agent' }]
+  // Why the chat can't be used right now, or null when it can.
+  const chatOff = !config ? null : !config.chat_enabled ? 'Chat with the agent has been turned off by an admin.'
+    : config.key_configured === false ? 'The agent has no API key yet. An admin sets OPENAI_API_KEY in .env.'
+      : config.budget_paused ? 'This month\'s budget for the agent is used up. An admin can raise it in Admin › Incident agent.' : null
 
   if (phone) {
     const view = params.get('view')
     const incident = detail && detail.id === selectedId ? detail : null
     const chatOpen = view === 'chat' && (!requested || incident)
     let body
-    if (chatOpen) body = <Chat key={selectedId ?? 'none'} phone user={user} incident={incident} enabled={config ? config.chat_enabled : true} back={incident ? { label: incident.title, to: `/agent?incident=${incident.id}` } : { label: 'Incidents', to: '/agent' }} />
+    if (chatOpen) body = <Chat key={selectedId ?? 'none'} phone user={user} incident={incident} enabled={!chatOff} offReason={chatOff} back={incident ? { label: incident.title, to: `/agent?incident=${incident.id}` } : { label: 'Incidents', to: '/agent' }} />
     else if (incident) body = <PhoneIncident incident={incident} canAct={Boolean(inbox?.can_act)} onChanged={() => { reload(); reloadDetail() }} onAsk={() => setParams({ incident: String(incident.id), view: 'chat' })} />
     else if (selectedId || (requested && !inbox)) body = <><PhoneHeader back={{ label: 'Incidents', to: '/agent' }} title="Incident" live={false} /><p className="m-0 px-4 py-16 text-center text-[13px] text-muted">{detailError || 'Loading the incident…'}</p></>
     else body = <PhoneInbox inbox={inbox} error={error} tab={tab} setTab={setTab} onSelect={(id) => setParams({ incident: String(id) })} />
@@ -435,7 +439,7 @@ export default function AgentPage({ user, onLogout }) {
             : selectedId ? <p className="m-0 px-7 py-16 text-center text-[13px] text-muted">{detailError || 'Loading the incident…'}</p>
               : <div className="px-7 py-16 text-center"><p className="m-0 text-sm font-medium text-paper">{inbox && !all.length ? 'No incidents yet.' : 'Nothing needs you right now.'}</p><p className="mb-0 mt-2 text-[13px] text-muted">{inbox && !all.length ? 'When a rule fires on one of your servers, the incident shows up here with what was found and how to fix it.' : 'Pick a resolved incident on the left to see how it went.'}</p></div>}
         </div>
-        <div className="min-h-0 border-t border-line xl:border-t-0"><Chat key={selectedId ?? 'none'} user={user} incident={detail && detail.id === selectedId ? detail : null} enabled={config ? config.chat_enabled : true} /></div>
+        <div className="min-h-0 border-t border-line xl:border-t-0"><Chat key={selectedId ?? 'none'} user={user} incident={detail && detail.id === selectedId ? detail : null} enabled={!chatOff} offReason={chatOff} /></div>
       </div>
     </AppShell>
   )

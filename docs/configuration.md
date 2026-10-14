@@ -11,8 +11,8 @@ Every setting below is listed, with no values, in [`example.env`](../example.env
 | `POSTGRES_PASSWORD` | *(required)* | PostgreSQL password. |
 | `POSTGRES_DB` / `POSTGRES_USER` | `infradeck` / `infradeck` | Name of the database and its user. Installs from before the rename can keep `homelab` (see [SETUP_DATABASES.md](../SETUP_DATABASES.md)). |
 | `REDIS_PASSWORD` | *(required)* | Redis password. Redis holds the login sessions, so nothing that can merely reach it may use it. Use letters and digits only (`openssl rand -hex 24`) because it is put into a URL. |
-| `GEMINI_API_KEY` | empty | Enables the Homie chat assistant. |
-| `AGENT_MODEL` | `models/gemini-3.5-flash` | Gemini model for the assistant. |
+| `OPENAI_API_KEY` | empty | OpenAI API key for the incident agent's chat. Empty: chat is off; the rule-based diagnosis works without it. **Admin → Incident agent → Test connection** checks it. |
+| `AGENT_MODEL` | `gpt-5-mini` | OpenAI model for the agent. It must support Structured Outputs. |
 | `ADMIN_ALERT_WEBHOOK_URL` | empty | Receives JSON alerts for critical `daily_checkup` findings. |
 | `SESSION_COOKIE_SECURE` | `false` (dev), `true` (server file) | Send the login cookie over HTTPS only. |
 | `SESSION_TTL_SECONDS` | `86400` | Session lifetime without *Remember me*. |

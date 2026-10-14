@@ -146,8 +146,8 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 |---|---|---|
 | [`test_account_security.py`](#test_account_securitypy) | 136 | Two-factor sign-in, recovery codes, encrypted secrets, sessions you can review and end, password change, and the password check before turning two-factor on. |
 | [`test_admin.py`](#test_adminpy) | 18 | Who may do what: admin-only actions, roles, retention cleanup, the chat on/off switch. |
-| [`test_agent_errors.py`](#test_agent_errorspy) | 2 | Helpful, non-leaking error messages from the AI assistant. |
-| [`test_agent_service.py`](#test_agent_servicepy) | 2 | The assistant can only run the fixed read-only checks. |
+| [`test_agent_errors.py`](#test_agent_errorspy) | 5 | Helpful, non-leaking error messages from the AI assistant. |
+| [`test_agent_service.py`](#test_agent_servicepy) | 9 | The assistant can only run the fixed read-only checks; the OpenAI provider and conversation history. |
 | [`test_alerts.py`](#test_alertspy) | 10 | The incident engine: one incident per problem, resolve, container rules. |
 | [`test_auth_backend.py`](#test_auth_backendpy) | 50 | Accounts, passwords, the first-account setup token, and the cross-site request check. |
 | [`test_collector_mounts.py`](#test_collector_mountspy) | 1 | Which filesystems the collector reports. |
@@ -299,6 +299,9 @@ shouldn't, or an admin might be locked out.
 |---|---|
 | `test_overloaded_provider_error_is_explained_to_the_user` | When the AI provider reports it is overloaded, the user gets a readable explanation. |
 | `test_provider_error_redacts_api_keys` | Error text from the provider never leaks an API key to the chat or logs; it is replaced with `[redacted]`. |
+| `test_openai_keys_are_redacted_too` | An OpenAI key (`sk-…`) in an error is redacted, and a rejected key is explained as such. |
+| `test_a_missing_key_says_where_to_set_it` | Without a key the chat says to set `OPENAI_API_KEY`. |
+| `test_an_unknown_model_points_at_agent_model` | A model the key can't use points the admin at `AGENT_MODEL`. |
 
 ### test_agent_service.py
 
@@ -306,6 +309,13 @@ shouldn't, or an admin might be locked out.
 |---|---|
 | `test_predefined_health_check_runs_and_is_audited` | When the assistant asks for one of the fixed checks (such as `server_health`), the check runs, the result is fed back to it, and both the request and the result are written to the audit log. |
 | `test_arbitrary_command_is_rejected_before_execution` | If the assistant ever asks for anything outside the allow-list (such as `rm -rf /`), it is refused before anything runs. |
+| `test_openai_provider_asks_for_the_reply_schema_and_reports_tokens` | Requests use Structured Outputs in strict mode, the schema only allows the fixed checks, and token usage is read from the response. |
+| `test_a_refusal_is_an_error_not_an_empty_reply` | When the model refuses, the chat gets an error instead of an empty answer. |
+| `test_the_provider_needs_a_key` | Without `OPENAI_API_KEY` the provider is not created. |
+| `test_test_connection_spends_no_tokens` | Admin's Test connection only looks the model up; it sends no prompt. |
+| `test_a_conversation_sends_the_system_prompt_and_its_history` | Each request carries the system prompt and the conversation so far, in order. |
+| `test_only_recent_turns_go_back_to_the_model` | Long conversations send only the most recent turns. |
+| `test_a_failed_turn_is_not_kept_in_the_conversation` | A message that failed (timeout, provider error) is not remembered as part of the conversation. |
 
 ### test_alerts.py
 

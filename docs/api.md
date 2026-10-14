@@ -27,8 +27,10 @@ All paths are relative to `/api` when going through the frontend/nginx.
 | `POST /monitoring/join-tokens` | admin | Create the single-use join token for **Connect a server** (shown once). |
 | `GET /monitoring/install-info` | admin | The collector address and images the panel uses. |
 | `GET` / `POST` / `DELETE /monitoring/enrollment-key` | admin | Show status / create or rotate / revoke the enrollment key. |
-| `GET` / `PUT /admin/settings` | admin | Metrics retention, chat on/off, require two-factor for admins, alert thresholds and per-mount disk thresholds. |
-| `GET /agent/config` | session | Whether chat with the assistant is enabled. |
+| `GET` / `PUT /admin/settings` | admin | Metrics retention, chat on/off, require two-factor for admins, alert thresholds and per-mount disk thresholds; the agent's model prices, monthly budget and daily chat limit. |
+| `GET /agent/config` | session | Whether chat with the agent can be used: switched on, a key configured, and the monthly budget not used up. |
+| `GET /admin/agent/usage` | admin | This month's model calls, tokens and estimated cost against the budget, per model and per day, with the prices and limits. |
+| `POST /admin/agent/test` | admin | Checks the OpenAI key and that the configured model exists, without spending tokens. |
 | `POST /monitoring/collectors/register` | join token (rate limited) | Collector asks to join; returns a poll secret and pairing code. |
 | `POST /monitoring/collectors/register/poll` | poll secret | Collector checks approval; returns its token once approved. |
 | `POST /monitoring/collectors/enroll` | enrollment key | Join without approval. |

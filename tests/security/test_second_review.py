@@ -297,14 +297,10 @@ def test_server_ids_in_the_address_must_fit_too(app, path):
 def test_the_assistants_memory_of_chats_is_bounded_and_forgets_the_least_recently_used(monkeypatch):
     from src.agent import service
 
-    class FakeChats:
-        def create(self, **kwargs):
-            return object()
-
     instance = object.__new__(service.AgentService) if hasattr(service, "AgentService") else None
     if instance is None:
         pytest.skip("the assistant service class has another name")
-    instance.client = type("C", (), {"chats": FakeChats()})()
+    instance.provider = object()
     instance.chats, instance.lock = {}, __import__("threading").Lock()
     monkeypatch.setattr(service, "MAX_CACHED_CHATS", 3)
     for number in range(5):

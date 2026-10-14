@@ -6,6 +6,7 @@ import { apiRequest } from '../api.js'
 import { AnotherMachineCard, ThisMachineCard } from '../dashboard/EmptyFleet.jsx'
 import { INTERVALS, intervalLabel } from '../dashboard/ServerPanel.jsx'
 import { serverState } from '../dashboard/logic.js'
+import { Sparkline } from '../dashboard/charts.jsx'
 import { Icon } from '../icons.jsx'
 import { refreshOverview, useOverview } from '../overviewStore.js'
 import { AppShell, serverLink } from '../shell.jsx'
@@ -274,19 +275,113 @@ function MountOverrides({ settings, onSaved }) {
 
 function Agent({ settings, system, onSaved }) {
   const [state, run] = useAction()
+  const [test, runTestAction] = useAction()
+  const [tested, setTested] = useState(null)
+  const runTest = (work) => { setTested(null); return runTestAction(async () => setTested(await work())) }
   const agent = system.agent
   return <>
     <div className="card divide-y divide-line">
-      <Row icon="AI" title="Model provider" detail={agent.key_configured ? `Google Gemini · ${agent.model.replace('models/', '')} · key configured` : 'No API key configured. Set GEMINI_API_KEY in .env to turn the chat on.'} tone={agent.key_configured ? undefined : 'warn'}><button type="button" className="btn btn-sm" disabled title="The provider and key are set in .env (AGENT_MODEL, GEMINI_API_KEY) and need a restart.">Change</button></Row>
+      <Row icon="AI" title="Model provider" detail={agent.key_configured ? `${agent.provider || 'OpenAI'} · ${agent.model} · key configured` : 'No API key configured. Set OPENAI_API_KEY in .env and restart the backend to turn the chat on.'} tone={agent.key_configured ? undefined : 'warn'}>
+        <button type="button" className="btn btn-sm" disabled={!agent.key_configured || test.busy} title={agent.key_configured ? 'Checks the key and the model without spending tokens.' : 'Set OPENAI_API_KEY first.'} onClick={() => runTest(() => apiRequest('/admin/agent/test', { method: 'POST' }))}>{test.busy ? 'Testing…' : 'Test connection'}</button>
+      </Row>
+      {(test.error || tested) && <div className="px-[18px] py-2.5">{test.error ? <p role="alert" className="m-0 text-xs text-warn">{test.error}</p> : <p role="status" className="m-0 text-xs text-ok">Connected. {tested.provider} accepts the key and offers {tested.model}.</p>}</div>}
       <Row title="Diagnose new incidents automatically" detail="Always on. The diagnosis is built from stored metrics and events by fixed rules, so it costs nothing and sends nothing to the provider."><Switch label="Diagnose automatically" checked disabled onChange={() => {}} /></Row>
       <Row title="Read container logs" detail="Not available: Infradeck's Docker proxy can't read logs. See SECURITY.md."><Switch label="Read container logs" checked={false} disabled onChange={() => {}} /></Row>
       <Row title="Chat" detail="Available to every signed-in user while it is on. Questions and the incident's facts are sent to the provider."><Switch label="Chat with the agent" checked={settings.agent_chat_enabled} disabled={state.busy} onChange={(on) => run(async () => onSaved(await put({ agent_chat_enabled: on })))} /></Row>
       <Row title="Redact IPs and hostnames before sending" detail="Not available yet. Until then, turn Chat off if names must not leave this machine."><Switch label="Redact before sending" checked={false} disabled onChange={() => {}} /></Row>
     </div>
-    <div className="card grid divide-y divide-line sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-      {[[agent.incidents_this_month, 'incidents diagnosed this month'], [agent.chat_messages_this_month, 'chat messages this month'], ['—', 'provider cost · not tracked']].map(([value, label]) => <div key={label} className="px-[18px] py-4"><div className="text-2xl font-semibold leading-none text-paper">{value}</div><div className="mt-2 text-xs text-muted">{label}</div></div>)}
-    </div>
     <Outcome state={state} />
+    <AgentSpending settings={settings} onSaved={onSaved} />
+  </>
+}
+
+// "$0.0031" for small amounts, "$1.84" from a cent up.
+const dollars = (value) => (value == null ? '—' : `$${value > 0 && value < 0.01 ? value.toFixed(4) : value.toFixed(2)}`)
+const thousands = (value) => (value >= 1e6 ? `${(value / 1e6).toFixed(1)} M` : value >= 1e4 ? `${Math.round(value / 1e3)} k` : value.toLocaleString())
+
+// What the model calls cost this month, against the budget, and the settings that limit it.
+function AgentSpending({ settings, onSaved }) {
+  const { data, error, reload } = useLoaded('/admin/agent/usage')
+  const [state, run] = useAction()
+  const [cap, setCap] = useState(settings.agent_monthly_cap_usd ?? '')
+  const [limit, setLimit] = useState(String(settings.agent_daily_chat_limit ?? 100))
+  const [prices, setPrices] = useState(() => Object.entries(settings.agent_prices || {}).map(([model, price]) => ({ model, input: String(price.input), output: String(price.output) })))
+  if (!data) return <Notice tone="plain">{error || 'Loading the agent\'s usage…'}</Notice>
+  const save = (body, done) => run(async () => { onSaved(await put(body)); reload() }, done)
+  const savePrices = (event) => {
+    event.preventDefault()
+    save({ agent_prices: Object.fromEntries(prices.filter((row) => row.model.trim()).map((row) => [row.model.trim(), { input: Number(row.input), output: Number(row.output) }])) }, 'Prices saved.')
+  }
+  const setRow = (index, key, value) => setPrices((rows) => rows.map((row, position) => (position === index ? { ...row, [key]: value } : row)))
+  const share = data.share == null ? null : Math.min(1, data.share)
+  const daily = data.daily.map((day) => day.cost)
+  const configuredPriced = prices.some((row) => row.model.trim() && (data.model === row.model.trim() || data.model.startsWith(`${row.model.trim()}-`)))
+  return <>
+    {data.state === 'paused' && <Notice>The agent is paused: this month's budget is used up ({dollars(data.cost)} of {dollars(data.cap)}). Chat stays off until next month or until you raise the budget. Incidents and notifications keep working.</Notice>}
+    {data.state === 'warn' && <Notice>The agent has used {Math.round(data.share * 100)}% of this month's budget ({dollars(data.cost)} of {dollars(data.cap)}). At 100% it pauses until next month.</Notice>}
+    <div className="card grid divide-y divide-line sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+      <div className="px-[18px] py-4">
+        <div className="text-2xl font-semibold leading-none text-paper">{dollars(data.cost)}{data.cap && <span className="ml-1.5 text-sm font-normal text-muted">of {dollars(data.cap)}</span>}</div>
+        <div className="mt-2 text-xs text-muted">estimated cost this month{data.unpriced_runs ? ` · ${data.unpriced_runs} ${data.unpriced_runs === 1 ? 'call' : 'calls'} without a price` : ''}</div>
+        {share != null && <span className={`meter mt-3 ${data.state === 'paused' ? 'meter-signal' : data.state === 'warn' ? 'meter-warn' : ''}`} role="meter" aria-label="Share of the monthly budget" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(share * 100)}><i style={{ width: `${share * 100}%`, minWidth: share > 0 ? 3 : 0 }} /></span>}
+      </div>
+      <div className="px-[18px] py-4">
+        <div className="text-2xl font-semibold leading-none text-paper">{data.calls}</div>
+        <div className="mt-2 text-xs text-muted">calls to the model this month{data.errors ? ` · ${data.errors} failed` : ''}{data.diagnoses ? ` · ${data.diagnoses} diagnoses` : ''}</div>
+        {daily.some((value) => value > 0) && <Sparkline className="mt-3" values={daily} width={140} height={18} max={Math.max(...daily)} />}
+      </div>
+      <div className="px-[18px] py-4">
+        <div className="text-2xl font-semibold leading-none text-paper">{thousands(data.input_tokens + data.output_tokens)}</div>
+        <div className="mt-2 text-xs text-muted">tokens · {thousands(data.input_tokens)} in, {thousands(data.output_tokens)} out</div>
+      </div>
+    </div>
+
+    {data.by_model.length > 0 && <div className="card overflow-hidden"><div className="custom-scroll overflow-x-auto"><table className="w-full min-w-[460px] border-collapse text-left text-[13px]">
+      <thead><tr className="grid-head h-10"><th className="pl-[18px] font-medium">Model</th><th className="text-right font-medium">Calls</th><th className="text-right font-medium">Tokens in / out</th><th className="pr-[18px] text-right font-medium">Cost</th></tr></thead>
+      <tbody>{data.by_model.map((row) => (
+        <tr key={row.model} className="h-10 border-t border-line">
+          <td className="mono pl-[18px] text-paper">{row.model}</td>
+          <td className="text-right text-soft">{row.calls}</td>
+          <td className="text-right text-soft">{thousands(row.input_tokens)} / {thousands(row.output_tokens)}</td>
+          <td className={`pr-[18px] text-right ${row.priced ? 'text-paper' : 'text-warn'}`}>{row.priced ? dollars(row.cost) : 'no price'}</td>
+        </tr>
+      ))}</tbody>
+    </table></div></div>}
+
+    <div className="card divide-y divide-line">
+      <Row title="Monthly budget" detail="At 80% admins get a notification; at 100% the chat pauses until the 1st of next month. Empty: no budget.">
+        <form className="flex items-center gap-2" onSubmit={(event) => { event.preventDefault(); save({ agent_monthly_cap_usd: cap === '' ? 0 : Number(cap) }, 'Budget saved.') }}>
+          <span className="text-[13px] text-muted">$</span>
+          <input type="number" min="0" step="0.01" inputMode="decimal" className="field h-9 w-24" aria-label="Monthly budget in US dollars" value={cap} placeholder="none" onChange={(event) => setCap(event.target.value)} />
+          <button type="submit" className="btn btn-sm h-9" disabled={state.busy || String(cap) === String(settings.agent_monthly_cap_usd ?? '')}>Save</button>
+        </form>
+      </Row>
+      <Row title="Chat messages per person" detail="In any 24 hours, on top of 30 an hour. Admins included.">
+        <form className="flex items-center gap-2" onSubmit={(event) => { event.preventDefault(); save({ agent_daily_chat_limit: Number(limit) }, 'Limit saved.') }}>
+          <input type="number" min="1" step="1" inputMode="numeric" className="field h-9 w-24" aria-label="Chat messages per person per day" value={limit} onChange={(event) => setLimit(event.target.value)} />
+          <button type="submit" className="btn btn-sm h-9" disabled={state.busy || limit === String(settings.agent_daily_chat_limit)}>Save</button>
+        </form>
+      </Row>
+      <form onSubmit={savePrices} className="px-[18px] py-3.5">
+        <div className="text-[13px] font-medium text-paper">Prices per million tokens</div>
+        <p className="mb-0 mt-0.5 text-xs leading-5 text-muted">Copy them from your provider's pricing page; they aren't fetched automatically. A price for <span className="mono">gpt-5-mini</span> also covers dated names such as <span className="mono">gpt-5-mini-2026-01-01</span>.{!configuredPriced && <span className="text-warn"> The model in use, <span className="mono">{data.model}</span>, has no price, so its calls aren't counted in the budget.</span>}</p>
+        <div className="mt-3 space-y-2">
+          {prices.map((row, index) => (
+            <div key={index} className="flex flex-wrap items-end gap-2">
+              <Field label="Model" className="min-w-0 flex-1 basis-40"><input className="field mono h-9" required maxLength={100} value={row.model} onChange={(event) => setRow(index, 'model', event.target.value)} /></Field>
+              <Field label="Input $"><input type="number" min="0" step="any" required inputMode="decimal" className="field h-9 w-24" value={row.input} onChange={(event) => setRow(index, 'input', event.target.value)} /></Field>
+              <Field label="Output $"><input type="number" min="0" step="any" required inputMode="decimal" className="field h-9 w-24" value={row.output} onChange={(event) => setRow(index, 'output', event.target.value)} /></Field>
+              <button type="button" className="btn btn-ghost h-9" aria-label={`Remove the price of ${row.model || 'this model'}`} onClick={() => setPrices((rows) => rows.filter((_, position) => position !== index))}><Icon name="close" size={13} /></button>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2.5">
+          <button type="button" className="btn btn-sm" onClick={() => setPrices((rows) => [...rows, { model: rows.some((item) => item.model === data.model) ? '' : data.model, input: '', output: '' }])}><Icon name="plus" size={13} />Add a model</button>
+          <button type="submit" className="btn btn-sm btn-primary" disabled={state.busy}>Save prices</button>
+          <Outcome state={state} />
+        </div>
+      </form>
+    </div>
   </>
 }
 
@@ -365,7 +460,7 @@ function PhoneHub({ overview, settings, system }) {
       <div className="divide-y divide-line overflow-hidden rounded-md border border-line bg-ink">
         {row('/admin?section=users', 'Users', null, users ? `${users.users.length}${invited ? ` · ${invited} invited` : ''}` : null)}
         {row('/admin?section=rules', 'Alert rules', null, rules ? `${on} on · ${rules.rules.length - on} off` : null)}
-        {row('/admin?section=agent', 'Incident agent', null, system.agent.key_configured ? (settings.agent_chat_enabled ? 'chat on' : 'chat off') : 'no key', undefined, system.agent.key_configured ? undefined : 'warn')}
+        {row('/admin?section=agent', 'Incident agent', null, !system.agent.key_configured ? 'no key' : system.agent.budget.cap ? `${dollars(system.agent.budget.cost)} of ${dollars(system.agent.budget.cap)}` : `${dollars(system.agent.budget.cost)} this month`, undefined, !system.agent.key_configured || system.agent.budget.state !== 'ok' ? 'warn' : undefined)}
         {row('/admin?section=retention', 'Data and retention', null, megabytes(system.database.bytes))}
         {row('/admin?section=about', 'About', null, system.version)}
       </div>

@@ -2,7 +2,7 @@ bcrypt
 cryptography
 email-validator
 fastapi
-google-genai
+openai
 psycopg[binary]
 python-dotenv
 redis

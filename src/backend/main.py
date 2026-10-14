@@ -27,7 +27,7 @@ from sqlalchemy import case, func, inspect, text
 from .alerts import CONTAINER_RULE_PREFIX, CRITICAL, SERVER_OFFLINE_RULE, SEVERITIES, active_rule_keys, raise_alert, resolve_alerts, sync_alerts
 import contextvars
 
-from . import auth, dashboard, history as history_service, incidents, notify, rollups, secrets_box, stats, totp
+from . import agent_usage, auth, dashboard, history as history_service, incidents, notify, rollups, secrets_box, stats, totp
 from .auth import (
     STAGE_ENROLLMENT, STAGE_FULL, count_pending_attempt, create_pending_two_factor, create_session, delete_pending_two_factor, delete_session, get_recent_logs,
     get_session, get_user_from_session, hash_password, issue_recovery_codes, list_user_sessions, pending_two_factor_remember, read_pending_two_factor, session_lifetime, recovery_codes_left, record_audit_log,
@@ -64,7 +64,8 @@ from .config import (
 )
 from .rules import HELPER_EVENT_KINDS, DEFAULT_THRESHOLDS, HOST_RULE_PREFIX, container_rules, host_rules, validate_thresholds, detect_system_events, system_rules, SYSTEM_RULE_PREFIX, validate_mount_thresholds, validate_helper_events, REBOOT_DETAILS, REBOOT_KEY_PREFIX, detect_container_events, memory_trend_rules, CONTAINER_EVENT_KINDS, MAX_CONTAINER_EVENTS_PER_CHECKIN, MAX_CONTAINER_EVENTS_PER_HOUR, TREND_RULE_PREFIX, NETWORK_EVENT_KINDS, NETWORK_RULE_PREFIX, MAX_NETWORK_EVENTS_PER_CHECKIN, MAX_NETWORK_EVENTS_PER_HOUR, INTERNET_STATUSES, LISTENER_SCOPES, LISTENER_PROTOCOLS, MAX_LISTENERS, FIREWALL_LABELS, detect_listener_changes, detect_firewall_changes, network_rules, validate_listeners, validate_firewall
 from .rate_limit import enforce_ip_limit, enforce_limit, enforce_login_limit, enforce_register_limit, refund_attempt, reset_limits
-from ..agent.service import delete_agent_conversation, send_agent_message
+from ..agent.providers import configured_key
+from ..agent.service import check_provider_connection, delete_agent_conversation, send_agent_message
 
 
 class RegisterRequest(BaseModel):
@@ -187,6 +188,11 @@ class AdminSettingsRequest(BaseModel):
     disabled_rules: list[str] | None = Field(default=None, max_length=100)
     # What this install calls itself on the sign-in page and in the sidebar; an empty string goes back to the default.
     instance_name: str | None = Field(default=None, max_length=200)
+    # The agent's spending: USD per million tokens per model (replacing the whole table), a monthly budget in USD
+    # (0 removes it) and how many chat messages one person may send in 24 hours.
+    agent_prices: dict | None = None
+    agent_monthly_cap_usd: float | None = None
+    agent_daily_chat_limit: int | None = None
 
 
 class MetricsIngestRequest(BaseModel):
@@ -200,21 +206,27 @@ def agent_error_message(exc: Exception) -> str:
     """Turn provider failures into useful, non-sensitive chat text."""
     raw_message = str(exc).strip()
     normalized = raw_message.lower()
-    if any(marker in normalized for marker in ("resourceexhausted", "overloaded", "capacity", " 503", "status 503")):
-        prefix = "Gemini is currently overloaded or unavailable. Please try again shortly."
-    elif any(marker in normalized for marker in ("rate limit", "quota", " 429", "status 429")):
-        prefix = "Gemini rate limit or quota was reached. Please try again later."
+    if "openai_api_key is not configured" in normalized:
+        return "The agent has no API key. An admin sets OPENAI_API_KEY in .env and restarts the backend."
+    if any(marker in normalized for marker in ("401", "invalid_api_key", "incorrect api key", "authentication")):
+        prefix = "OpenAI rejected the API key. Check OPENAI_API_KEY in .env."
+    elif any(marker in normalized for marker in ("model_not_found", "does not exist", "404")):
+        prefix = "OpenAI doesn't offer the configured model to this key. Check AGENT_MODEL in .env."
+    elif any(marker in normalized for marker in ("resourceexhausted", "overloaded", "capacity", " 503", "status 503", " 500", " 502")):
+        prefix = "OpenAI is currently overloaded or unavailable. Please try again shortly."
+    elif any(marker in normalized for marker in ("rate limit", "quota", " 429", "status 429", "insufficient_quota")):
+        prefix = "OpenAI rate limit or quota was reached. Please try again later."
     elif any(marker in normalized for marker in ("timeout", "timed out", "deadline exceeded")):
-        prefix = "Gemini did not respond before the request timed out. Please try again."
+        prefix = "OpenAI did not respond before the request timed out. Please try again."
     else:
-        prefix = "Gemini could not complete this request."
+        prefix = "OpenAI could not complete this request."
 
     if not raw_message:
         return prefix
     # Errors can include request headers or provider diagnostics: keep a short,
     # redacted detail for the administrator without leaking credentials.
     detail = re.sub(r"(?i)(api[_ -]?key|authorization|token)\s*[:=]\s*\S+", r"\1=[redacted]", raw_message)
-    detail = re.sub(r"AIza[\w-]+", "[redacted]", detail)[:300]
+    detail = re.sub(r"(AIza|sk-)[\w-]+", "[redacted]", detail)[:300]
     return f"{prefix} Provider error: {detail}"
 
 
@@ -987,7 +999,8 @@ def get_mount_thresholds(db) -> dict:
 
 def _admin_settings(db) -> dict:
     return {"instance_name": get_instance_name(db), "metrics_retention_days": get_metrics_retention_days(db), "agent_chat_enabled": is_agent_chat_enabled(db), "alert_thresholds": get_alert_thresholds(db), "mount_thresholds": get_mount_thresholds(db), "require_2fa_for_admins": require_admin_two_factor(db), "secrets_configured": secrets_box.available(),
-            "require_2fa_for_everyone": require_two_factor_for_everyone(db), "disabled_rules": sorted(get_disabled_rules(db))}
+            "require_2fa_for_everyone": require_two_factor_for_everyone(db), "disabled_rules": sorted(get_disabled_rules(db)),
+            "agent_prices": agent_usage.get_prices(db), "agent_monthly_cap_usd": agent_usage.get_cap(db), "agent_daily_chat_limit": agent_usage.get_daily_limit(db)}
 
 
 def purge_old_metrics(db, now: datetime | None = None) -> int:
@@ -1040,6 +1053,24 @@ def update_admin_settings(payload: AdminSettingsRequest, session_id: Annotated[s
         if set(wanted) != get_disabled_rules(db):
             _set_setting(db, DISABLED_RULES_KEY, json.dumps(wanted))
             changes.append("Switched off alert rules: " + (", ".join(wanted) or "none"))
+    try:
+        if payload.agent_prices is not None:
+            prices = agent_usage.validate_prices(payload.agent_prices)
+            if prices != agent_usage.get_prices(db):
+                _set_setting(db, agent_usage.PRICES_KEY, json.dumps(prices))
+                changes.append("Changed the agent's model prices: " + (", ".join(f"{model} {price['input']:g}/{price['output']:g}" for model, price in prices.items()) or "none"))
+        if payload.agent_monthly_cap_usd is not None:
+            cap = agent_usage.validate_cap(payload.agent_monthly_cap_usd)
+            if cap != agent_usage.get_cap(db):
+                _set_setting(db, agent_usage.CAP_KEY, str(cap or 0))
+                changes.append(f"Set the agent's monthly budget to ${cap:g}" if cap else "Removed the agent's monthly budget")
+        if payload.agent_daily_chat_limit is not None:
+            limit = agent_usage.validate_daily_limit(payload.agent_daily_chat_limit)
+            if limit != agent_usage.get_daily_limit(db):
+                _set_setting(db, agent_usage.DAILY_LIMIT_KEY, str(limit))
+                changes.append(f"Set the agent chat limit to {limit} messages per person per day")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if payload.agent_chat_enabled is not None:
         _set_setting(db, AGENT_CHAT_ENABLED_KEY, "true" if payload.agent_chat_enabled else "false")
         changes.append(f"{'Enabled' if payload.agent_chat_enabled else 'Disabled'} chat with the agent")
@@ -1071,7 +1102,8 @@ def update_admin_settings(payload: AdminSettingsRequest, session_id: Annotated[s
 def agent_config(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     """What the Agent page needs to know about the agent; readable by every signed-in user."""
     _current_user(session_id, db)
-    return {"chat_enabled": is_agent_chat_enabled(db)}
+    spend = agent_usage.budget(db)
+    return {"chat_enabled": is_agent_chat_enabled(db), "key_configured": bool(configured_key()), "budget_paused": spend["state"] == "paused"}
 
 
 OVERVIEW_ALERT_LIMIT = 50
@@ -2490,7 +2522,7 @@ def delete_conversation(conversation_id: str, session_id: Annotated[str | None, 
 
 
 LOG_WRITE_LIMIT = 120
-CHAT_MESSAGE_LIMIT = 30          # messages to the assistant per user per hour (each can cost the admin's Gemini quota)
+CHAT_MESSAGE_LIMIT = 30          # messages to the assistant per user per hour (each can cost the admin's OpenAI quota)
 CONVERSATION_CREATE_LIMIT = 30   # new conversations per user per hour
 MAX_CONVERSATIONS_PER_USER = 100
 
@@ -2527,6 +2559,10 @@ def agent_chat(payload: AgentChatRequest, session_id: Annotated[str | None, Cook
     if not is_agent_chat_enabled(db):
         raise HTTPException(status_code=403, detail="Chat with the agent has been turned off by an admin.")
     enforce_limit(redis_client, scope="chat-user", subject=user["id"], limit=CHAT_MESSAGE_LIMIT, window_seconds=3600)
+    spend = agent_usage.budget(db)
+    if spend["state"] == "paused":
+        raise HTTPException(status_code=429, detail=f"The agent's budget for this month is used up (${spend['cost']:.2f} of ${spend['cap']:.2f}). An admin can raise it in Admin › Incident agent.")
+    enforce_limit(redis_client, scope="chat-user-day", subject=user["id"], limit=agent_usage.get_daily_limit(db), window_seconds=86400)
 
     message = payload.message.strip()
     if not message:
@@ -2539,11 +2575,16 @@ def agent_chat(payload: AgentChatRequest, session_id: Annotated[str | None, Cook
         conversation.title = message[:255]
     db.commit()
 
+    def log_usage(completion, duration_ms: int) -> None:
+        agent_usage.record(db, kind="chat", model=completion.model, input_tokens=completion.input_tokens, output_tokens=completion.output_tokens, duration_ms=duration_ms,
+                           user_id=user["id"], conversation_id=payload.conversation_id, incident_id=payload.incident_id)
+
     try:
         response_text = send_agent_message(
             user["id"],
             payload.conversation_id,
             _incident_context(db, payload.incident_id) + message,
+            usage_logger=log_usage,
             command_logger=lambda event: record_audit_log(
                 db,
                 user_id=user["id"],
@@ -2558,6 +2599,7 @@ def agent_chat(payload: AgentChatRequest, session_id: Annotated[str | None, Cook
         )
     except Exception as exc:
         user_message = agent_error_message(exc)
+        agent_usage.record(db, kind="chat", status="error", model=AGENT_MODEL, user_id=user["id"], conversation_id=payload.conversation_id, incident_id=payload.incident_id, error=user_message)
         record_audit_log(
             db,
             user_id=user["id"],
@@ -2574,6 +2616,7 @@ def agent_chat(payload: AgentChatRequest, session_id: Annotated[str | None, Cook
         raise HTTPException(status_code=503, detail={"message": user_message}) from exc
 
     steps = ["Received the task and evaluated the request.", "Generated a structured response for the requested task."]
+    _warn_about_budget(db, spend)
 
     record_audit_log(
         db,
@@ -2962,6 +3005,26 @@ def dispatch_notifications(db, now: datetime | None = None) -> int:
     return sent
 
 
+def _warn_about_budget(db, before: dict) -> None:
+    """Tell the admins once a month when the agent passes 80 % of its budget, and again when it pauses at 100 %."""
+    after = agent_usage.budget(db)
+    rank = {"ok": 0, "warn": 1, "paused": 2}
+    if rank[after["state"]] <= rank[before["state"]] or not after["cap"]:
+        return
+    try:
+        if not redis_client.set(f"infradeck:agent-budget:{datetime.now(timezone.utc):%Y-%m}:{after['state']}", "1", nx=True, ex=40 * 86400):
+            return
+    except Exception:
+        return
+    paused = after["state"] == "paused"
+    title = "The incident agent paused: its monthly budget is used up" if paused else f"The incident agent has used {round(after['share'] * 100)}% of its monthly budget"
+    body = f"${after['cost']:.2f} of ${after['cap']:.2f} this month. {'Chat stays off until next month or until an admin raises the budget' if paused else 'At 100% the agent pauses until next month'}. Incidents and notifications keep working. Admin › Incident agent."
+    record_audit_log(db, user_id=None, level="WARN", message=title[:255], source="agent", event_type="agent_budget")
+    admins = {user.id: user for user in db.query(User).filter(User.role == "admin", User.is_active.is_(True))}
+    for channel in db.query(NotificationChannel).filter(NotificationChannel.user_id.in_(list(admins))).order_by(NotificationChannel.id):
+        _deliver(db, channel, admins[channel.user_id], title, body, "WARNING")
+
+
 def _notify_loop() -> None:
     while True:
         time.sleep(15)
@@ -3158,11 +3221,30 @@ def admin_system(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_N
         "version": APP_VERSION, "database": {"engine": engine.dialect.name, "bytes": size,
                                              "host_rows": db.query(func.count(HostMetric.id)).scalar(), "host_rows_week": db.query(func.count(HostMetric.id)).filter(HostMetric.time >= week).scalar()},
         "retention_days": get_metrics_retention_days(db),
-        "agent": {"model": AGENT_MODEL, "key_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()), "chat_enabled": is_agent_chat_enabled(db),
+        "agent": {"provider": "OpenAI", "model": AGENT_MODEL, "key_configured": bool(configured_key()), "budget": agent_usage.budget(db), "chat_enabled": is_agent_chat_enabled(db),
                   "incidents_this_month": db.query(IncidentAlert).filter(IncidentAlert.created_at >= month).count(),
                   "chat_messages_this_month": db.query(ChatMessage).filter(ChatMessage.role == "user", ChatMessage.created_at >= month).count()},
         "smtp_configured": notify.smtp_configured(), "secrets_configured": secrets_box.available(),
     }
+
+
+@app.get("/admin/agent/usage")
+def admin_agent_usage(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    """This month's model calls, tokens and estimated cost against the budget, per model and per day."""
+    _require_admin(session_id, db)
+    return {**agent_usage.month_summary(db), "model": AGENT_MODEL}
+
+
+@app.post("/admin/agent/test")
+def admin_agent_test(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    """Admin's "Test connection": the API key works and the configured model exists. Spends no tokens."""
+    admin = _require_admin(session_id, db)
+    enforce_limit(redis_client, scope="agent-test", subject=admin["id"], limit=10, window_seconds=600)
+    try:
+        result = check_provider_connection()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=agent_error_message(exc)) from exc
+    return {"ok": True, **result}
 
 
 @app.get("/")

@@ -52,8 +52,8 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-infradeck}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-infradeck}
       REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env (generate one with openssl rand -hex 24)}@redis:6379/0
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      AGENT_MODEL: ${AGENT_MODEL:-models/gemini-3.5-flash}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      AGENT_MODEL: ${AGENT_MODEL:-gpt-5-mini}
       # Served over HTTPS via Traefik, so the login cookie is HTTPS-only.
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
       # Only the first account can register; set to true to let others sign up.

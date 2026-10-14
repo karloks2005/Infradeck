@@ -19,7 +19,8 @@ DATABASE_URL = os.getenv(
 )
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_SECONDS", "86400"))
-AGENT_MODEL = os.getenv("AGENT_MODEL", "models/gemini-3.5-flash")
+# The OpenAI model the agent uses (see src/agent/providers.py).
+AGENT_MODEL = os.getenv("AGENT_MODEL", "").strip() or "gpt-5-mini"
 SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "homie_session")
 SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true"
 # When false (the default), only the first account can be created, so a fresh install can still be set up and

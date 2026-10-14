@@ -15,6 +15,12 @@ recovery codes (the encrypted two-factor secret lives on the `users` row), and p
 thresholds live in `app_settings`. `docker/postgres/init/01_create_users.sql` initialises
 the `users` table on a fresh volume.
 
+**The agent's spending.** `agent_runs` has one row per call to the language model: what it was for (`chat`, later
+`diagnosis`), whether it worked, the model, input and output tokens, the estimated cost in USD, how long it took, and
+who asked about which incident. The month's cost and the budget check add these rows up; a call made before its model
+had a price is priced with the current table when it is counted. The prices, the monthly budget and the daily chat
+limit are rows in `app_settings` (`agent_prices`, `agent_monthly_cap_usd`, `agent_daily_chat_limit`).
+
 **Summarised history.** A background job (it checks every minute and does nothing when it is up to date) turns the check-in
 samples into `host_rollups`, `mount_rollups` and `container_rollups`: one row per server, mount or container
 per hour, day, week (Monday to Sunday) and month, all in UTC, with the average and maximum of each metric.

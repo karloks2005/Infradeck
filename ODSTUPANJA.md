@@ -127,7 +127,7 @@ su anotacije dizajna i namjerno nisu ugrađeni.
 | Alert rules: stupac Servers s izborom servera | Uvijek „All" | Pravila vrijede za sve servere | – |
 | Alert rules: „New rule" | Gumb je onemogućen | Vlastita pravila ne postoje | – |
 | Alert rules: bilješka zašto je pravilo isključeno | Samo broj isključenih pravila | Razlog se ne upisuje | – |
-| Incident agent: „Anthropic API · key ending 4f2a", „Change" | Google Gemini, model iz `.env`; „Change" je onemogućen | Pružatelj i ključ se postavljaju u `.env` | #91 |
+| Incident agent: „Anthropic API · key ending 4f2a", „Change" | OpenAI, ključ i model iz `.env`; „Change" je onemogućen, „Test connection" provjerava ključ | Ključ se zasad postavlja u `.env`; spremanje u Adminu je dio #109 | #109 |
 | „Diagnose new incidents automatically" prekidač | Uvijek uključeno i onemogućeno | Dijagnoza je lokalna i ne može se isključiti | #93 |
 | „Read container logs" s iznimkama | Onemogućeno | Proxy ne čita logove | #100 |
 | „Redact IPs and hostnames" | Onemogućeno | Nije napravljeno | – |

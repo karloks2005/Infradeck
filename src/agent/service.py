@@ -1,69 +1,99 @@
 from __future__ import annotations
 
 import json
-import os
 import threading
+import time
 from collections.abc import Callable
-
-from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 
 from .health_checks import HealthCheckRunner
 from .prompts import SYSTEM_PROMPT
+from .providers import Completion, Provider, get_provider
 
 MAX_CACHED_CHATS = 200
+# Only the most recent turns go back to the model, so a long conversation can't grow every request without limit.
+MAX_HISTORY_MESSAGES = 40
 
-load_dotenv()
+# Every reply is a message and at most one predefined check; Structured Outputs makes the model keep to it.
+REPLY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "message": {"type": "string"},
+        "action": {
+            "anyOf": [
+                {"type": "object", "properties": {"check": {"type": "string", "enum": sorted(HealthCheckRunner.ALLOWED_CHECKS)}}, "required": ["check"], "additionalProperties": False},
+                {"type": "null"},
+            ],
+        },
+    },
+    "required": ["message", "action"],
+    "additionalProperties": False,
+}
+
+
+class Reply:
+    def __init__(self, text: str, completion: Completion | None = None):
+        self.text = text
+        self.completion = completion
+
+
+class Chat:
+    """One conversation's turns, sent in full (up to MAX_HISTORY_MESSAGES) with every new message."""
+
+    def __init__(self, provider: Provider):
+        self.provider = provider
+        self.history: list[dict] = []
+
+    def send_message(self, message: str) -> Reply:
+        self.history.append({"role": "user", "content": message})
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}, *self.history[-MAX_HISTORY_MESSAGES:]]
+        try:
+            completion = self.provider.complete(messages, REPLY_SCHEMA, "agent_reply")
+        except Exception:
+            self.history.pop()   # a failed turn is not part of the conversation
+            raise
+        self.history.append({"role": "assistant", "content": completion.text})
+        return Reply(completion.text, completion)
 
 
 class AgentService:
     """LLM interface restricted to a small, fixed health-check capability set."""
 
-    def __init__(self, health_checks: HealthCheckRunner | None = None):
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            raise RuntimeError("GEMINI_API_KEY is not configured.")
-        self.client = genai.Client(api_key=api_key)
+    def __init__(self, health_checks: HealthCheckRunner | None = None, provider: Provider | None = None):
+        self.provider = provider or get_provider()
         self.health_checks = health_checks or HealthCheckRunner()
         # Least recently used first (a dict keeps insertion order). A chat only lives in memory so the assistant
         # remembers the conversation; the cache is bounded so endless new conversations can't grow it without limit.
         self.chats = {}
         self.lock = threading.Lock()
 
+    def _new_chat(self) -> Chat:
+        return Chat(self.provider)
+
     def _get_chat(self, user_id: int, conversation_id: str):
         chat_key = (user_id, conversation_id)
         with self.lock:
             if chat_key not in self.chats:
-                self.chats[chat_key] = self.client.chats.create(
-                    model=os.getenv("AGENT_MODEL", "models/gemini-3.5-flash"),
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        temperature=0.2,
-                        response_mime_type="application/json",
-                        response_schema={
-                            "type": "OBJECT",
-                            "properties": {
-                                "message": {"type": "STRING"},
-                                "action": {
-                                    "type": "OBJECT", "nullable": True,
-                                    "properties": {"check": {"type": "STRING"}},
-                                    "required": ["check"],
-                                },
-                            },
-                            "required": ["message", "action"],
-                        },
-                    ),
-                )
+                self.chats[chat_key] = self._new_chat()
             chat = self.chats.pop(chat_key)
             self.chats[chat_key] = chat   # now the most recently used
             while len(self.chats) > MAX_CACHED_CHATS:
                 del self.chats[next(iter(self.chats))]
             return chat
 
-    def send(self, user_id: int, conversation_id: str, message: str, command_logger: Callable[[dict], None] | None = None) -> str:
+    @staticmethod
+    def _ask(chat, message: str, usage_logger: Callable[[Completion, int], None] | None):
+        """One call to the model; ``usage_logger`` gets its tokens and how long it took, in milliseconds."""
+        started = time.monotonic()
+        reply = chat.send_message(message)
+        completion = getattr(reply, "completion", None)
+        if usage_logger and completion is not None:
+            usage_logger(completion, round((time.monotonic() - started) * 1000))
+        return reply
+
+    def send(self, user_id: int, conversation_id: str, message: str, command_logger: Callable[[dict], None] | None = None,
+             usage_logger: Callable[[Completion, int], None] | None = None) -> str:
         chat = self._get_chat(user_id, conversation_id)
-        response_text, action = self._parse_agent_response(self._response_text(chat.send_message(message)))
+        response_text, action = self._parse_agent_response(self._response_text(self._ask(chat, message, usage_logger)))
         if not action:
             return response_text
 
@@ -80,13 +110,13 @@ class AgentService:
             "check": check_name, "level": level,
             "steps": [f"Completed predefined check '{check_name}' with status {result['status']}."],
         })
-        final_text, final_action = self._parse_agent_response(self._response_text(chat.send_message("[HEALTH-CHECK-RESULT]\n" + json.dumps(result))))
+        final_text, final_action = self._parse_agent_response(self._response_text(self._ask(chat, "[HEALTH-CHECK-RESULT]\n" + json.dumps(result), usage_logger)))
         if final_action:
             raise ValueError("Agent must summarize a health-check result without requesting another check.")
         return final_text
 
     def delete_conversation(self, user_id: int, conversation_id: str) -> None:
-        """Discard the provider's in-memory context after its persisted chat is deleted."""
+        """Discard the in-memory context after its persisted chat is deleted."""
         with self.lock:
             self.chats.pop((user_id, conversation_id), None)
 
@@ -118,13 +148,18 @@ class AgentService:
 _agent_service = None
 
 
-def send_agent_message(user_id: int, conversation_id: str, message: str, command_logger=None) -> str:
+def send_agent_message(user_id: int, conversation_id: str, message: str, command_logger=None, usage_logger=None) -> str:
     global _agent_service
     if _agent_service is None:
         _agent_service = AgentService()
-    return _agent_service.send(user_id, conversation_id, message, command_logger=command_logger)
+    return _agent_service.send(user_id, conversation_id, message, command_logger=command_logger, usage_logger=usage_logger)
 
 
 def delete_agent_conversation(user_id: int, conversation_id: str) -> None:
     if _agent_service is not None:
         _agent_service.delete_conversation(user_id, conversation_id)
+
+
+def check_provider_connection() -> dict:
+    """For Admin's "Test connection": the key works and the configured model exists. Spends no tokens."""
+    return get_provider().check()
