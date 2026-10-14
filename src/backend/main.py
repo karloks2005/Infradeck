@@ -3093,6 +3093,8 @@ RULE_ROWS = [
     {"kind": "trend:memory", "when": "A container's memory climbs ≥ {leak_min_mb_per_hour} MB/h and {leak_min_growth_pct}% steadily", "window": "{leak_window_hours} h", "severity": "WARNING", "edit": ["leak_min_mb_per_hour", "leak_min_growth_pct", "leak_window_hours"]},
     {"kind": "container:unhealthy", "when": "A container's healthcheck fails", "window": None, "severity": "WARNING", "edit": []},
     {"kind": "container:exit", "when": "A container exits with an error or is killed for memory", "window": "{event_window_minutes} min", "severity": "WARNING", "edit": ["event_window_minutes"]},
+    {"kind": "container:image", "when": "A container starts running a different image", "window": "{event_window_minutes} min", "severity": "INFO", "edit": ["event_window_minutes"]},
+    {"kind": "container:removed", "when": "A container disappears from its server", "window": "{event_window_minutes} min", "severity": "INFO", "edit": ["event_window_minutes"]},
     {"kind": "network:port", "when": "New port reachable from other machines", "window": None, "severity": "WARNING", "edit": []},
     {"kind": "network:firewall", "when": "The firewall configuration is weakened", "window": None, "severity": "WARNING", "edit": []},
     {"kind": "system:oom", "when": "The kernel kills a process to free memory", "window": "{event_window_minutes} min", "severity": "WARNING", "edit": []},

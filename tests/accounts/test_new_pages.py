@@ -319,6 +319,16 @@ def test_every_threshold_the_old_admin_page_could_change_can_still_be_changed(ap
     assert main._enabled_rules(app.db, firing) == {}
 
 
+def test_image_change_and_removal_incidents_can_be_switched_off(app):
+    # Every rebuild of a stack opens one of these per container, so they must be switchable like any other rule.
+    owner = signed_in(app, 1)
+    kinds = {rule["kind"] for rule in owner.get("/admin/rules").json()["rules"]}
+    assert {"container:image", "container:removed"} <= kinds
+    owner.put("/admin/settings", json={"disabled_rules": ["container:image", "container:removed"]})
+    firing = {"container:web:image": ("INFO", "t", "d"), "container:db:removed": ("INFO", "t", "d"), "container:web:exit": ("WARNING", "t", "d")}
+    assert list(main._enabled_rules(app.db, firing)) == ["container:web:exit"]
+
+
 def test_a_server_is_renamed_and_keeps_the_name_and_the_install_describes_itself(app):
     owner = signed_in(app, 1)
     assert owner.patch("/monitoring/servers/1", json={"hostname": "media-box", "check_interval_seconds": 15}).json() == {"id": 1, "hostname": "media-box", "check_interval_seconds": 15}
