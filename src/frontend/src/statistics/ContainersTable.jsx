@@ -57,7 +57,7 @@ function ContainerHistory({ serverId, container, range, compare }) {
   )
 }
 
-export function ContainersTable({ server, usage, range, compare, selectedId, onSelect }) {
+export function ContainersTable({ server, usage, range, compare, selectedId, onSelect, phone = false }) {
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState('avg_cpu')
   const [all, setAll] = useState(false)
@@ -76,6 +76,42 @@ export function ContainersTable({ server, usage, range, compare, selectedId, onS
   const rank = new Map(rows.map((row, index) => [row.container_id, index + 1]))
   const top = Math.max(100, ...rows.flatMap((row) => row.sparkline || []).filter((value) => value != null))
   const swapKnown = rows.some((row) => row.swap != null)
+
+  // Phones: a ranked list with the one or two numbers that matter per row, instead of a ten-column table.
+  if (phone) {
+    const shown = all ? rows : rows.filter((row, index) => index < 5 || row.container_id === selectedId)
+    return (
+      <section aria-label="Containers">
+        <div className="mb-2.5 flex items-baseline gap-2">
+          <h2 className="m-0 text-[15px] font-semibold text-paper">Top containers</h2><span className="text-xs text-muted">by average CPU</span>
+          {rows.length > 5 && <button type="button" onClick={() => setAll((value) => !value)} className="ml-auto h-7 border-0 bg-transparent p-0 text-[13px] text-soft">{all ? 'Top 5' : `All ${rows.length}`}</button>}
+        </div>
+        {!usage ? <p className="m-0 rounded-md border border-line bg-ink py-8 text-center text-xs text-muted">Loading…</p> : !rows.length ? <p className="m-0 rounded-md border border-line bg-ink px-4 py-6 text-center text-xs text-muted">No containers reported on {server.hostname} in this range.</p> : (
+          <div className="divide-y divide-line overflow-hidden rounded-md border border-line bg-ink">
+            {shown.map((row) => {
+              const open = row.container_id === selectedId
+              return (
+                <div key={row.container_id}>
+                  <button type="button" aria-expanded={open} onClick={() => onSelect(open ? '' : row.container_id)} className={`grid w-full grid-cols-[30px_minmax(0,1fr)_auto] gap-x-2 border-0 px-4 py-3 text-left ${open ? 'bg-raised' : 'bg-transparent'}`}>
+                    <span className="mono pt-0.5 text-xs text-dim">{String(rank.get(row.container_id)).padStart(2, '0')}</span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-medium text-paper">{row.name}</span>
+                      <span className="mt-1 block truncate text-xs text-muted">peak <span className={row.max_cpu >= 100 ? 'text-signal' : ''}>{formatPercent(row.max_cpu)}</span> · {megabytes(row.avg_memory_mb)}{row.swap >= 1 && <> · swap <span className="text-warn">{megabytes(row.swap)}</span></>}{row.restarts ? <> · <span className="text-warn">{row.restarts} restarts</span></> : ''}</span>
+                    </span>
+                    <span className="text-right">
+                      <span className="block text-sm font-medium text-paper">{formatPercent(row.avg_cpu)}</span>
+                      <Sparkline values={row.sparkline} width={78} height={16} max={top} className="mt-1.5" />
+                    </span>
+                  </button>
+                  {open && <div className="border-t border-line"><ContainerHistory serverId={server.id} container={{ ...row, image: row.now?.image, memory_limit_mb: row.now?.memory_limit_mb && row.now.memory_limit_mb < (server.total_ram_gb || 0) * 1024 * 0.98 ? row.now.memory_limit_mb : null }} range={range} compare={compare} /></div>}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </section>
+    )
+  }
 
   return (
     <section className="card overflow-hidden" aria-label="Containers">

@@ -193,6 +193,9 @@ export function AnotherMachineCard({ pending, onChanged, focusRef }) {
   const commands = installCommands({ url: url || '<address>', token: token || '<generated when you click the button>', name: cleanName, collectorImage: info?.collector_image || '<collector image>', proxyImage: info?.proxy_image || '<docker proxy image>' })
   const minutes = expiresAt ? Math.max(1, Math.round((expiresAt - Date.now()) / 60000)) : null
   const command = commands[method]
+  // Nobody types a docker command on a phone: hand it to a computer through the system share sheet.
+  const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function'
+  const share = () => navigator.share({ title: `Connect ${cleanName || 'a server'} to Infradeck`, text: command }).catch(() => {})
 
   return (
     <div className="card flex flex-col px-[18px] pb-[18px] pt-4">
@@ -220,9 +223,14 @@ export function AnotherMachineCard({ pending, onChanged, focusRef }) {
 
       <div className="relative mt-3.5 rounded-md border border-line bg-bg">
         <pre className="custom-scroll mono m-0 max-h-[168px] overflow-auto px-3.5 py-3 pr-24 leading-[19px] text-soft">{token ? command.split(token).flatMap((part, index) => (index ? [<span key={index} className="text-signal">{token}</span>, part] : [part])) : command}</pre>
-        {token ? <button type="button" className="btn btn-sm absolute right-2.5 top-2.5" onClick={() => copy(command)}><Icon name={copied ? 'check' : 'copy'} size={13} />{copied ? 'Copied' : 'Copy'}</button>
+        {token ? <button type="button" className="btn btn-sm absolute right-2.5 top-2.5 max-md:hidden" onClick={() => copy(command)}><Icon name={copied ? 'check' : 'copy'} size={13} />{copied ? 'Copied' : 'Copy'}</button>
           : <div className="absolute inset-0 flex items-center justify-center rounded-md bg-bg/85"><button type="button" className="btn btn-primary" disabled={busy || !ready || !url} onClick={generate}>{busy ? 'Generating…' : 'Generate command'}</button></div>}
       </div>
+
+      {token && <div className="mt-2.5 grid grid-cols-2 gap-2 md:hidden">
+        <button type="button" className="btn btn-primary h-11 text-sm" onClick={() => copy(command)}><Icon name={copied ? 'check' : 'copy'} size={14} />{copied ? 'Copied' : 'Copy'}</button>
+        <button type="button" className="btn h-11 text-sm" disabled={!canShare} title={canShare ? undefined : 'This browser has no share sheet. Copy the command instead.'} onClick={share}><Icon name="share" size={14} />Share</button>
+      </div>}
 
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2.5">
         <div className="seg" role="group" aria-label="How to run it">{Object.keys(commands).map((key) => <button key={key} type="button" aria-pressed={method === key} onClick={() => setMethod(key)}>{key}</button>)}</div>

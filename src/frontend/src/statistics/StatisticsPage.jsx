@@ -8,7 +8,9 @@ import { forecastMonth, forecastPhrase, formatPercent, fullestMount, serverMount
 import FleetStatistics from '../FleetStatistics.jsx'
 import { Icon } from '../icons.jsx'
 import { useOverview } from '../overviewStore.js'
-import { AppShell } from '../shell.jsx'
+import { AppShell, PhoneHeader, RoundButton } from '../shell.jsx'
+import { usePhone } from '../ui.jsx'
+import { Pills, PhoneFindings, PhoneKpis, PhoneReliability, PhoneTimeline, TimelineEntry } from './Phone.jsx'
 import { apiRequest } from '../api.js'
 import { ContainersTable } from './ContainersTable.jsx'
 import { BusyHours, Disks, Reliability, TimeAtLevels } from './Insights.jsx'
@@ -58,7 +60,7 @@ function Kpi({ label, value, tone, children }) {
 const parse = (points) => (points || []).map((point) => ({ ...point, t: new Date(point.time).getTime() }))
 const metric = (points, key) => points.map((point) => ({ t: point.t, avg: point[key]?.avg ?? null, max: point[key]?.max ?? null, samples: point.samples })).filter((point) => point.avg !== null || point.max !== null)
 
-function ServerStatistics({ server, overview, range, compare, containerId, choose }) {
+function ServerStatistics({ server, overview, range, compare, containerId, choose, phone = false, view, focusT, openTimeline, timelineBack, rangeControl }) {
   const [focus, setFocus] = useState(null)
   const base = `/monitoring/servers/${server.id}/history?range=${range.id}&metrics=${METRICS.join(',')}`
   const { data, error } = usePolled(base, LIVE.has(range.id) ? 30 : null)
@@ -92,7 +94,7 @@ function ServerStatistics({ server, overview, range, compare, containerId, choos
     [series, bucket, gaps, eventData, busiest, server, spikeData, JSON.stringify(disks)])
   const marks = useMemo(() => eventMarks(eventData?.events, start, end, noticed.flatMap((finding) => finding.marks || [])), [eventData, start, end, noticed])
 
-  if (error && !data) return <div role="alert" className="rounded-md border border-warn/40 px-3.5 py-2.5 text-xs text-warn">{error}</div>
+  if (error && !data) return <div role="alert" className={`rounded-md border border-warn/40 px-3.5 py-2.5 text-xs text-warn ${phone ? 'mx-4 mt-4' : ''}`}>{error}</div>
   if (!data) return <p className="m-0 py-20 text-center text-[13px] text-muted">Loading the history of {server.hostname}…</p>
 
   const cpu = summarize(series.cpu)
@@ -107,11 +109,43 @@ function ServerStatistics({ server, overview, range, compare, containerId, choos
   const versus = range.short ? `vs ${range.short}` : ''
   const jump = (t) => setFocus({ t, nonce: Date.now() })
   const rows = [
-    { key: 'cpu', label: 'CPU', pair: true, format: formatPercent, axis: (tick) => `${tick}%`, max: 100, sub: `avg ${formatPercent(cpu.average)} · peak ${formatPercent(cpu.peak)}` },
-    { key: 'ram', label: 'Memory', format: formatPercent, axis: (tick) => `${tick}%`, max: 100, sub: `avg ${formatPercent(ram.average)}${server.total_ram_gb ? ` · of ${Number(server.total_ram_gb.toFixed(1))} GB` : ''}` },
-    { key: 'swap', label: 'Swap', format: formatPercent, axis: (tick) => `${Number(tick.toFixed(1))}%`, floor: 20 / 1.15, tone: 'warn', sub: `now ${formatPercent(swap.last)}${server.system?.swap_total_gb ? ` · of ${Number(server.system.swap_total_gb.toFixed(1))} GB` : ''}`, note: swapFinding ? { t: swapFinding.at, text: swapFinding.note } : null },
-    { key: 'load', label: 'Load (1 min)', short: 'Load', format: (value) => value.toFixed(2), axis: (tick) => String(Number(tick.toFixed(1))), floor: cores * 1.3, limit: { value: cores, label: `${cores} ${cores === 1 ? 'core' : 'cores'}` }, sub: `${cores} ${cores === 1 ? 'core' : 'cores'} · avg ${load.average == null ? '–' : load.average.toFixed(2)}` },
+    { key: 'cpu', label: 'CPU', pair: true, format: formatPercent, axis: (tick) => `${tick}%`, max: 100, sub: `avg ${formatPercent(cpu.average)} · peak ${formatPercent(cpu.peak)}`, phone: `avg ${formatPercent(cpu.average)}` },
+    { key: 'ram', label: 'Memory', format: formatPercent, axis: (tick) => `${tick}%`, max: 100, sub: `avg ${formatPercent(ram.average)}${server.total_ram_gb ? ` · of ${Number(server.total_ram_gb.toFixed(1))} GB` : ''}`, phone: `avg ${formatPercent(ram.average)}` },
+    { key: 'swap', label: 'Swap', format: formatPercent, axis: (tick) => `${Number(tick.toFixed(1))}%`, floor: 20 / 1.15, tone: 'warn', phone: `now ${formatPercent(swap.last)}`, sub: `now ${formatPercent(swap.last)}${server.system?.swap_total_gb ? ` · of ${Number(server.system.swap_total_gb.toFixed(1))} GB` : ''}`, note: swapFinding ? { t: swapFinding.at, text: swapFinding.note } : null },
+    { key: 'load', label: 'Load (1 min)', short: 'Load', format: (value) => value.toFixed(2), axis: (tick) => String(Number(tick.toFixed(1))), floor: cores * 1.3, limit: { value: cores, label: `${cores} ${cores === 1 ? 'core' : 'cores'}` }, phone: `${cores} ${cores === 1 ? 'core' : 'cores'}`, sub: `${cores} ${cores === 1 ? 'core' : 'cores'} · avg ${load.average == null ? '–' : load.average.toFixed(2)}` },
   ]
+
+  const legend = { current: `Last ${range.words}`, previous: previous ? `The ${range.previous}` : null }
+  const swapNow = server.host?.swap_pct ?? swap.last
+  const swapTone = (swapNow ?? 0) >= Math.min(swapWarn, 10) && swapFinding ? 'warn' : (server.host?.swap_pct ?? 0) >= swapWarn ? 'warn' : undefined
+  const rootNote = rootDays != null ? (forecastMonth(rootDays) ? `F${forecastMonth(rootDays).slice(1)}` : forecastPhrase(rootDays) || 'No clear growth trend') : 'No clear growth trend'
+
+  if (phone && view === 'timeline') {
+    return <PhoneTimeline rows={rows} points={points} previous={previous} start={start} end={end} bucketSeconds={bucket} gaps={gaps} marks={marks} busiest={busiest} utc={utc} focusT={focusT} legend={legend} back={timelineBack} rangeControl={rangeControl} />
+  }
+  if (phone) {
+    const ramGb = server.total_ram_gb && ram.average != null ? `${Number(((ram.average / 100) * server.total_ram_gb).toFixed(1))} of ${Number(server.total_ram_gb.toFixed(1))} GB` : ''
+    return (
+      <div className="space-y-7 px-4 pt-4">
+        <PhoneKpis items={[
+          { label: 'Average CPU', value: formatPercent(cpu.average), sub: earlier ? `${deltaPoints(cpu.average, earlier.cpu.average) ?? 'no data'} ${versus}` : `over the last ${range.words}` },
+          { label: 'Peak CPU', value: formatPercent(cpu.peak), sub: cpu.peakAt != null ? formatMoment(cpu.peakAt, { utc }) : '' },
+          { label: 'Average memory', value: formatPercent(ram.average), sub: ramGb },
+          { label: 'Peak memory', value: formatPercent(ram.peak), sub: ram.peakAt != null ? formatMoment(ram.peakAt, { utc }) : '' },
+          { label: 'Swap now', value: formatPercent(swapNow), tone: swapTone, subTone: swapFinding ? 'warn' : undefined, sub: swapFinding ? `Climbing since ${formatMoment(swapFinding.at, { clock: false })}` : swap.peak != null ? `peak ${formatPercent(swap.peak)} in this range` : '' },
+          { label: root?.mount === '/' || !root ? 'Root disk' : `Disk ${root.mount}`, value: formatPercent(root?.used_pct ?? server.host?.disk_usage_pct), sub: rootNote },
+        ]} />
+        <PhoneFindings title={range.id === '7d' ? 'Noticed this week' : `Noticed in the last ${range.words}`} findings={noticed} onShow={openTimeline}
+          empty={points.length ? `Nothing stands out over the last ${range.words}: no growing swap, no repeating spikes, no gaps and no disk about to fill up.` : 'Nothing has been recorded for this server in this range.'} />
+        <TimelineEntry series={series.cpu} start={start} end={end} bucketSeconds={bucket} gaps={gaps} words={range.words} onOpen={() => openTimeline(null)} />
+        <BusyHours key={server.id} serverId={server.id} />
+        <TimeAtLevels cpu={series.cpu} ram={series.ram} words={range.span} />
+        <section aria-label="Disks" className="space-y-2.5"><h2 className="m-0 text-[15px] font-semibold text-paper">Disks</h2><Disks server={server} mounts={mounts} range={range} forecasts={forecasts} /></section>
+        <ContainersTable phone key={`containers-${server.id}`} server={server} usage={usage && usage.server_id === server.id ? usage : null} range={range} compare={compare} selectedId={containerId} onSelect={(id) => choose({ container: id })} />
+        <PhoneReliability docker={series.docker_ms} collect={series.collect_ms} interval={server.check_interval_seconds} />
+      </div>
+    )
+  }
 
   return <>
     <section className="card grid grid-cols-2 divide-x divide-y divide-line overflow-hidden md:grid-cols-3 xl:grid-cols-6 xl:divide-y-0" aria-label="Headline figures">
@@ -153,6 +187,7 @@ function ServerStatistics({ server, overview, range, compare, containerId, choos
 
 export default function StatisticsPage({ user, onLogout }) {
   const [searchParams, setSearchParams] = useSearchParams()
+  const phone = usePhone()
   const { data: overview, error } = useOverview(Boolean(user), 30, onLogout)
   const [compare, setCompare] = useState(() => remembered(COMPARE_KEY, 'on') === 'on')
   const servers = useMemo(() => sortServers(overview?.servers || []), [overview])
@@ -175,6 +210,40 @@ export default function StatisticsPage({ user, onLogout }) {
     if (!server) return
     const data = await apiRequest(`/monitoring/servers/${server.id}/history?range=${range.id}&metrics=${METRICS.join(',')}`, { method: 'GET' })
     download(`${server.hostname}-${range.id}.csv`, timelineCsv(data.points, METRICS))
+  }
+
+  // Phones open the timeline as its own screen, so the browser's back button returns to the summary.
+  const view = phone ? searchParams.get('view') : null
+  const openTimeline = (time) => {
+    const next = new URLSearchParams(searchParams)
+    next.set('view', 'timeline')
+    if (time != null) next.set('at', String(Math.round(time))); else next.delete('at')
+    setSearchParams(next)
+  }
+  const summaryParams = new URLSearchParams(searchParams)
+  summaryParams.delete('view'); summaryParams.delete('at')
+  const rangeControl = <select aria-label="Time range" value={range.id} onChange={(event) => { remember(RANGE_KEY, event.target.value); choose({ range: event.target.value }) }} className="h-10 rounded-full border border-edge bg-transparent px-3.5 text-[13px] font-medium text-paper">{RANGES.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select>
+
+  if (phone) {
+    const serverPills = [{ id: 'all', label: 'All' }, ...servers.map((item) => ({ id: String(item.id), label: item.hostname, dot: STATE_DOT[serverState(item)] }))]
+    return (
+      <AppShell user={user} onLogout={onLogout} crumbs={[{ label: 'Statistics' }]} bare phoneHeader>
+        {view !== 'timeline' && <>
+          <PhoneHeader title="Statistics" live={false} action={server ? <RoundButton label="Export CSV" icon="download" onClick={exportCsv} /> : undefined} />
+          <div className="space-y-2.5 px-4 pt-3">
+            {error && !overview && <div role="alert" className="rounded-md border border-warn/40 px-3.5 py-2.5 text-xs text-warn">{error}</div>}
+            {overview && !servers.length && <p className="m-0 rounded-md border border-line bg-ink px-4 py-6 text-center text-[13px] text-muted">No server is reporting yet. History appears here once a collector has checked in. <Link to="/" className="link">Connect a server</Link>.</p>}
+            {servers.length > 0 && <>
+              <Pills label="Server" items={serverPills} value={wantsAll ? 'all' : String(server?.id)} onChange={(id) => choose({ server: id, container: '' })} />
+              <Pills label="Time range" items={RANGES} value={range.id} onChange={(id) => { remember(RANGE_KEY, id); choose({ range: id }) }} />
+            </>}
+          </div>
+        </>}
+        {servers.length > 0 && (wantsAll ? <div className="px-4 pt-5"><FleetStatistics request={apiRequest} servers={servers} range={range.id} /></div>
+          : server && <ServerStatistics key={`${server.id}-${range.id}`} phone server={server} overview={overview} range={range} compare={compare} containerId={searchParams.get('container') || ''} choose={choose}
+            view={view} focusT={Number(searchParams.get('at')) || null} openTimeline={openTimeline} timelineBack={{ label: 'Statistics', to: `/statistics?${summaryParams}` }} rangeControl={rangeControl} />)}
+      </AppShell>
+    )
   }
 
   const crumbs = [{ label: 'Statistics', to: '/statistics' }, { label: wantsAll ? 'All servers' : server?.hostname || '…' }]

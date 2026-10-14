@@ -7,8 +7,8 @@ import { usePolled } from '../dashboard/data.js'
 import { formatAge, niceCeiling } from '../dashboard/logic.js'
 import { Icon } from '../icons.jsx'
 import { refreshOverview } from '../overviewStore.js'
-import { serverLink, AppShell } from '../shell.jsx'
-import { Notice, useAction, useCopy } from '../ui.jsx'
+import { serverLink, AppShell, PhoneHeader, RoundButton } from '../shell.jsx'
+import { Notice, Outcome, Sheet, useAction, useCopy, usePhone } from '../ui.jsx'
 
 const SEVERITY = { CRITICAL: ['Critical', 'chip-signal', 'var(--color-signal)'], WARNING: ['Warning', 'chip-warn', 'var(--color-warn)'], INFO: ['Info', '', 'var(--color-edge)'] }
 const TONE = { signal: 'bg-signal', warn: 'bg-warn', ok: 'bg-ok', plain: 'bg-dim' }
@@ -160,7 +160,7 @@ function Incident({ incident, canAct, onChanged }) {
 
 const SUGGESTIONS = { default: ['Is anything else close to its limit?', 'What changed on this server today?', 'Explain this incident in one paragraph'], none: ['Is anything close to its limit?', 'Which server needs attention first?', 'What happened overnight?'] }
 
-function Chat({ user, incident, enabled }) {
+function Chat({ user, incident, enabled, phone = false, back }) {
   const conversationId = `${incident ? `incident-${incident.id}` : 'general'}-u${user.id}`
   const [messages, setMessages] = useState(null)
   const [draft, setDraft] = useState('')
@@ -198,6 +198,33 @@ function Chat({ user, incident, enabled }) {
     exists.current = false; setMessages([]); setError('')
   }
 
+  const agentMark = <span aria-hidden="true" className="inline-flex flex-col gap-[2px]"><i className="block h-[3px] w-[5px] bg-paper" /><i className="ml-[2px] block h-[3px] w-[5px] bg-signal" /><i className="block h-[3px] w-[5px] bg-paper" /></span>
+  if (phone) {
+    // Full screen, scoped to the incident: suggested questions sit above the input so the keyboard is rarely needed.
+    return <>
+      <PhoneHeader back={back} title="Ask the agent" action={incident ? <span className="chip mono shrink-0 text-paper">{incident.reference}</span> : <button type="button" className="h-11 border-0 bg-transparent px-1 text-[13px] text-muted" onClick={restart}>New chat</button>} />
+      <div className="space-y-5 px-4 pb-[190px] pt-4" aria-live="polite">
+        {!enabled && <Notice tone="plain">Chat with the agent has been turned off by an admin.</Notice>}
+        {enabled && messages === null && <p className="m-0 text-xs text-muted">Loading…</p>}
+        {enabled && messages?.length === 0 && <p className="m-0 text-[13px] leading-5 text-muted">{incident ? 'The agent is given this incident\'s facts with your question.' : 'Ask about any server.'}</p>}
+        {enabled && (messages || []).map((message) => (message.role === 'user'
+          ? <div key={message.id} className="ml-10 rounded-lg border border-line bg-ink px-4 py-3 text-sm leading-[21px] text-paper">{message.text}</div>
+          : <div key={message.id}><div className="mb-2 flex items-center gap-2 text-xs text-muted">{agentMark}Agent</div><p className="m-0 whitespace-pre-wrap text-sm leading-[23px] text-paper">{message.text}</p></div>))}
+        {busy && <p className="m-0 flex items-center gap-2.5 text-xs text-muted"><span className="spinner" />Thinking…</p>}
+        {error && <Notice>{error}</Notice>}
+        <div ref={end} />
+      </div>
+      <form className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-bg pb-[calc(10px+env(safe-area-inset-bottom))] pt-3" onSubmit={(event) => { event.preventDefault(); send(draft) }}>
+        {enabled && <div className="no-scrollbar flex gap-2 overflow-x-auto px-4 pb-2.5">{(incident ? SUGGESTIONS.default : SUGGESTIONS.none).map((text) => <button key={text} type="button" disabled={busy} className="h-9 shrink-0 rounded-full border border-edge bg-transparent px-3.5 text-[13px] text-soft" onClick={() => send(text)}>{text}</button>)}</div>}
+        <div className="mx-4 flex items-center gap-2 rounded-full border border-edge bg-ink py-1 pl-4 pr-1 focus-within:border-muted">
+          <input className="h-10 min-w-0 flex-1 border-0 bg-transparent text-sm text-paper outline-none placeholder:text-dim" placeholder={incident ? 'Ask about this incident…' : 'Ask about any server…'} aria-label="Your question" maxLength={8000} disabled={!enabled} value={draft} onChange={(event) => setDraft(event.target.value)} />
+          <button type="submit" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-0 bg-paper text-bg disabled:opacity-40" aria-label="Send" disabled={!enabled || busy || !draft.trim()}><Icon name="arrow" size={15} /></button>
+        </div>
+        <p className="mx-4 mb-0 mt-2 text-center text-[11px] leading-4 text-muted">Reads metrics and events. Can't run commands.</p>
+      </form>
+    </>
+  }
+
   return (
     <aside className="flex min-h-[420px] flex-col xl:h-full xl:min-h-0" aria-label="Ask the agent">
       <div className="border-b border-line px-5 py-4">
@@ -229,14 +256,144 @@ function Chat({ user, incident, enabled }) {
   )
 }
 
+// ---------- phones ----------
+
+const MUTE_OPTIONS = [[60, '1 hour'], [240, '4 hours'], [1440, '1 day'], [10080, '1 week']]
+
+function PhoneIncident({ incident, canAct, onChanged, onAsk }) {
+  const [state, run] = useAction()
+  const [menu, setMenu] = useState(false)
+  const [showLines, setShowLines] = useState(false)
+  const found = incident.diagnosis
+  const [label, chip] = SEVERITY[incident.severity] || SEVERITY.INFO
+  const resolved = incident.status === 'resolved'
+  const act = (action, body) => run(async () => { await post(`/incidents/${incident.id}/${action}`, body); setMenu(false); refreshOverview(); onChanged() })
+  const denied = canAct ? undefined : 'Only owners and admins can change an incident.'
+  const meta = [incident.hostname, found.container, `opened ${clock(incident.created_at)}`, incident.reference].filter(Boolean).join(' · ')
+  const where = serverLink(incident.server_id, found.container ? 'containers' : found.kind?.startsWith('network') ? 'network' : 'overview')
+  return <>
+    <PhoneHeader back={{ label: 'Incidents', to: '/agent' }} title={incident.title} action={<RoundButton label="More actions" icon="more" onClick={() => setMenu(true)} />} />
+    <article className="space-y-7 px-4 pb-32 pt-2" aria-label={`${incident.reference}: ${incident.title}`}>
+      <div>
+        <div className="flex flex-wrap items-center gap-2"><span className={`chip ${chip}`}>{label}</span><span className={`chip ${resolved || found.state === 'diagnosed' ? 'chip-ok' : 'chip-warn'}`}>{resolved ? 'Resolved' : incident.muted_until ? 'Muted' : found.state === 'watching' ? 'Watching' : 'Diagnosed'}</span>{incident.acknowledged_at && <span className="chip">Acknowledged</span>}</div>
+        <p className="mb-0 mt-2.5 text-[13px] text-muted">{meta}</p>
+        <p className="mb-0 mt-4 text-[15px] leading-6 text-paper">{found.summary}</p>
+        {state.error && <p role="alert" className="mb-0 mt-2 text-xs text-warn">{state.error}</p>}
+      </div>
+
+      {found.evidence && <section aria-label="Evidence">
+        <div className="mb-2.5 flex items-baseline gap-2"><h2 className="m-0 text-[15px] font-semibold text-paper">Evidence</h2><span className="truncate text-xs text-muted">{found.evidence.title}</span></div>
+        <Evidence evidence={found.evidence} />
+        {found.lines.length > 0 && <>
+          <button type="button" className="btn mt-2.5 h-11 w-full text-sm" aria-expanded={showLines} onClick={() => setShowLines((value) => !value)}>{showLines ? 'Hide' : 'Show'} {found.lines.length} recorded {found.lines.length === 1 ? 'event' : 'events'}</button>
+          {showLines && <><ul className="mono m-0 mt-2.5 list-none space-y-1.5 rounded-md border border-line bg-ink px-4 py-3 text-[12px] leading-5">
+            {found.lines.map((line, index) => <li key={`${line.time}-${index}`} className={line.strong ? 'text-signal' : 'text-soft'}><span className="text-dim">{clock(line.time)}</span> <span className="text-muted">{line.source}</span> {line.text}</li>)}
+          </ul><p className="mb-0 mt-2 text-xs text-muted">Events Infradeck recorded on {incident.hostname}, not the container's own log, which it can't read.</p></>}
+        </>}
+      </section>}
+
+      {found.signals.length > 0 && <section aria-label="Why">
+        <div className="mb-2.5 flex items-baseline gap-2"><h2 className="m-0 text-[15px] font-semibold text-paper">Why</h2><span className="text-xs text-muted">{found.agreeing} of {found.signals.length} checks hold</span></div>
+        <ul className="m-0 list-none divide-y divide-line overflow-hidden rounded-md border border-line bg-ink p-0">
+          {found.signals.map((signal) => <li key={signal.text} className="flex items-start gap-3 px-4 py-3 text-[13px] leading-5"><Icon name={signal.ok ? 'check' : 'close'} size={14} className={`mt-[3px] shrink-0 ${signal.ok ? 'text-ok' : 'text-muted'}`} /><span className="text-paper">{signal.text}</span></li>)}
+        </ul>
+      </section>}
+
+      {found.steps.length > 0 && <section aria-label="How to fix it">
+        <h2 className="m-0 mb-1 text-[15px] font-semibold text-paper">How to fix it</h2>
+        <p className="mb-2.5 mt-0 text-xs text-muted">You run these yourself. Infradeck can't change your servers.</p>
+        <ol className="m-0 list-none divide-y divide-line overflow-hidden rounded-md border border-line bg-ink p-0">
+          {found.steps.map((step, index) => (
+            <li key={step.title} className="px-4 py-4">
+              <div className="mono text-xs text-signal">{String(index + 1).padStart(2, '0')}{step.recommended && ' · recommended'}</div>
+              <p className="mb-0 mt-1.5 text-sm font-semibold text-paper">{step.title}</p>
+              <p className="mb-0 mt-1 text-[13px] leading-5 text-muted">{step.text}</p>
+              {step.command && <Command step={step} />}
+            </li>
+          ))}
+        </ol>
+      </section>}
+      {!found.steps.length && !found.signals.length && <Notice tone="plain">There is no playbook for this kind of incident yet. The description above is everything the rule knows.</Notice>}
+
+      <section aria-label="Timeline">
+        <h2 className="m-0 mb-2.5 text-[15px] font-semibold text-paper">Timeline</h2>
+        <ol className="m-0 list-none space-y-3 p-0">{found.timeline.map((item, index) => <li key={`${item.time}-${index}`} className="grid grid-cols-[48px_12px_minmax(0,1fr)] items-baseline text-[13px]"><time dateTime={item.time} className="mono text-muted" title={new Date(item.time).toLocaleString()}>{clock(item.time)}</time><span aria-hidden="true" className={`h-[7px] w-[7px] self-center rounded-[1px] ${TONE[item.tone] || TONE.plain}`} /><span className="text-soft">{item.text}</span></li>)}</ol>
+      </section>
+    </article>
+
+    {/* Ask and acknowledge stay pinned above the home bar wherever you scroll. */}
+    <div className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-2 gap-2.5 border-t border-line bg-bg px-4 pb-[calc(12px+env(safe-area-inset-bottom))] pt-3">
+      <button type="button" className="btn h-12 text-sm" onClick={onAsk}>Ask the agent</button>
+      {resolved ? <Link to={where} className="btn btn-primary h-12 text-sm">{found.container ? 'Open container' : 'Open server'}</Link>
+        : <button type="button" className="btn btn-primary h-12 text-sm" disabled={!canAct || state.busy || Boolean(incident.acknowledged_at)} title={denied} onClick={() => act('acknowledge')}>{incident.acknowledged_at ? 'Acknowledged' : 'Acknowledge'}</button>}
+    </div>
+
+    {menu && <Sheet onClose={() => setMenu(false)} open title={incident.reference}>
+      <div className="overflow-hidden rounded-lg border border-line">
+        <Link to={where} className="flex h-12 items-center justify-between border-b border-line px-3.5 text-sm font-medium text-paper">{found.container ? 'Open container' : 'Open server'}<Icon name="chevron" size={14} className="text-muted" /></Link>
+        {!resolved && <button type="button" className="flex h-12 w-full items-center border-0 bg-transparent px-3.5 text-left text-sm font-medium text-paper disabled:text-dim" disabled={!canAct || state.busy} onClick={() => act('resolve')}>Mark resolved</button>}
+      </div>
+      {!resolved && <>
+        <div className="mb-2 mt-5 text-xs text-muted">{incident.muted_until ? `Muted until ${clock(incident.muted_until)}` : 'Mute notifications for'}</div>
+        {incident.muted_until
+          ? <button type="button" className="btn h-12 w-full text-sm" disabled={!canAct || state.busy} onClick={() => act('unmute')}>Unmute</button>
+          : <div className="grid grid-cols-2 gap-2">{MUTE_OPTIONS.map(([minutes, text]) => <button key={minutes} type="button" className="btn h-12 text-sm" disabled={!canAct || state.busy} onClick={() => act('mute', { minutes })}>{text}</button>)}</div>}
+        {!canAct && <p className="mb-0 mt-3 text-xs text-muted">{denied}</p>}
+        <p className="mb-0 mt-3 text-xs leading-5 text-muted">If the cause is still there after you mark it resolved, a new incident opens at the next check-in.</p>
+      </>}
+      <Outcome state={state} />
+    </Sheet>}
+  </>
+}
+
+function PhoneInbox({ inbox, error, tab, setTab, onSelect }) {
+  const list = inbox ? inbox[tab] : []
+  const weekAgo = Date.now() - 7 * 86400000
+  const recent = inbox ? inbox.resolved.filter((item) => new Date(item.resolved_at).getTime() >= weekAgo).slice(0, 5) : []
+  const card = (incident) => {
+    const [label, chip, color] = SEVERITY[incident.severity] || SEVERITY.INFO
+    const resolved = incident.status === 'resolved'
+    return (
+      <li key={incident.id}>
+        <button type="button" onClick={() => onSelect(incident.id)} className="block w-full border-0 bg-transparent px-4 py-3.5 text-left" style={{ boxShadow: resolved ? undefined : `inset 3px 0 0 ${color}` }}>
+          <span className="flex items-center gap-2 text-xs text-muted">{!resolved && <span className={`chip ${chip}`}>{label}</span>}<span className="truncate">{incident.hostname}</span><span className="ml-auto shrink-0">{resolved ? day(incident.resolved_at) : formatAge(incident.created_at)}</span></span>
+          <span className={`mt-1.5 block text-[15px] font-semibold leading-5 ${resolved ? 'text-soft' : 'text-paper'}`}>{incident.title}</span>
+          <span className="mt-1.5 flex items-center gap-2 text-xs text-muted">{!resolved && <span className={`dot ${incident.state === 'watching' || incident.muted_until ? 'dot-warn' : 'dot-ok'}`} style={{ width: 7, height: 7 }} />}{stateLine(incident)}</span>
+        </button>
+      </li>
+    )
+  }
+  return <>
+    <PhoneHeader title="Incidents" live={false} />
+    <div className="flex flex-col gap-6 px-4 pt-3">
+      <div className="grid grid-cols-3 gap-1 rounded-md border border-line bg-ink p-1" role="tablist" aria-label="Which incidents">
+        {[['open', 'Open', inbox?.open.length], ['resolved', 'Resolved', inbox?.resolved_count], ['muted', 'Muted', inbox?.muted.length]].map(([key, label, count]) => <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => setTab(key)} className={`h-10 rounded border-0 text-[13px] font-medium ${tab === key ? 'bg-raised text-paper' : 'bg-transparent text-soft'}`}>{label} {count ?? ''}</button>)}
+      </div>
+      {!inbox ? <p className="m-0 py-8 text-center text-xs text-muted">{error || 'Loading…'}</p>
+        : list.length ? <ul className="m-0 list-none divide-y divide-line overflow-hidden rounded-md border border-line bg-ink p-0">{list.map(card)}</ul>
+          : <p className="m-0 rounded-md border border-line bg-ink px-4 py-6 text-center text-[13px] text-muted">{tab === 'open' ? 'Nothing is open. Every drawer is in.' : tab === 'muted' ? 'Nothing is muted.' : 'Nothing has been resolved yet.'}</p>}
+      {tab === 'open' && recent.length > 0 && <section aria-label="Resolved this week">
+        <h2 className="m-0 mb-2.5 text-[15px] font-semibold text-paper">Resolved this week</h2>
+        <ul className="m-0 list-none divide-y divide-line overflow-hidden rounded-md border border-line bg-ink p-0">{recent.map(card)}</ul>
+      </section>}
+      <div className="overflow-hidden rounded-md border border-line bg-ink">
+        <Link to="/agent?view=chat" className="flex min-h-14 items-center gap-3 border-b border-line px-4 py-3"><Icon name="agent" className="shrink-0 text-muted" /><span className="min-w-0 flex-1"><span className="block text-sm font-medium text-paper">Ask the agent</span><span className="block text-xs text-muted">About any server, not one incident</span></span><Icon name="chevron" size={14} className="text-muted" /></Link>
+        <Link to="/account" className="flex min-h-14 items-center gap-3 px-4 py-3"><Icon name="bell" className="shrink-0 text-muted" /><span className="min-w-0 flex-1"><span className="block text-sm font-medium text-paper">Where alerts go</span><span className="block text-xs text-muted">Channels and quiet hours are set in Account</span></span><Icon name="chevron" size={14} className="text-muted" /></Link>
+      </div>
+    </div>
+  </>
+}
+
 export default function AgentPage({ user, onLogout }) {
   const [params, setParams] = useSearchParams()
   const [tab, setTab] = useState('open')
   const { data: inbox, error, reload } = usePolled('/incidents', 10)
   const { data: config } = usePolled('/agent/config', null)
   const all = useMemo(() => (inbox ? [...inbox.open, ...inbox.muted, ...inbox.resolved] : []), [inbox])
+  const phone = usePhone()
   const requested = Number(params.get('incident'))
-  const selectedId = all.some((item) => item.id === requested) ? requested : inbox?.open[0]?.id ?? null
+  // A phone shows the list, one incident and the chat as separate screens, so nothing is picked by default there.
+  const selectedId = all.some((item) => item.id === requested) ? requested : phone ? null : inbox?.open[0]?.id ?? null
   const selected = all.find((item) => item.id === selectedId) || null
   const { data: detail, error: detailError, reload: reloadDetail } = usePolled(selectedId ? `/incidents/${selectedId}` : null, 20)
   const select = (id) => setParams({ incident: String(id) }, { replace: true })
@@ -244,6 +401,18 @@ export default function AgentPage({ user, onLogout }) {
   useEffect(() => { if (selected) setTab(selected.status === 'resolved' ? 'resolved' : selected.muted_until ? 'muted' : 'open') }, [selected?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   const list = inbox ? inbox[tab] : []
   const crumbs = selected ? [{ label: 'Agent', to: '/agent' }, { label: selected.reference }] : [{ label: 'Agent' }]
+
+  if (phone) {
+    const view = params.get('view')
+    const incident = detail && detail.id === selectedId ? detail : null
+    const chatOpen = view === 'chat' && (!requested || incident)
+    let body
+    if (chatOpen) body = <Chat key={selectedId ?? 'none'} phone user={user} incident={incident} enabled={config ? config.chat_enabled : true} back={incident ? { label: incident.title, to: `/agent?incident=${incident.id}` } : { label: 'Incidents', to: '/agent' }} />
+    else if (incident) body = <PhoneIncident incident={incident} canAct={Boolean(inbox?.can_act)} onChanged={() => { reload(); reloadDetail() }} onAsk={() => setParams({ incident: String(incident.id), view: 'chat' })} />
+    else if (selectedId || (requested && !inbox)) body = <><PhoneHeader back={{ label: 'Incidents', to: '/agent' }} title="Incident" live={false} /><p className="m-0 px-4 py-16 text-center text-[13px] text-muted">{detailError || 'Loading the incident…'}</p></>
+    else body = <PhoneInbox inbox={inbox} error={error} tab={tab} setTab={setTab} onSelect={(id) => setParams({ incident: String(id) })} />
+    return <AppShell user={user} onLogout={onLogout} crumbs={crumbs} bare phoneHeader phoneTabs={!chatOpen && !incident}>{body}</AppShell>
+  }
 
   return (
     <AppShell user={user} onLogout={onLogout} crumbs={crumbs} bare fitViewport>

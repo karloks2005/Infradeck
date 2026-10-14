@@ -61,7 +61,7 @@ function Fact({ label, value, detail }) {
   )
 }
 
-function AllClear({ overview, watch }) {
+export function AllClear({ overview, watch }) {
   const quiet = overview.quiet
   const servers = overview.servers
   const newest = Math.max(...servers.map((server) => (server.last_seen_at ? new Date(server.last_seen_at).getTime() : 0)))

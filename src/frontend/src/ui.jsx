@@ -1,8 +1,28 @@
 // Pieces the settings-style pages (Account, Admin) share: the two-column layout with a section list, cards,
 // switches, notices and small helpers.
-import { useEffect, useState } from 'react'
+import { Children, Fragment, createContext, isValidElement, useContext, useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { PhoneHeader } from './shell.jsx'
 import { apiRequest } from './api.js'
 import { Icon } from './icons.jsx'
+
+// The three layouts of the redesign: phone under 768 px (tab bar, one column), tablet up to 1199 px (icon rail),
+// desktop from 1200 px (full sidebar).
+export const PHONE_QUERY = '(max-width: 767px)'
+export function useMedia(query) {
+  const read = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(query).matches
+  const [matches, setMatches] = useState(read)
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return undefined
+    const list = window.matchMedia(query)
+    const update = () => setMatches(list.matches)
+    update()
+    list.addEventListener('change', update)
+    return () => list.removeEventListener('change', update)
+  }, [query])
+  return matches
+}
+export const usePhone = () => useMedia(PHONE_QUERY)
 
 export function useCopy() {
   const [copied, setCopied] = useState(false)
@@ -73,11 +93,15 @@ export function Row({ icon, title, detail, children, tone }) {
   )
 }
 
+// On a phone, a screen showing one section already has its name in the header.
+const LoneSection = createContext(null)
+
 export function Section({ id, title, description, children, aside }) {
+  const lone = useContext(LoneSection) === id
   return (
-    <section id={id} aria-labelledby={`${id}-title`} className="scroll-mt-20 border-b border-line pb-9 last:border-b-0">
+    <section id={id} aria-labelledby={`${id}-title`} className="scroll-mt-20 border-b border-line pb-9 last:border-b-0 max-md:pb-7">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><h2 id={`${id}-title`} className="m-0 text-base font-semibold text-paper">{title}</h2>{description && <p className="mb-0 mt-1.5 max-w-[720px] text-[13px] leading-5 text-muted">{description}</p>}</div>
+        <div><h2 id={`${id}-title`} className={lone ? 'sr-only' : 'm-0 text-base font-semibold text-paper'}>{title}</h2>{description && <p className={`mb-0 max-w-[720px] text-[13px] leading-5 text-muted ${lone ? 'mt-0' : 'mt-1.5'}`}>{description}</p>}</div>
         {aside}
       </div>
       <div className="mt-4 space-y-4">{children}</div>
@@ -86,8 +110,36 @@ export function Section({ id, title, description, children, aside }) {
 }
 
 // The page frame: a title, the list of sections on the left (it follows you down the page), the sections on the right.
-export function SettingsLayout({ title, description, aside, sections, footer, children }) {
+// On a phone the page is reached from the More tab: ``?section=<group>`` shows just that group's sections
+// (``groups``: [{ id, label, sections }]), under a header that leads back to More.
+// ``phoneHub``: what a phone shows with no group picked (Admin's list); ``phoneBack``: where a group's screen leads back to.
+export function SettingsLayout({ title, description, aside, sections, footer, children, groups = [], phoneHub, phoneBack }) {
+  const phone = usePhone()
+  const [params] = useSearchParams()
+  const group = groups.find((item) => item.id === params.get('section'))
+  if (phone) return <PhoneSettings title={group?.label || title} description={group || phoneHub ? null : description} group={group} hub={group ? null : phoneHub} back={group && phoneBack ? phoneBack : { label: 'More', to: '/more' }}>{children}</PhoneSettings>
+  return <DesktopSettings title={title} description={description} aside={aside} sections={sections} footer={footer} focus={group?.sections[0]}>{children}</DesktopSettings>
+}
+
+function PhoneSettings({ title, description, group, hub, back, children }) {
+  // Only <Section>s outside the group are dropped; notices and loading text stay.
+  const shown = Children.toArray(children).flatMap((child) => (isValidElement(child) && child.type === Fragment ? Children.toArray(child.props.children) : [child]))
+    .filter((child) => !group || !isValidElement(child) || child.type !== Section || group.sections.includes(child.props.id))
+  return (
+    <LoneSection.Provider value={group?.sections.length === 1 ? group.sections[0] : null}>
+      <PhoneHeader title={title} back={back} action={<span />} />
+      <div className="space-y-7 px-4 pt-2">
+        {description && <p className="m-0 text-[13px] text-soft">{description}</p>}
+        {hub || shown}
+      </div>
+    </LoneSection.Provider>
+  )
+}
+
+function DesktopSettings({ title, description, aside, sections, footer, focus, children }) {
   const [active, setActive] = useState(sections[0]?.id)
+  // A link to one part of the page (from a phone's More tab, say) scrolls to it.
+  useEffect(() => { if (focus) requestAnimationFrame(() => document.getElementById(focus)?.scrollIntoView({ block: 'start' })) }, [focus])
   useEffect(() => {
     if (typeof IntersectionObserver === 'undefined') return undefined
     const observer = new IntersectionObserver((entries) => {
@@ -166,9 +218,8 @@ export function describeBrowser(userAgent) {
   return `${name}${browser[1] === 'Version' && system === 'iPhone' ? '' : ` ${browser[2]}`}${system ? ` on ${system}` : ''}`
 }
 
-// A panel that slides in from the right over the page, like a drawer pulled out of the rack. Escape, the close
-// button and a click outside all close it; focus moves in when it opens and back when it closes.
-export function Drawer({ open, title, description, onClose, children, width = 560 }) {
+// Opening an overlay: focus goes in, Escape closes, the page behind stops scrolling, and focus comes back after.
+function useOverlay(open, onClose) {
   const [shown, setShown] = useState(false)
   useEffect(() => {
     if (!open) { setShown(false); return undefined }
@@ -183,9 +234,36 @@ export function Drawer({ open, title, description, onClose, children, width = 56
       document.body.style.overflow = ''
       if (previous instanceof HTMLElement) previous.focus()
     }
-    // onClose is a new function each render; the drawer only reacts to opening and closing.
+    // onClose is a new function each render; the overlay only reacts to opening and closing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
+  return shown
+}
+
+// On a phone, details open as a sheet from the bottom over the list, so you keep your place. ``title`` may be
+// a node (a name with a chip); ``label`` names the dialog for screen readers.
+export function Sheet({ open, onClose, title, label, children, footer }) {
+  const shown = useOverlay(open, onClose)
+  if (!open) return null
+  return (
+    <div className={`fixed inset-0 z-50 flex items-end transition-colors duration-200 ${shown ? 'bg-black/55' : 'bg-black/0'}`} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+      <div role="dialog" aria-modal="true" aria-label={label || (typeof title === 'string' ? title : undefined)} className={`flex max-h-[88vh] w-full flex-col rounded-t-2xl border-t border-edge bg-ink pb-[env(safe-area-inset-bottom)] transition-transform duration-200 ease-out motion-reduce:transition-none ${shown ? 'translate-y-0' : 'translate-y-full'}`}>
+        <span aria-hidden="true" className="mx-auto mt-2 h-1 w-9 shrink-0 rounded-full bg-edge" />
+        <header className="flex items-start justify-between gap-3 px-4 pb-2 pt-3">
+          <div className="min-w-0 flex-1">{typeof title === 'string' ? <h2 className="m-0 text-[17px] font-semibold text-paper">{title}</h2> : title}</div>
+          <button type="button" autoFocus onClick={onClose} aria-label="Close" className="-mr-1.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted hover:text-paper"><Icon name="close" size={15} /></button>
+        </header>
+        <div className="custom-scroll min-h-0 flex-1 overflow-y-auto px-4 pb-4">{children}</div>
+        {footer && <div className="border-t border-line px-4 py-3">{footer}</div>}
+      </div>
+    </div>
+  )
+}
+
+// A panel that slides in from the right over the page, like a drawer pulled out of the rack. Escape, the close
+// button and a click outside all close it; focus moves in when it opens and back when it closes.
+export function Drawer({ open, title, description, onClose, children, width = 560 }) {
+  const shown = useOverlay(open, onClose)
   if (!open) return null
   return (
     <div className={`fixed inset-0 z-40 flex justify-end transition-colors duration-200 ${shown ? 'bg-black/55' : 'bg-black/0'}`} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>

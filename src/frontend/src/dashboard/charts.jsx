@@ -1,6 +1,6 @@
 // The Overview page's charts. All monochrome: colour is kept for status, so a chart never looks alarming just
 // because of its palette.
-import { useId } from 'react'
+import { useId, useRef, useState } from 'react'
 
 const clock = (time) => (time ? new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '')
 
@@ -22,10 +22,49 @@ export function Sparkline({ values, max = 100, width = 76, height = 18, tone = '
   )
 }
 
+// Touch and hold (or hover with a mouse) to read a value: the nearest point gets a line, a dot and a label above it.
+// ``onHold`` tells the parent while a reading is shown, so a swipe on the same chart isn't taken as one.
+function useReadout(points, onHold) {
+  const [index, setIndex] = useState(null)
+  const timer = useRef(null)
+  const start = useRef(null)
+  const nearest = (event) => {
+    const box = event.currentTarget.getBoundingClientRect()
+    const share = Math.min(1, Math.max(0, (event.clientX - box.left) / box.width))
+    const times = points.map((point) => new Date(point.time).getTime())
+    const target = times[0] + share * (times[times.length - 1] - times[0])
+    let best = null
+    points.forEach((point, position) => { if (point.value != null && (best === null || Math.abs(times[position] - target) < Math.abs(times[best] - target))) best = position })
+    return best
+  }
+  const stop = () => { clearTimeout(timer.current); setIndex(null); onHold?.(false) }
+  return {
+    index,
+    handlers: {
+      onPointerDown: (event) => {
+        if (event.pointerType === 'mouse') return
+        const next = nearest(event)
+        start.current = [event.clientX, event.clientY]
+        clearTimeout(timer.current)
+        timer.current = setTimeout(() => { setIndex(next); onHold?.(true) }, 250)
+      },
+      // A finger that moves before the hold fires is scrolling or swiping, not reading.
+      onPointerMove: (event) => {
+        if (event.pointerType === 'mouse' || index !== null) setIndex(nearest(event))
+        else if (start.current && Math.hypot(event.clientX - start.current[0], event.clientY - start.current[1]) > 8) clearTimeout(timer.current)
+      },
+      onPointerUp: stop, onPointerCancel: stop, onPointerLeave: stop,
+      onContextMenu: (event) => event.preventDefault(),
+    },
+  }
+}
+
 // A line over time with a labelled axis: ``points`` are [{ time, value }], ``max`` the top of the scale and
 // ``ticks`` the values to label. ``area`` shades under the line; ``second`` adds a dashed series on the same scale.
-export function LineChart({ points, second, max, ticks, format = (value) => String(value), area = false, height = 150, label, gutter = 40 }) {
+// ``readout`` (value -> text) turns on reading values by touch-and-hold or hover.
+export function LineChart({ points, second, max, ticks, format = (value) => String(value), area = false, height = 150, label, gutter = 40, readout, onHold }) {
   const gradient = useId()
+  const reading = useReadout(points || [], onHold)
   const usable = (points || []).filter((point) => point.value != null)
   const times = (points || []).map((point) => new Date(point.time).getTime())
   const start = times[0]
@@ -55,6 +94,16 @@ export function LineChart({ points, second, max, ticks, format = (value) => Stri
           {line && <path d={line} fill="none" stroke="var(--color-paper)" strokeWidth="1.4" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />}
         </svg>
         {usable.length < 2 && <span className="absolute inset-0 flex items-center justify-center text-[11px] text-dim">Waiting for a few check-ins</span>}
+        {readout && usable.length > 1 && <div className="absolute inset-0 select-none" style={{ touchAction: 'pan-y', WebkitTouchCallout: 'none' }} {...reading.handlers} />}
+        {readout && reading.index !== null && points[reading.index] && (() => {
+          const point = points[reading.index]
+          const left = x(point.time)
+          return <>
+            <span aria-hidden="true" className="pointer-events-none absolute bottom-0 top-0 w-px bg-paper/70" style={{ left: `${left}%` }} />
+            <span aria-hidden="true" className="pointer-events-none absolute h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-paper bg-bg" style={{ left: `${left}%`, top: `${y(point.value)}%` }} />
+            <span role="status" className="pointer-events-none absolute -top-9 whitespace-nowrap rounded-md border border-edge bg-raised px-2 py-1 text-[11px] font-medium text-paper" style={{ left: `${Math.min(80, Math.max(0, left - 10))}%` }}>{clock(point.time)} · {readout(point.value)}</span>
+          </>
+        })()}
       </div>
       <div aria-hidden="true" className="mt-2 flex justify-between text-[11px] leading-none text-muted" style={{ marginLeft: gutter }}><span>{clock(points?.[0]?.time)}</span><span>{clock(points?.[points.length - 1]?.time)}</span></div>
     </figure>

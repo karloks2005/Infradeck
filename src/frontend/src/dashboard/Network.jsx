@@ -126,11 +126,26 @@ export function NetworkTab({ server, samples, minutes, onTab }) {
             <button type="button" aria-pressed={filter === 'local'} onClick={() => setFilter('local')}>This machine only {total.local}</button>
             <button type="button" aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>All {total.listening}</button>
           </div>
-          <label className="ml-auto flex items-center gap-3 text-xs text-muted">Sort
+          <label className="flex items-center gap-3 text-xs text-muted sm:ml-auto">Sort
             <select className="select" value={sort} onChange={(event) => setSort(event.target.value)}><option value="risk">Risk</option><option value="port">Port</option><option value="owner">Owner</option></select>
           </label>
         </div>
-        <div className="custom-scroll overflow-x-auto">
+        {/* Phones: one card per port instead of a seven-column table. */}
+        <ul className="m-0 list-none border-t border-line p-0 md:hidden">
+          {visible.map((row) => (
+            <li key={`${row.proto}-${row.label}`} className="border-b border-line px-4 py-3 last:border-b-0" style={row.risky ? { boxShadow: 'inset 2px 0 0 var(--color-warn)' } : undefined}>
+              <div className="flex items-baseline gap-2.5">
+                <span className="mono text-[13px] text-paper">{row.proto}/{row.label}</span>
+                <span className={`min-w-0 truncate text-[13px] font-medium ${row.owner ? 'text-paper' : 'text-muted'}`}>{row.owner || 'host process'}</span>
+                <span className={`ml-auto shrink-0 text-xs ${row.scope === 'any' ? 'text-warn' : 'text-soft'}`}>{reach(row)}</span>
+              </div>
+              <div className="mt-1 text-xs text-muted">{[row.ownerKind === 'container' ? `container${row.what ? ` · ${row.what}` : ''}` : null, `bound to ${bound(row)}`, row.rule ? RULE_NAMES[row.rule] || 'allowed' : row.reachable ? 'no firewall rule' : null].filter(Boolean).join(' · ')}</div>
+              {row.reason && <div className="mt-1 text-xs text-muted">{row.reason}</div>}
+            </li>
+          ))}
+          {!visible.length && <li className="px-4 py-6 text-center text-xs text-muted">No ports in this view.</li>}
+        </ul>
+        <div className="custom-scroll relative hidden overflow-x-auto md:block">
           <table className="w-full min-w-[720px] border-collapse text-left text-xs">
             <thead><tr className="grid-head h-10 border-t border-line">
               <th className="w-[80px] pl-[18px] font-medium">Port</th><th className="w-[60px] font-medium">Proto</th><th className="font-medium">Owner</th><th className="w-[100px] font-medium">Bound to</th><th className="w-[120px] font-medium">Reachable from</th><th className="w-[120px] font-medium">Firewall</th><th className="pr-[18px] font-medium"><span className="sr-only">Note</span></th>

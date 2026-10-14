@@ -5,9 +5,9 @@ import { formatTime, splitRuns } from '../chartMath.js'
 import { niceCeiling } from '../dashboard/logic.js'
 import { busiestAt, formatPeriod } from './logic.js'
 
-const GUTTER = 44
-const PAD_RIGHT = 22
-const HATCH = 'repeating-linear-gradient(135deg, transparent 0 5px, color-mix(in srgb, var(--color-paper) 9%, transparent) 5px 6px)'
+export const GUTTER = 44
+export const PAD_RIGHT = 22
+export const HATCH = 'repeating-linear-gradient(135deg, transparent 0 5px, color-mix(in srgb, var(--color-paper) 9%, transparent) 5px 6px)'
 const TONE = { paper: 'var(--color-paper)', warn: 'var(--color-warn)' }
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -62,7 +62,7 @@ export function Plot({ series, previous, start, end, top, ticks, format, bucketS
   )
 }
 
-function nearest(points, time) {
+export function nearest(points, time) {
   if (!points.length) return -1
   let low = 0
   let high = points.length - 1
@@ -75,7 +75,7 @@ function nearest(points, time) {
 }
 
 // Time labels under the timeline: midnights for ranges of days, otherwise evenly spaced clock times.
-function axisTicks(start, end, utc) {
+export function axisTicks(start, end, utc) {
   const span = end - start
   const ticks = []
   if (span > 36 * 3600000 && span <= 40 * 86400000 && !utc) {

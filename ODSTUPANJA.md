@@ -3,7 +3,7 @@
 Popis svega što se u implementaciji redizajna razlikuje od PDF-ova u `design/web/` i `design/mobile/`,
 s razlogom i, gdje postoji, GitHub issueom. Stanje: 14. 10. 2026.
 
-Mobilni prikazi nisu odstupanja nego preostali posao; popisani su na kraju.
+Mobilni prikazi (`design/mobile/`) napravljeni su 14. 10. 2026; njihova odstupanja su u odjeljku „Mobitel i tablet".
 
 Narančasti brojevi u krugovima, oznake „STATE 1", „LOGIN · A" i blokovi „What changed" u PDF-ovima
 su anotacije dizajna i namjerno nisu ugrađeni.
@@ -136,9 +136,28 @@ su anotacije dizajna i namjerno nisu ugrađeni.
 | Database: putanja, rast po tjednu, „Last backup", „Export", „Back up now" | Veličina baze i broj zapisa; gumbi su onemogućeni | Backup ne postoji | – |
 | About: „built 2 Oct 2026" | Samo verzija | Datum builda se ne bilježi | #106 |
 
-## Još nije napravljeno
+## Mobitel i tablet (`design/mobile/`)
 
-| Što | Dizajn | Issue |
-| --- | --- | --- |
-| Mobilni prikazi (osim prijave) | `design/mobile/` | #98 |
-| Provjera na pravom stacku s pravim podacima | – | #107 |
+| Dizajn | Implementacija | Razlog | Issue |
+| --- | --- | --- | --- |
+| Overview: ploča „Agent" s bilješkom nije na mobitelu | Kartica incidenta nema agentovu bilješku | Dizajn je na mobitelu ne prikazuje; bilješka je na ekranu incidenta | – |
+| Server: graf „Disk" uz CPU, Memory i Load | Disk crta najpuniji disk iz povijesti diska (1 h ili 6 h), ne iz živih uzoraka | Živi uzorci nemaju disk | – |
+| Server: tabovi Network, System i Events nisu nacrtani za mobitel | Desktopni sadržaj u jednom stupcu; tablica portova postaje kartice, tablica diskova se pomiče vodoravno | Za te tabove nema mobilnog dizajna | – |
+| Kontejner u sheetu: gumbi Logs i Restart | Prikazani, ali onemogućeni, s objašnjenjem ispod | Isto kao na desktopu | #100 |
+| Statistics: Timeline je zaseban ekran, ulaz nije nacrtan | Na glavnom ekranu je kartica „Timeline" s gumbom „Open timeline"; „Show on timeline" otvara ekran na tom trenutku | Dizajn ne kaže kako se dolazi do ekrana B | – |
+| Statistics: „Time spent at each level" nije na mobitelu | Prikazano ispod „When it's busy" | Dizajn kaže „Same data as desktop" | – |
+| Statistics: legenda „This week / Last week" | „Last 7 days / The previous 7 days" | Isti tekst kao na desktopu | – |
+| Agent: „Show 5 log lines" | „Show N recorded events" | Infradeck ne čita logove kontejnera, nego bilježi događaje | #100 |
+| Agent: „Push alerts are on · Critical only between 23:00 and 07:00" | Redak „Where alerts go" vodi u Account | Infradeck nema push obavijesti na mobitel (nema aplikacije ni Web Pusha) | #50 |
+| Agent chat: oznake izvora ispod odgovora | Običan tekst | Model ne vraća izvore | #93 |
+| More: „Owner" | Owner za admine, Member za ostale | Ne postoji uloga vlasnika | #106 |
+| Security: redovi s strelicom i prekidačem za 2FA | Isti redovi kao na desktopu (gumbi „Change password", „Set up") | Postupci traže lozinku i kod, pa ostaju gumbi | – |
+| Sessions: lokacija i „via WireGuard" | Adresa i vrijeme prijave | Nema geolokacije | – |
+| Notifications: kanal „This iPhone · Push" | Nema | Nema push obavijesti | #50 |
+| Notifications: redovi „Weekly report" i „Email digest 08:00" | Jedna rečenica da još ne postoje | Ne postoje | #33 |
+| Admin: „Infradeck 0.9.3 is out" | Nema; hub prikazuje strojeve koji čekaju | Infradeck ne zove van | – |
+| Admin: „Incident agent · $1.84 of $10" | „chat on/off" ili „no key" | Potrošnja se ne mjeri | #91 |
+| Admin: Connect a server u tri numerirana koraka | Ista kartica kao na desktopu, uz Copy i Share ispod naredbe | Jedna implementacija | – |
+| Admin: „You'll get a push when it connects" | Nema | Nema push obavijesti | #50 |
+| Alert rules: „+" za novo pravilo | Nema | Vlastita pravila ne postoje | – |
+| Tablet: Agent skriva chat iza gumba | Na tabletu su popis, incident i chat jedan ispod drugoga | Tri stupca ostaju od 1200 px; ispod toga slažu se okomito | – |

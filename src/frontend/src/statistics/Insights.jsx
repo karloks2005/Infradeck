@@ -69,19 +69,19 @@ export function BusyHours({ serverId }) {
         {!error && !grid && <p className="m-0 py-10 text-center text-xs text-muted">Loading…</p>}
         {grid && !values.length && <p className="m-0 py-10 text-center text-xs text-muted">Not enough history yet. This fills in as hourly summaries are built.</p>}
         {grid && values.length > 0 && <>
-          <div className="custom-scroll overflow-x-auto"><div className="min-w-[520px]">
+          <div className="custom-scroll overflow-x-auto"><div className="md:min-w-[520px]">
             {grid.map((row, day) => (
-              <div key={DAY_NAMES[day]} className="flex items-center gap-[3px] py-[1.5px]">
-                <span className="w-9 shrink-0 text-[11px] text-muted">{DAY_NAMES[day]}</span>
+              <div key={DAY_NAMES[day]} className="flex items-center gap-[2px] py-[1px] md:gap-[3px] md:py-[1.5px]">
+                <span className="w-8 shrink-0 text-[11px] text-muted md:w-9">{DAY_NAMES[day]}</span>
                 {row.map((value, hour) => (
                   <button key={hour} type="button" aria-label={`${DAY_NAMES[day]} ${pad(hour)}:00, ${value == null ? 'no data' : formatPercent(value)}`}
                     onPointerEnter={() => setHover({ day, hour, value })} onFocus={() => setHover({ day, hour, value })} onPointerLeave={() => setHover(null)} onBlur={() => setHover(null)}
-                    className="h-[22px] flex-1 cursor-default rounded-[3px] border-0 p-0"
+                    className="h-4 min-w-0 flex-1 cursor-default rounded-[2px] border-0 p-0 md:h-[22px] md:rounded-[3px]"
                     style={{ background: value == null ? 'var(--color-sunken)' : `color-mix(in srgb, var(--color-paper) ${Math.round(14 + 86 * Math.min(1, value / cap))}%, var(--color-ink))` }} />
                 ))}
               </div>
             ))}
-            <div className="flex gap-[3px] pt-1.5" aria-hidden="true"><span className="w-9 shrink-0" />{Array.from({ length: 24 }, (_, hour) => <span key={hour} className="flex-1 text-center text-[11px] text-muted">{hour % 3 === 0 ? pad(hour) : ''}</span>)}</div>
+            <div className="flex gap-[3px] pt-1.5" aria-hidden="true"><span className="w-8 shrink-0 md:w-9" />{Array.from({ length: 24 }, (_, hour) => <span key={hour} className={`min-w-0 flex-1 text-center text-[11px] text-muted ${hour % 6 ? 'invisible md:visible' : ''}`}>{hour % 3 === 0 ? pad(hour) : ''}</span>)}</div>
           </div></div>
           <div className="mt-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-xs text-muted">
             <span className="flex items-center gap-2.5" aria-hidden="true">0%<span className="h-2 w-[140px] rounded-sm" style={{ background: 'linear-gradient(90deg, color-mix(in srgb, var(--color-paper) 14%, var(--color-ink)), var(--color-paper))' }} />{cap}%+</span>

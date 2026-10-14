@@ -6,7 +6,8 @@ import { MIN_PASSWORD_LENGTH } from '../auth/AuthPages.jsx'
 import { Icon } from '../icons.jsx'
 import { applyDisplay } from '../prefs.js'
 import { AppShell } from '../shell.jsx'
-import { Check, Field, Notice, Outcome, Row, Section, SettingsLayout, ShownOnce, Switch, ago, describeBrowser, formatDate, useAction, useCopy, useLoaded } from '../ui.jsx'
+import { ACCOUNT_GROUPS } from '../more/groups.js'
+import { Check, Field, Notice, Outcome, Row, Section, SettingsLayout, ShownOnce, Switch, ago, describeBrowser, formatDate, useAction, useCopy, useLoaded, usePhone } from '../ui.jsx'
 
 const COLORS = ['', '#FF5A1F', '#E2B04A', '#6DBE8F', '#7FA7D9', '#B58BD6', '#D98BA4']
 const post = (path, body) => apiRequest(path, { method: 'POST', body: JSON.stringify(body || {}) })
@@ -180,7 +181,30 @@ function Sessions({ days, onCount }) {
   const { data, error, reload } = useLoaded('/auth/sessions')
   const [state, run] = useAction()
   const sessions = data?.sessions
+  const phone = usePhone()
   useEffect(() => { if (sessions) onCount(sessions.length) }, [sessions, onCount])
+  const signOut = (session) => run(async () => { await apiRequest(`/auth/sessions/${session.id}`, { method: 'DELETE' }); reload() })
+  const signOutOthers = () => run(async () => { const result = await post('/auth/sessions/revoke-others'); reload(); return result }, 'Signed out everywhere else.')
+  if (phone) {
+    return (
+      <div className="space-y-3">
+        <div className="divide-y divide-line overflow-hidden rounded-md border border-line bg-ink">
+          {(sessions || []).map((session) => (
+            <div key={session.id} className="flex items-center gap-3 px-4 py-3">
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-2"><span className="truncate text-[15px] text-paper">{describeBrowser(session.user_agent)}</span>{session.current && <span className="chip shrink-0">this device</span>}</span>
+                <span className="mt-0.5 block truncate text-xs text-muted">{[session.ip || 'unknown address', session.created_at ? ago(session.created_at) : 'earlier'].join(' · ')}</span>
+              </span>
+              {!session.current && <button type="button" className="h-10 shrink-0 border-0 bg-transparent px-1 text-[13px] text-soft" disabled={state.busy} onClick={() => signOut(session)}>Sign out</button>}
+            </div>
+          ))}
+          {!sessions && <p className="m-0 px-4 py-5 text-center text-xs text-muted">{error || 'Loading…'}</p>}
+        </div>
+        {sessions?.length > 1 && <button type="button" className="h-12 w-full rounded-md border border-signal/50 bg-transparent text-sm font-medium text-signal" disabled={state.busy} onClick={signOutOthers}>Sign out all other devices</button>}
+        <p className="m-0 text-xs leading-5 text-muted">A session lasts a day, or {days} days if you ticked “Keep me signed in”. <Outcome state={state} /></p>
+      </div>
+    )
+  }
   return (
     <div className="card overflow-hidden">
       <div className="custom-scroll overflow-x-auto"><table className="w-full min-w-[560px] border-collapse text-left text-[13px]">
@@ -213,9 +237,17 @@ function Tokens({ account, reload }) {
   const canWrite = account.role === 'admin'
   const create = (event) => { event.preventDefault(); run(async () => { setCreated(await post('/account/tokens', { name: form.name, scope: form.scope, expires_in_days: form.expires_in_days ? Number(form.expires_in_days) : null })); setAdding(false); setForm({ name: '', scope: 'read', expires_in_days: '' }); reload() }) }
   const expires = (token) => { if (!token.expires_at) return 'never'; const days = Math.ceil((new Date(token.expires_at).getTime() - Date.now()) / 86400000); return days <= 0 ? 'expired' : `in ${days} ${days === 1 ? 'day' : 'days'}` }
+  const phone = usePhone()
+  const revoke = (token) => { if (window.confirm(`Revoke the token “${token.name}”? Whatever uses it stops working at once.`)) run(async () => { await apiRequest(`/account/tokens/${token.id}`, { method: 'DELETE' }); reload() }) }
   return (
     <div className="card overflow-hidden">
-      {account.tokens.length > 0 && <div className="custom-scroll overflow-x-auto"><table className="w-full min-w-[620px] border-collapse text-left text-[13px]">
+      {phone && account.tokens.length > 0 && <div className="divide-y divide-line">{account.tokens.map((token) => (
+        <div key={token.id} className="flex items-center gap-3 px-4 py-3">
+          <span className="min-w-0 flex-1"><span className="block truncate text-[15px] text-paper">{token.name}</span><span className="mt-0.5 block truncate text-xs text-muted">{token.scope === 'write' ? 'read + acknowledge' : 'read · metrics'} · used {ago(token.last_used_at)} · expires {expires(token)}</span></span>
+          <button type="button" className="h-10 shrink-0 border-0 bg-transparent px-1 text-[13px] text-soft" onClick={() => revoke(token)}>Revoke</button>
+        </div>
+      ))}</div>}
+      {!phone && account.tokens.length > 0 && <div className="custom-scroll overflow-x-auto"><table className="w-full min-w-[620px] border-collapse text-left text-[13px]">
         <thead><tr className="grid-head h-10"><th className="pl-[18px] font-medium">Name</th><th className="font-medium">Scope</th><th className="font-medium">Last used</th><th className="font-medium">Expires</th><th className="pr-[18px]" /></tr></thead>
         <tbody>{account.tokens.map((token) => (
           <tr key={token.id} className="h-[54px] border-t border-line">
@@ -223,7 +255,7 @@ function Tokens({ account, reload }) {
             <td><span className={`chip ${token.scope === 'write' ? 'chip-warn' : ''}`}>{token.scope === 'write' ? 'read + acknowledge' : 'read · metrics'}</span></td>
             <td className="text-soft">{ago(token.last_used_at)}</td>
             <td className={expires(token) === 'expired' ? 'text-warn' : 'text-soft'}>{expires(token)}</td>
-            <td className="pr-[18px] text-right"><button type="button" className="link" onClick={() => { if (window.confirm(`Revoke the token “${token.name}”? Whatever uses it stops working at once.`)) run(async () => { await apiRequest(`/account/tokens/${token.id}`, { method: 'DELETE' }); reload() }) }}>Revoke</button></td>
+            <td className="pr-[18px] text-right"><button type="button" className="link" onClick={() => revoke(token)}>Revoke</button></td>
           </tr>
         ))}</tbody>
       </table></div>}
@@ -264,6 +296,7 @@ function Notifications({ account, reload, onPreferences }) {
   const add = (event) => { event.preventDefault(); run(async () => { await post('/account/channels', form.kind === 'email' ? { kind: 'email' } : form); setAdding(false); setForm({ kind: 'ntfy', target: '' }); reload() }) }
   const status = (channel) => (channel.last_ok == null ? ['Not tested', ''] : channel.last_ok ? ['Working', 'chip-ok'] : [`Failed ${ago(channel.last_checked_at)} · ${channel.last_status}`, 'chip-warn'])
   const zone = prefs.display.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone
+  const phone = usePhone()
   return <>
     {!account.secrets_configured && <Notice>Channels can't be saved on this server yet: it has no <span className="mono">SECRETS_KEY</span> to encrypt their addresses with (see docs/accounts.md).</Notice>}
     <div className="card divide-y divide-line overflow-hidden">
@@ -288,7 +321,19 @@ function Notifications({ account, reload, onPreferences }) {
         {!adding && <button type="button" className="btn btn-sm" onClick={() => setAdding(true)}><Icon name="plus" size={13} />Add channel</button>}
       </div>
     </div>
-    {account.channels.length > 0 && (
+    {/* Phones: severity × channel doesn't fit as a grid, so each severity gets a row of on/off chips. */}
+    {phone && account.channels.length > 0 && (
+      <div className="card divide-y divide-line overflow-hidden">
+        {EVENTS.map(([key, label, dot]) => (
+          <div key={key} className="px-4 py-3">
+            <div className="flex items-center gap-2 text-sm text-paper"><span className={`dot ${dot}`} style={{ width: 7, height: 7 }} />{label}</div>
+            <div className="mt-2.5 flex flex-wrap gap-2">{account.channels.map((channel) => { const on = routed(key, channel); return <button key={channel.id} type="button" aria-pressed={on} disabled={state.busy} onClick={() => route(key, channel, !on)} className={`h-9 rounded-full border px-3.5 text-[13px] font-medium ${on ? 'border-paper bg-paper text-bg' : 'border-edge bg-transparent text-muted'}`}>{CHANNELS[channel.kind][1].replace(' webhook', '')}</button> })}</div>
+          </div>
+        ))}
+        <p className="m-0 px-4 py-3 text-xs text-muted">Agent diagnosis ready, a daily digest and a weekly report are not available yet.</p>
+      </div>
+    )}
+    {!phone && account.channels.length > 0 && (
       <div className="card overflow-hidden"><div className="custom-scroll overflow-x-auto"><table className="w-full border-collapse text-left text-[13px]">
         <thead><tr className="grid-head h-10"><th className="pl-[18px] font-medium">Send</th>{account.channels.map((channel) => <th key={channel.id} className="w-[110px] px-2 text-center font-medium">{CHANNELS[channel.kind][1].replace(' webhook', '')}</th>)}</tr></thead>
         <tbody>
@@ -367,8 +412,8 @@ export default function AccountPage({ user, onLogout, onUserChange }) {
 
   const sections = [{ id: 'profile', label: 'Profile' }, { id: 'security', label: 'Security' }, { id: 'sessions', label: 'Sessions', count: sessionCount }, { id: 'tokens', label: 'API tokens', count: account?.tokens.length || null }, { id: 'notifications', label: 'Notifications' }, { id: 'display', label: 'Display' }]
   return (
-    <AppShell user={user} onLogout={onLogout} bare>
-      <SettingsLayout title="Account" description="Your sign-in, where alerts reach you, and how Infradeck looks for you. Server-wide settings live in Admin." sections={sections}
+    <AppShell user={user} onLogout={onLogout} bare phoneHeader>
+      <SettingsLayout groups={ACCOUNT_GROUPS} title="Account" description="Your sign-in, where alerts reach you, and how Infradeck looks for you. Server-wide settings live in Admin." sections={sections}
         footer={<button type="button" onClick={onLogout} className="flex h-[31px] w-full items-center rounded-md border-0 bg-transparent px-2.5 text-left text-[13px] text-muted hover:bg-ink hover:text-paper">Sign out</button>}>
         {(error || status.error) && !account && <Notice>{error || status.error}</Notice>}
         {!account && !error && <p className="m-0 py-16 text-center text-[13px] text-muted">Loading your account…</p>}
@@ -379,7 +424,6 @@ export default function AccountPage({ user, onLogout, onUserChange }) {
           <Section id="tokens" title="API tokens" description="For scripts, Home Assistant or a status page. Tokens act as you, limited to the scope you pick."><Tokens account={account} reload={reload} /></Section>
           <Section id="notifications" title="Notifications" description="Where your alerts go and how loud they are. Critical alerts ignore quiet hours."><Notifications account={account} reload={reload} onPreferences={setPreferences} /></Section>
           <Section id="display" title="Display" description="Only affects how you see Infradeck."><Display account={account} onPreferences={setPreferences} /></Section>
-          <button type="button" onClick={onLogout} className="btn lg:hidden">Sign out</button>
         </>}
       </SettingsLayout>
     </AppShell>

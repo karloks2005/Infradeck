@@ -9,7 +9,8 @@ import {
   CONTAINER_FILTERS, STANDALONE, classifyPort, collapsePaths, collapseRanges, containerUptime, formatMegabytes, formatMegabytesShort, formatPercent, formatSpan, groupContainers, niceCeiling, parsePorts, reachablePortSet,
 } from './logic.js'
 
-const COLUMNS = 'grid-cols-[196px_minmax(140px,1.1fr)_128px_150px_161px_minmax(150px,1fr)_52px_72px]'
+// Tablets drop the Image column; it comes back from 1200 px.
+const COLUMNS = 'grid-cols-[196px_128px_150px_161px_minmax(150px,1fr)_52px_72px] xl:grid-cols-[196px_minmax(140px,1.1fr)_128px_150px_161px_minmax(150px,1fr)_52px_72px]'
 const READ_ONLY_NOTE = 'Infradeck only reads from Docker for now, so it cannot fetch logs or restart a container yet.'
 const FILTER_LABELS = { all: 'All', problems: 'Problems', exposed: 'Exposed', restarted: 'Restarted', stopped: 'Stopped' }
 const APP_PROJECT = /infradeck|homie/i
@@ -127,7 +128,7 @@ function ContainerRow({ server, container, sparkline, scopes, expanded, onToggle
   return <>
     <button type="button" onClick={onToggle} aria-expanded={expanded} className={`grid w-full ${COLUMNS} h-11 items-center border-0 border-t border-solid border-line px-[18px] text-left transition-colors hover:bg-raised ${expanded ? 'bg-raised' : 'bg-transparent'}`}>
       <span className="flex min-w-0 items-center gap-2.5 pl-5 pr-3"><span className={`dot ${problem === 2 ? 'dot-ok' : container.status === 'restarting' || problem === 1 ? 'dot-signal' : 'dot-warn'}`} style={{ width: 6, height: 6 }} /><span className="truncate text-[13px] font-medium text-paper" title={container.name}>{container.name}</span></span>
-      <span className="mono truncate pr-4 text-soft" title={container.image || ''}>{container.image || '—'}</span>
+      <span className="mono hidden truncate pr-4 text-soft xl:block" title={container.image || ''}>{container.image || '—'}</span>
       <span className="min-w-0 pr-3"><StatusText container={container} /></span>
       <span className="flex items-center gap-2 pr-5"><Sparkline values={sparkline} width={80} max={100} /><span className="ml-auto text-xs font-medium text-paper">{formatPercent(container.cpu_pct)}</span></span>
       <span className="pr-5">
@@ -201,9 +202,9 @@ function ContainerTable({ server, view, sparklines }) {
   if (!view.groups.some((group) => group.count)) return <p className="m-0 border-t border-line px-[18px] py-6 text-center text-xs text-muted">No containers match{view.query.trim() ? ` “${view.query.trim()}”` : ' this filter'}.</p>
   return (
     <div className="custom-scroll overflow-x-auto">
-      <div className="min-w-[1060px]">
+      <div className="min-w-[900px] xl:min-w-[1060px]">
         <div className={`grid ${COLUMNS} grid-head h-10 items-center border-t border-line px-[18px]`}>
-          <span>Name</span><span>Image</span><span>Status</span><span>CPU · 15 min</span><span>Memory</span><span>Published ports</span><span className="text-right">Up</span><span className="text-right">Restarts</span>
+          <span>Name</span><span className="hidden xl:block">Image</span><span>Status</span><span>CPU · 15 min</span><span>Memory</span><span>Published ports</span><span className="text-right">Up</span><span className="text-right">Restarts</span>
         </div>
         {view.groups.map((group, index) => {
           const open = view.isOpen(group, index)

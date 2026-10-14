@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-route
 import { useEffect, useState } from 'react'
 import AccountPage from './account/AccountPage.jsx'
 import AdminPage from './admin/AdminPage.jsx'
+import MorePage from './more/MorePage.jsx'
 import AgentPage from './agent/AgentPage.jsx'
 import { apiRequest } from './api.js'
 import { LoginPage, RegisterPage } from './auth/AuthPages.jsx'
@@ -85,6 +86,7 @@ function App() {
         <Route path="/agent" element={page(<AgentPage user={user} onLogout={handleLogout} />)} />
         <Route path="/reports" element={page(<Navigate to="/agent" replace />)} />
         <Route path="/logs" element={page(<Navigate to="/agent" replace />)} />
+        <Route path="/more" element={page(<MorePage user={user} onLogout={handleLogout} />)} />
         <Route path="/account" element={page(<AccountPage user={user} onLogout={handleLogout} onUserChange={(patch) => setUser((current) => (current ? { ...current, ...patch } : current))} />)} />
         <Route path="/admin" element={page(user?.role === 'admin' ? <AdminPage user={user} onLogout={handleLogout} /> : <Navigate to="/" replace />)} />
       </Routes>

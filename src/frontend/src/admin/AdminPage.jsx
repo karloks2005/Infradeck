@@ -1,14 +1,16 @@
 // Settings for this Infradeck instance and everyone who uses it: servers, users, alert rules, the incident
 // agent, how long data is kept, and what version this is.
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { apiRequest } from '../api.js'
 import { AnotherMachineCard, ThisMachineCard } from '../dashboard/EmptyFleet.jsx'
 import { INTERVALS, intervalLabel } from '../dashboard/ServerPanel.jsx'
 import { serverState } from '../dashboard/logic.js'
 import { Icon } from '../icons.jsx'
 import { refreshOverview, useOverview } from '../overviewStore.js'
-import { AppShell } from '../shell.jsx'
-import { Field, Notice, Outcome, Row, Section, SettingsLayout, ShownOnce, Switch, ago, useAction, useLoaded } from '../ui.jsx'
+import { AppShell, serverLink } from '../shell.jsx'
+import { ADMIN_GROUPS } from '../more/groups.js'
+import { Field, Notice, Outcome, Row, Section, SettingsLayout, ShownOnce, Switch, ago, useAction, useLoaded, usePhone } from '../ui.jsx'
 
 const REPOSITORY = 'https://github.com/karloks2005/Infradeck'
 const STATE_DOT = { critical: 'dot-signal', warn: 'dot-warn', ok: 'dot-ok', offline: '' }
@@ -179,6 +181,7 @@ function Users({ me }) {
 }
 
 function Rules({ onCount }) {
+  const phone = usePhone()
   const { data, error, reload } = useLoaded('/admin/rules')
   const [state, run] = useAction()
   const [editing, setEditing] = useState(null)
@@ -190,6 +193,33 @@ function Rules({ onCount }) {
   const open = (rule) => { setEditing(editing === rule.kind ? null : rule.kind); setValues(Object.fromEntries(rule.edit.map((key) => [key, data.thresholds[key]]))) }
   const save = (event) => { event.preventDefault(); run(async () => { await put({ alert_thresholds: Object.fromEntries(Object.entries(values).map(([key, value]) => [key, Number(value)])) }); setEditing(null); reload() }) }
   const off = data.rules.filter((rule) => !rule.enabled)
+  const editor = (rule) => editing === rule.kind && <form onSubmit={save} className="my-2.5 flex flex-wrap items-end gap-2.5">
+    {rule.edit.map((key) => <Field key={key} label={THRESHOLD_LABELS[key] || key}><input type="number" step="any" className="field h-9 w-28" required value={values[key] ?? ''} onChange={(event) => setValues({ ...values, [key]: event.target.value })} /></Field>)}
+    <button type="submit" className="btn btn-sm h-9 btn-primary" disabled={state.busy}>Save</button>
+  </form>
+  // Phones: each rule as one sentence with its severity, how often it fired, and a large switch.
+  if (phone) {
+    return (
+      <div className="space-y-3">
+        <div className="divide-y divide-line overflow-hidden rounded-md border border-line bg-ink">
+          {data.rules.map((rule) => (
+            <div key={rule.kind} className="px-4 py-3">
+              <div className="flex items-center gap-3">
+                <span className="min-w-0 flex-1">
+                  <span className={`block text-[15px] leading-5 ${rule.enabled ? 'text-paper' : 'text-soft'}`}>{rule.when}{rule.window && rule.window !== 'n/a' ? ` · ${rule.window}` : ''}</span>
+                  <span className="mt-1 flex items-center gap-1.5 text-xs text-muted"><span className={`dot ${rule.enabled ? { CRITICAL: 'dot-signal', WARNING: 'dot-warn', INFO: '' }[rule.severity] : ''}`} style={{ width: 6, height: 6 }} />{rule.enabled ? SEVERITY[rule.severity][0] : 'Off'} · {rule.enabled ? `fired ${rule.fired}× in 30 d` : `would have fired ${rule.fired}×`}{rule.noisy && <span className="text-warn"> · noisy</span>}</span>
+                  {rule.edit.length > 0 && <button type="button" className="mt-1.5 h-7 border-0 bg-transparent p-0 text-xs text-soft underline" aria-expanded={editing === rule.kind} onClick={() => open(rule)}>{editing === rule.kind ? 'Close' : 'Change thresholds'}</button>}
+                </span>
+                <span className="origin-right scale-125"><Switch label={rule.when} checked={rule.enabled} disabled={state.busy} onChange={(on) => toggle(rule, on)} /></span>
+              </div>
+              {editor(rule)}
+            </div>
+          ))}
+        </div>
+        <p className="m-0 text-xs leading-5 text-muted">{off.length ? `${off.length} ${off.length === 1 ? 'rule is' : 'rules are'} switched off and open no incidents.` : 'Every rule is on.'} A rule that is switched off also closes the incidents it had open. Rules of your own are not built yet. <Outcome state={state} /></p>
+      </div>
+    )
+  }
   return (
     <div className="card overflow-hidden">
       <div className="custom-scroll overflow-x-auto"><table className="w-full min-w-[760px] border-collapse text-left text-[13px]">
@@ -200,10 +230,7 @@ function Rules({ onCount }) {
               <td className="h-[46px] pl-[18px]"><Switch label={rule.when} checked={rule.enabled} disabled={state.busy} onChange={(on) => toggle(rule, on)} /></td>
               <td className={rule.enabled ? 'text-paper' : ''}>
                 {rule.when}{rule.edit.length > 0 && <button type="button" className="link ml-3 text-xs" aria-expanded={editing === rule.kind} onClick={() => open(rule)}>{editing === rule.kind ? 'close' : 'change'}</button>}
-                {editing === rule.kind && <form onSubmit={save} className="my-2.5 flex flex-wrap items-end gap-2.5">
-                  {rule.edit.map((key) => <Field key={key} label={THRESHOLD_LABELS[key] || key}><input type="number" step="any" className="field h-8 w-28" required value={values[key] ?? ''} onChange={(event) => setValues({ ...values, [key]: event.target.value })} /></Field>)}
-                  <button type="submit" className="btn btn-sm btn-primary" disabled={state.busy}>Save</button>
-                </form>}
+                {editor(rule)}
               </td>
               <td className={rule.enabled ? 'text-soft' : ''}>{rule.window || 'n/a'}</td>
               <td><span className={`chip ${rule.enabled ? SEVERITY[rule.severity][1] : ''}`}>{SEVERITY[rule.severity][0]}</span></td>
@@ -302,6 +329,50 @@ function About({ settings, system, onSaved }) {
   )
 }
 
+// The phone's Admin screen: servers first with their status in each subtitle, then the instance settings as rows.
+function PhoneHub({ overview, settings, system }) {
+  const { data: users } = useLoaded('/admin/users')
+  const { data: rules } = useLoaded('/admin/rules')
+  useEffect(() => { if (window.location.hash === '#instance') requestAnimationFrame(() => document.getElementById('instance')?.scrollIntoView({ block: 'start' })) }, [])
+  if (!overview || !settings || !system) return <p className="m-0 py-16 text-center text-[13px] text-muted">Loading…</p>
+  const row = (to, title, detail, value, dot, tone) => (
+    <Link key={to + title} to={to} className="flex min-h-14 items-center gap-3 px-4 py-2.5">
+      {dot !== undefined && <span className={`dot shrink-0 ${dot}`} />}
+      <span className="min-w-0 flex-1"><span className="block truncate text-[15px] text-paper">{title}</span>{detail && <span className="mt-0.5 block truncate text-xs text-muted">{detail}</span>}</span>
+      {value != null && <span className={`shrink-0 text-[13px] ${tone === 'warn' ? 'text-warn' : 'text-muted'}`}>{value}</span>}
+      <Icon name="chevron" size={14} className="shrink-0 text-muted" />
+    </Link>
+  )
+  const waiting = (overview.pending_collectors || []).filter((item) => item.status === 'pending').length
+  const invited = users ? (users.invites || []).length : 0
+  const on = rules ? rules.rules.filter((rule) => rule.enabled).length : null
+  return <>
+    {waiting > 0 && <Link to="/admin?section=connect" className="flex items-center gap-3 rounded-md border border-warn/40 px-4 py-3"><span className="dot dot-warn shrink-0" /><span className="min-w-0 flex-1 text-[13px] text-paper">{waiting} {waiting === 1 ? 'machine is' : 'machines are'} asking to join</span><Icon name="chevron" size={14} className="text-muted" /></Link>}
+    <section aria-label="Servers">
+      <div className="mb-2.5 flex items-baseline gap-2"><h2 className="m-0 text-[15px] font-semibold text-paper">Servers</h2><span className="text-xs text-muted">{overview.servers.length}</span><Link to="/admin?section=connect" className="ml-auto inline-flex h-7 items-center text-[13px] text-soft">Add</Link></div>
+      <div className="divide-y divide-line overflow-hidden rounded-md border border-line bg-ink">
+        {overview.servers.map((server) => {
+          const version = server.system?.collector_version
+          const detail = [server.ip_address, version ? `collector ${version}` : 'older collector', `every ${intervalLabel(server.check_interval_seconds)}`, server.system?.helper_installed ? null : 'no helper'].filter(Boolean).join(' · ')
+          return row(serverLink(server.id, 'system'), server.hostname, detail, null, STATE_DOT[serverState(server)])
+        })}
+        {!overview.servers.length && <p className="m-0 px-4 py-4 text-[13px] text-muted">No servers yet.</p>}
+      </div>
+      <Link to="/admin?section=servers" className="mt-2 inline-flex h-9 items-center text-[13px] text-soft">Rename, interval or remove →</Link>
+    </section>
+    <section id="instance" aria-label="Instance" className="scroll-mt-4">
+      <h2 className="m-0 mb-2.5 text-[15px] font-semibold text-paper">Instance</h2>
+      <div className="divide-y divide-line overflow-hidden rounded-md border border-line bg-ink">
+        {row('/admin?section=users', 'Users', null, users ? `${users.users.length}${invited ? ` · ${invited} invited` : ''}` : null)}
+        {row('/admin?section=rules', 'Alert rules', null, rules ? `${on} on · ${rules.rules.length - on} off` : null)}
+        {row('/admin?section=agent', 'Incident agent', null, system.agent.key_configured ? (settings.agent_chat_enabled ? 'chat on' : 'chat off') : 'no key', undefined, system.agent.key_configured ? undefined : 'warn')}
+        {row('/admin?section=retention', 'Data and retention', null, megabytes(system.database.bytes))}
+        {row('/admin?section=about', 'About', null, system.version)}
+      </div>
+    </section>
+  </>
+}
+
 export default function AdminPage({ user, onLogout }) {
   const { data: overview } = useOverview(Boolean(user), 15, onLogout)
   const settings = useLoaded('/admin/settings')
@@ -311,8 +382,9 @@ export default function AdminPage({ user, onLogout }) {
   const sections = [{ id: 'servers', label: 'Servers', count: overview?.servers.length ?? null }, { id: 'connect', label: 'Connect a server' }, { id: 'users', label: 'Users' }, { id: 'rules', label: 'Alert rules', count: ruleCount }, { id: 'agent', label: 'Incident agent' }, { id: 'retention', label: 'Data & retention' }, { id: 'about', label: 'About' }]
   const ready = overview && settings.data && system.data
   return (
-    <AppShell user={user} onLogout={onLogout} crumbs={[{ label: 'Admin' }]} bare>
-      <SettingsLayout title="Admin" description="Settings for this Infradeck instance and everyone who uses it." sections={sections}>
+    <AppShell user={user} onLogout={onLogout} crumbs={[{ label: 'Admin' }]} bare phoneHeader>
+      <SettingsLayout title="Admin" description="Settings for this Infradeck instance and everyone who uses it." sections={sections} groups={ADMIN_GROUPS}
+        phoneHub={<PhoneHub overview={overview} settings={settings.data} system={system.data} />} phoneBack={{ label: 'Admin', to: '/admin' }}>
         {(settings.error || system.error) && !ready && <Notice>{settings.error || system.error}</Notice>}
         {!ready && !settings.error && !system.error && <p className="m-0 py-16 text-center text-[13px] text-muted">Loading…</p>}
         {ready && <>

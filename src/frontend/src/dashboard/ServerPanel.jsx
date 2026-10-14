@@ -78,7 +78,7 @@ function OverviewTab({ server, overview, samples, forecasts }) {
   const loadMax = loadPeak <= cores ? cores : niceCeiling(loadPeak)
   const percentTicks = [100, 50, 0]
   return <>
-    <div className="grid divide-y divide-line lg:grid-cols-2 lg:divide-x xl:grid-cols-[1fr_1fr_1fr_331px] xl:divide-y-0">
+    <div className="grid divide-y divide-line md:grid-cols-2 md:divide-x xl:grid-cols-[1fr_1fr_1fr_331px] xl:divide-y-0">
       <Metric label="CPU" value={formatPercent(host.cpu_utilization_pct)}>
         <LineChart label={`CPU use on ${server.hostname}`} points={series('cpu')} max={100} ticks={percentTicks} format={(tick) => `${tick}%`} />
       </Metric>
@@ -86,7 +86,7 @@ function OverviewTab({ server, overview, samples, forecasts }) {
         <LineChart label={`Memory use on ${server.hostname}`} points={series('ram')} max={100} ticks={percentTicks} format={(tick) => `${tick}%`} area />
       </Metric>
       <Metric label="Load (1 min)" value={host.load_1m == null ? '—' : host.load_1m.toFixed(2)} unit={`of ${cores} ${cores === 1 ? 'core' : 'cores'}`}>
-        <LineChart label={`Load on ${server.hostname}`} points={series('load')} max={loadMax} ticks={[loadMax, loadMax / 2, 0]} format={(tick) => String(Number(tick.toFixed(1)))} area height={118} gutter={28} />
+        <LineChart label={`Load on ${server.hostname}`} points={series('load')} max={loadMax} ticks={[loadMax, loadMax / 2, 0]} format={(tick) => String(Number(tick.toFixed(1)))} area gutter={28} />
       </Metric>
       <HealthChecks server={server} />
     </div>

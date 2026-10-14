@@ -14,12 +14,13 @@ import { NetworkCard, NetworkTab, listeningCount } from './Network.jsx'
 import { ServerPanel, TABS } from './ServerPanel.jsx'
 import { SystemTab } from './SystemTab.jsx'
 import { useForecasts, usePolled } from './data.js'
-import { fullestMount, serverMounts, serverState, sortServers } from './logic.js'
-import { Drawer } from '../ui.jsx'
+import { fullestMount, serverMounts, sortServers } from './logic.js'
+import { Drawer, usePhone } from '../ui.jsx'
+import { PhoneHeader } from '../shell.jsx'
+import { PhoneOverview, PhoneServer, headlineParts } from './Phone.jsx'
 
 const RANGES = [15, 30, 60, 180]
 const RANGE_KEY = 'infradeck.overview.minutes'
-const COUNT_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine']
 
 function rememberedRange() {
   try {
@@ -30,18 +31,14 @@ function rememberedRange() {
   }
 }
 
-function headline(servers) {
-  const containers = servers.reduce((sum, server) => sum + (server.containers?.length || 0), 0)
-  const troubled = servers.filter((server) => ['critical', 'offline'].includes(serverState(server))).length || servers.filter((server) => serverState(server) === 'warn').length
-  const count = `${servers.length} ${servers.length === 1 ? 'server' : 'servers'}, ${containers} ${containers === 1 ? 'container' : 'containers'}.`
-  if (!troubled) return `${count} All healthy.`
-  return `${count} ${COUNT_WORDS[troubled] || troubled} ${troubled === 1 ? 'needs' : 'need'} you now.`
-}
+const headline = (servers) => headlineParts(servers, ', ').join(' ')
 
 export default function DashboardPage({ user, onLogout }) {
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
   const { data: overview, error } = useOverview(Boolean(user), LIVE_REFRESH_SECONDS, onLogout)
+  // A phone shows the fleet and one server as separate screens; the desktop shows both, with one server picked.
+  const phone = usePhone()
   const [minutes, setMinutes] = useState(rememberedRange)
   const [showConnect, setShowConnect] = useState(false)
   const [actionError, setActionError] = useState('')
@@ -52,7 +49,7 @@ export default function DashboardPage({ user, onLogout }) {
 
   const servers = useMemo(() => sortServers(overview?.servers || []), [overview])
   const requested = Number(params.get('server'))
-  const selected = servers.find((server) => server.id === requested) || servers.find((server) => server.is_dashboard_host) || servers[0] || null
+  const selected = servers.find((server) => server.id === requested) || (phone ? null : servers.find((server) => server.is_dashboard_host) || servers[0]) || null
   const tab = TABS.includes(params.get('tab')) ? params.get('tab') : 'overview'
   const selectedId = selected?.id ?? null
 
@@ -107,7 +104,7 @@ export default function DashboardPage({ user, onLogout }) {
   }
   const openConnect = () => setShowConnect(true)
 
-  const crumbs = selected && tab !== 'overview' ? [{ label: 'Overview', to: `/?server=${selected.id}` }, { label: selected.hostname }] : [{ label: 'Overview' }]
+  const crumbs = selected && (tab !== 'overview' || phone) ? [{ label: 'Overview', to: `/?server=${selected.id}` }, { label: selected.hostname }] : [{ label: 'Overview' }]
   const pending = overview?.pending_collectors || []
   const waiting = pending.filter((item) => item.status === 'pending')
   const calm = !(overview?.alerts_by_severity?.CRITICAL || overview?.alerts_by_severity?.WARNING)
@@ -155,10 +152,23 @@ export default function DashboardPage({ user, onLogout }) {
     </>
   }
 
+  if (phone && overview && servers.length) {
+    const watch = calm ? nextToWatch(servers, forecasts, (server) => fullestMount(serverMounts(server))) : null
+    body = selected
+      ? <PhoneServer server={selected} overview={overview} tab={tab} onTab={(next) => go(selected.id, next)} isAdmin={isAdmin} onInterval={changeInterval} samples={samples} minutes={minutes} forecasts={forecasts} listening={listeningCount(selected)} error={actionError || error}>
+        {tab === 'network' && <NetworkTab key={selected.id} server={selected} samples={samples} minutes={minutes} onTab={(next) => go(selected.id, next)} />}
+        {tab === 'system' && <SystemTab key={selected.id} server={selected} overview={overview} forecasts={forecasts} isAdmin={isAdmin} onDelete={deleteServer} deleting={deletingId === selected.id} />}
+        {tab === 'events' && <EventsTab key={selected.id} server={selected} pending={pending} isAdmin={isAdmin} onReview={openConnect} />}
+      </PhoneServer>
+      : <PhoneOverview overview={overview} servers={servers} isAdmin={isAdmin} waiting={waiting} sparklines={fleetLines?.servers} watch={watch} error={actionError || error} onAttention={onAttention} onConnect={openConnect} />
+  } else if (phone) {
+    body = <><PhoneHeader mark title="Overview" /><div className="px-4 pt-4">{body}</div></>
+  }
+
   return (
-    <AppShell user={user} onLogout={onLogout} crumbs={crumbs} bare>
-      <div className="space-y-8 px-3 pt-5 sm:px-4 lg:px-7 lg:pt-7">{body}</div>
-      {isAdmin && <Drawer open={showConnect && servers.length > 0} onClose={() => setShowConnect(false)} title="Connect a server" description="Run one command on the machine, then add it when it shows up here. The fleet behind this panel updates by itself.">
+    <AppShell user={user} onLogout={onLogout} crumbs={crumbs} bare phoneHeader={phone}>
+      {phone ? body : <div className="space-y-8 px-3 pt-5 sm:px-4 lg:px-7 lg:pt-7">{body}</div>}
+      {isAdmin && <Drawer open={showConnect && (servers.length > 0 || phone)} onClose={() => setShowConnect(false)} title="Connect a server" description="Run one command on the machine, then add it when it shows up here. The fleet behind this panel updates by itself.">
         {pending.some((item) => item.status === 'pending' && item.details?.dashboard_host) && <ThisMachineCard pending={pending} onChanged={refreshOverview} recommended={false} />}
         <AnotherMachineCard pending={pending} onChanged={refreshOverview} />
       </Drawer>}
