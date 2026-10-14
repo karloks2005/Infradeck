@@ -16,7 +16,7 @@ right to look at other users' processes (CAP_SYS_PTRACE and CAP_DAC_READ_SEARCH)
 any file on the host. It therefore runs as its own container, so enabling the kernel-log helper never grants
 it, and it publishes nothing but protocol, port and process name.
 
-Standard library only. Run with ``python -m src.agent.system_helper`` or as a standalone script.
+Standard library only. Run with ``python -m src.collector.system_helper`` or as a standalone script.
 """
 from __future__ import annotations
 

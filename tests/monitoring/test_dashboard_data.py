@@ -13,7 +13,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from src.agent import collector, system_helper
+from src.collector import collector, system_helper
 from src.backend import dashboard, main
 from src.backend.models import Base, ContainerMetric, HostMetric, IncidentAlert, PendingCollector, Server, SystemEvent, User
 from tests.fakes import FakeRedis

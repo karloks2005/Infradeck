@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import datetime, timezone
 
-from . import agent_jobs
+from ..agent import jobs as agent_jobs
 from .models import IncidentAlert
 
 INFO, WARNING, CRITICAL = "INFO", "WARNING", "CRITICAL"

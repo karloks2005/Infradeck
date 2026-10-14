@@ -295,7 +295,7 @@ def test_server_ids_in_the_address_must_fit_too(app, path):
 # --- the smaller points from the review ------------------------------------------------------------------------------------------
 
 def test_the_assistants_memory_of_chats_is_bounded_and_forgets_the_least_recently_used(monkeypatch):
-    from src.agent import service
+    from src.agent import chat as service
 
     instance = object.__new__(service.AgentService) if hasattr(service, "AgentService") else None
     if instance is None:
@@ -327,7 +327,7 @@ def test_a_limited_session_expires_sooner_than_a_full_one(app):
 
 
 def test_collector_credentials_are_created_private_from_the_start(tmp_path):
-    from src.agent import collector
+    from src.collector import collector
 
     path = tmp_path / "state" / "credentials.json"
     collector.save_credentials(7, "secret-token", path)

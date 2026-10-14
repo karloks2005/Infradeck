@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from src.agent import collector, system_helper as helper
+from src.collector import collector, system_helper as helper
 from src.backend import main
 from src.backend.models import Base, IncidentAlert, Server, SystemEvent, User
 

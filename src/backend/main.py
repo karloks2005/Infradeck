@@ -27,7 +27,7 @@ from sqlalchemy import case, func, inspect, text
 from .alerts import CONTAINER_RULE_PREFIX, CRITICAL, SERVER_OFFLINE_RULE, SEVERITIES, active_rule_keys, raise_alert, resolve_alerts, sync_alerts
 import contextvars
 
-from . import agent_jobs, agent_usage, auth, dashboard, history as history_service, incidents, notify, rollups, secrets_box, stats, totp
+from . import auth, dashboard, history as history_service, incidents, notify, rollups, secrets_box, stats, totp
 from .auth import (
     STAGE_ENROLLMENT, STAGE_FULL, count_pending_attempt, create_pending_two_factor, create_session, delete_pending_two_factor, delete_session, get_recent_logs,
     get_session, get_user_from_session, hash_password, issue_recovery_codes, list_user_sessions, pending_two_factor_remember, read_pending_two_factor, session_lifetime, recovery_codes_left, record_audit_log,
@@ -64,8 +64,9 @@ from .config import (
 )
 from .rules import HELPER_EVENT_KINDS, DEFAULT_THRESHOLDS, HOST_RULE_PREFIX, container_rules, host_rules, validate_thresholds, detect_system_events, system_rules, SYSTEM_RULE_PREFIX, validate_mount_thresholds, validate_helper_events, REBOOT_DETAILS, REBOOT_KEY_PREFIX, detect_container_events, memory_trend_rules, CONTAINER_EVENT_KINDS, MAX_CONTAINER_EVENTS_PER_CHECKIN, MAX_CONTAINER_EVENTS_PER_HOUR, TREND_RULE_PREFIX, NETWORK_EVENT_KINDS, NETWORK_RULE_PREFIX, MAX_NETWORK_EVENTS_PER_CHECKIN, MAX_NETWORK_EVENTS_PER_HOUR, INTERNET_STATUSES, LISTENER_SCOPES, LISTENER_PROTOCOLS, MAX_LISTENERS, FIREWALL_LABELS, detect_listener_changes, detect_firewall_changes, network_rules, validate_listeners, validate_firewall
 from .rate_limit import enforce_ip_limit, enforce_limit, enforce_login_limit, enforce_register_limit, refund_attempt, reset_limits
+from ..agent import jobs as agent_jobs, usage as agent_usage
 from ..agent.providers import configured_key
-from ..agent.service import check_provider_connection, delete_agent_conversation, send_agent_message
+from ..agent.chat import check_provider_connection, delete_agent_conversation, send_agent_message
 
 
 class RegisterRequest(BaseModel):
@@ -231,7 +232,7 @@ def agent_error_message(exc: Exception) -> str:
 
 
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-# Jobs for the agent worker are published after the commit that opened or escalated an incident (see agent_jobs).
+# Jobs for the agent worker are published after the commit that opened or escalated an incident (see src/agent/jobs.py).
 agent_jobs.redis_getter = lambda: redis_client
 # The interactive API documentation is a map of every endpoint, so it is off unless ENABLE_API_DOCS=true.
 app = FastAPI(title="Infradeck API", docs_url="/docs" if ENABLE_API_DOCS else None, redoc_url=None, openapi_url="/openapi.json" if ENABLE_API_DOCS else None)

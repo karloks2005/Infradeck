@@ -3,7 +3,7 @@
 FROM python:3.12-alpine
 
 WORKDIR /app
-COPY src/agent/system_helper.py ./system_helper.py
+COPY src/collector/system_helper.py ./system_helper.py
 
 ENV HOST_PROC=/proc \
     INFRADECK_WTMP_PATH=/host/wtmp \

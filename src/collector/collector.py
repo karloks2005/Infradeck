@@ -6,7 +6,7 @@ it receives its token (no restart) and saves it under INFRADECK_STATE_DIR.
 INFRADECK_JOIN_TOKEN (from the dashboard's Connect a server command) proves who asked it to join.
 INFRADECK_ENROLL_KEY skips the approval step for automated installs, and
 INFRADECK_SERVER_ID / INFRADECK_COLLECTOR_TOKEN still work as explicit credentials.
-Run with ``python -m src.agent.collector`` or as a standalone script (standard
+Run with ``python -m src.collector.collector`` or as a standalone script (standard
 library only; it ships as a container image). Docker access is optional; when
 the socket is unavailable, host metrics continue to be sent.
 """

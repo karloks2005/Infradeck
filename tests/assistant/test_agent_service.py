@@ -2,7 +2,7 @@ import threading
 
 import pytest
 
-from src.agent.service import AgentService
+from src.agent.chat import AgentService
 
 
 class FakeResponse:
@@ -66,7 +66,7 @@ def test_arbitrary_command_is_rejected_before_execution():
 
 from types import SimpleNamespace
 
-from src.agent import service as agent_service
+from src.agent import chat as agent_service
 from src.agent.providers import Completion, OpenAIProvider
 
 

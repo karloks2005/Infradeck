@@ -92,7 +92,7 @@ What it can and cannot do:
   (not logins, users or addresses).
 - **Reads, never writes, the kernel log:** it uses the non-destructive read-all call.
 - **No code is fetched from the dashboard.** The helper is built from this repository. Review
-  `src/agent/system_helper.py` (about 200 lines, standard library only) before enabling it.
+  `src/collector/system_helper.py` (about 200 lines, standard library only) before enabling it.
 
 How its output is treated as untrusted:
 
@@ -125,7 +125,7 @@ Be clear about what you are granting:
 - **What leaves it:** protocol, port and process name, at most 512 entries. A process can name itself
   anything, so the name is reduced to printable characters and 64 characters; the collector reads the
   file with `O_NOFOLLOW`, a size cap and a freshness check, and the backend validates it again.
-- It is the same single file as the system helper (`src/agent/system_helper.py`), in a different mode.
+- It is the same single file as the system helper (`src/collector/system_helper.py`), in a different mode.
 
 ## The Docker socket and the read-only proxy
 
@@ -154,7 +154,7 @@ compose files the collector **does not mount the socket**. A separate `docker-pr
   and images already are. If a path itself is sensitive, don't put it in a container's mounts.
 - It runs with all capabilities dropped, a read-only filesystem and `no-new-privileges`, with no
   network at all. It listens on a Unix socket (mode 0660) in a volume that only the collector shares.
-- It is one standard-library file, `src/agent/docker_proxy.py`, built from this repository. Review it
+- It is one standard-library file, `src/collector/docker_proxy.py`, built from this repository. Review it
   before trusting it: it is the one piece that holds the socket.
 
 A compromised collector can therefore read what it already reports (container names, states,

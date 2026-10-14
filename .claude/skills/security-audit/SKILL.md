@@ -22,10 +22,10 @@ tek kad korisnik to izričito zatraži.
 |---|---|
 | `full` | sve dolje, redom |
 | `backend` | `src/backend/**` |
-| `collector` | `src/agent/**` (collector, docker_proxy, system_helper, assistant, health_checks) |
+| `collector` | `src/collector/**` (collector, docker_proxy, system_helper) |
 | `infra` | `docker/**`, `*compose*.yml`, `example.env`, `.github/**`, `.gitignore`, `.dockerignore` |
 | `frontend` | `src/frontend/**` |
-| `assistant` | LLM asistent: `src/agent/{service,prompts,health_checks}.py`, `SYSTEM_PROMPT.md`, konverzacije u backendu |
+| `assistant` | Incident agent: `src/agent/**` (providers, chat, prompts, health_checks, jobs, worker, usage), `SYSTEM_PROMPT.md`, konverzacije u backendu |
 | `<path>` | taj put (datoteka ili direktorij) plus ono što ga poziva |
 | `diff` | samo neprihvaćene promjene (`git diff` + `git diff --staged`) pročitane u kontekstu cijelih datoteka |
 

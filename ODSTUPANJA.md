@@ -14,7 +14,7 @@ su anotacije dizajna i namjerno nisu ugrađeni.
 | --- | --- | --- | --- |
 | „karlo's homelab" kao ime instance | Zadano se izvodi iz imena prvog admina; mijenja se u Admin → General | – | – |
 | „Owner" ispod imena korisnika | „Owner" se prikazuje svakom adminu, „Member" svima ostalima | Ne postoji uloga vlasnika | #106 |
-| Verzija `v0.9.2` | Konstanta u `src/backend/config.py` i druga u `src/agent/collector.py` | Nema jednog izvora verzije pri buildu | #106 |
+| Verzija `v0.9.2` | Konstanta u `src/backend/config.py` i druga u `src/collector/collector.py` | Nema jednog izvora verzije pri buildu | #106 |
 | Prečac `⌘K` | Na Linuxu i Windowsu piše `Ctrl K` | Prikazuje se prečac koji stvarno radi na tom sustavu | – |
 
 ## Overview (`01-dashboard.pdf`, `06-dashboard-empty-states.pdf`)

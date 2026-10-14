@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from src.agent import collector
+from src.collector import collector
 from src.backend import alerts, main, rules
 from src.backend.models import Base, ContainerMetric, HostMetric, IncidentAlert, Server, SystemEvent, User
 

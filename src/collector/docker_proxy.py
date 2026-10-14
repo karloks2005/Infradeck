@@ -18,7 +18,7 @@ inspect output is where a container's environment variables (often secrets) live
 leave this process. Paths are matched literally, with no decoding or normalisation, so there is
 nothing for traversal or encoding tricks to work on.
 
-Standard library only. Run with ``python -m src.agent.docker_proxy`` or as a standalone script.
+Standard library only. Run with ``python -m src.collector.docker_proxy`` or as a standalone script.
 """
 from __future__ import annotations
 

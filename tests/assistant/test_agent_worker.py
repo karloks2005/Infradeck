@@ -9,7 +9,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from src.agent import worker
-from src.backend import agent_jobs, alerts
+from src.agent import jobs as agent_jobs
+from src.backend import alerts
 from src.backend.models import Base, IncidentAlert, Server
 from tests.fakes import FakeRedis
 

@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from src.agent import collector
+from src.collector import collector
 from src.backend import main
 from src.backend.models import Base, EnrollmentKey, IncidentAlert, Server, User
 
@@ -135,7 +135,7 @@ def test_machine_id_read_from_host_root(tmp_path, monkeypatch):
 
 
 def test_a_collector_from_before_the_rename_keeps_its_credentials_and_settings(tmp_path, monkeypatch):
-    from src.agent import collector
+    from src.collector import collector
     legacy = tmp_path / "homelab-collector"
     legacy.mkdir()
     (legacy / "credentials.json").write_text('{"server_id": 4, "token": "t"}')

@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler
 
 import pytest
 
-from src.agent import collector, docker_proxy as proxy
+from src.collector import collector, docker_proxy as proxy
 
 CID = "a" * 64
 SECRET = "SUPER_SECRET_TOKEN_123"

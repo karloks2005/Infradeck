@@ -1,6 +1,6 @@
 import os
 
-from src.agent import collector
+from src.collector import collector
 
 MOUNTS = """\
 /dev/sda1 / ext4 rw 0 0

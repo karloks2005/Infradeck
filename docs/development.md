@@ -84,12 +84,17 @@ src/
     totp.py                 one-time codes and recovery codes (standard library only)
     secrets_box.py          encrypts stored secrets with SECRETS_KEY; also prints a new key
     reset_2fa.py            command-line two-factor reset for a locked-out account
-  agent/
-    collector.py            metrics collector (standard library only)
-    docker_proxy.py         read-only Docker API proxy (standard library only)
-    system_helper.py        optional kernel-log / wtmp helper (standard library only)
-    health_checks.py        read-only checks available to the assistant
-    service.py, prompts.py, providers.py  incident agent chat (OpenAI)
+  agent/                    the incident agent; runs in the backend (chat) and the agent-worker container
+    providers.py            the language model behind one interface (OpenAI)
+    chat.py, prompts.py, SYSTEM_PROMPT.md  the incident chat and its instructions
+    health_checks.py        the fixed, read-only checks the agent may ask for
+    jobs.py                 job queue in Redis: published after an incident opens or worsens
+    worker.py               the agent-worker container: runs the queued jobs
+    usage.py                tokens, cost per model, monthly budget, daily chat limit
+  collector/                runs on every monitored machine, each file its own small image (standard library only)
+    collector.py            metrics collector
+    docker_proxy.py         read-only Docker API proxy
+    system_helper.py        optional kernel-log / wtmp / port-owners helper
   frontend/                 React + Tailwind dashboard (Vite); charts.jsx and chartMath.js are the
                             charts (distributions.jsx: columns, donut, bars, heatmap), StatisticsPage.jsx,
                             FleetStatistics.jsx, ServerInsights.jsx and ContainerStatistics.jsx the page

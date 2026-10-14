@@ -11,10 +11,10 @@ razilaze, **vjeruj kodu** i to prijavi kao nalaz o dokumentaciji.
 | Backend (FastAPI) | `src/backend` | Postgres, interni mrežni segment | obrađuje sve ulaze |
 | Postgres | `docker/postgres/init` | samo backend | sadrži hashove, šifrirane TOTP tajne, podatke o hostovima |
 | Collector gate | `docker/nginx.collector.conf` | backend; jedan port na VPN adresi | jedini put do collector endpointa |
-| Collector | `src/agent/collector.py` | `/proc` hosta, host FS read-only (`/hostfs`), Docker proxy, backend preko HTTP-a | pokreće se na udaljenim hostovima, može biti kompromitiran |
-| Docker proxy | `src/agent/docker_proxy.py` | Docker socket (uid 0), Unix socket prema collectoru | drži root-ekvivalentan pristup; mora ostati minimalan |
-| System helper (opcionalno) | `src/agent/system_helper.py` | kernel log, wtmp, `CAP_SYSLOG` | privilegiran; njegov izlaz je nepouzdan |
-| LLM asistent | `src/agent/service.py`, `prompts.py`, `SYSTEM_PROMPT.md`, `health_checks.py` | fiksni read-only provjere, opcionalni webhook | ulaz uključuje podatke s hosta |
+| Collector | `src/collector/collector.py` | `/proc` hosta, host FS read-only (`/hostfs`), Docker proxy, backend preko HTTP-a | pokreće se na udaljenim hostovima, može biti kompromitiran |
+| Docker proxy | `src/collector/docker_proxy.py` | Docker socket (uid 0), Unix socket prema collectoru | drži root-ekvivalentan pristup; mora ostati minimalan |
+| System helper (opcionalno) | `src/collector/system_helper.py` | kernel log, wtmp, `CAP_SYSLOG` | privilegiran; njegov izlaz je nepouzdan |
+| LLM asistent | `src/agent/chat.py`, `prompts.py`, `SYSTEM_PROMPT.md`, `health_checks.py` | fiksni read-only provjere, opcionalni webhook | ulaz uključuje podatke s hosta |
 | CI | `.github/workflows/images.yml` | GHCR, cosign | opskrbni lanac za slike koje hostovi izvršavaju |
 
 Izvan repozitorija (nisu u opsegu, ali ih treba imati na umu kao pretpostavke): Traefik pred

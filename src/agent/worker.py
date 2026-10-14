@@ -1,4 +1,4 @@
-"""The agent worker: takes jobs from the queue in Redis (see src/backend/agent_jobs.py) and runs them one at a time.
+"""The agent worker: takes jobs from the queue in Redis (see src/agent/jobs.py) and runs them one at a time.
 
 It runs in its own container, so a slow or stuck model never holds up the backend, and stopping it only means
 incidents wait for their diagnosis; everything else keeps working. Run with ``python -m src.agent.worker``;
@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 
-from src.backend import agent_jobs, agent_usage
+from src.agent import jobs, usage
 from src.backend.config import REDIS_URL
 from src.backend.db import SessionLocal
 from src.backend.models import IncidentAlert
@@ -33,14 +33,14 @@ def handle_incident(job: dict) -> tuple[str, str]:
             return "skipped", "The incident no longer exists."
         if incident.status != "active":
             return "skipped", "The incident was already resolved."
-        if agent_usage.budget(db)["state"] == "paused":
+        if usage.budget(db)["state"] == "paused":
             return "skipped", "This month's budget for the agent is used up."
         return "noted", "Automatic diagnosis is not built yet (#116); the incident keeps its rule-based diagnosis."
     finally:
         db.close()
 
 
-HANDLERS = {agent_jobs.OPENED: handle_incident, agent_jobs.WORSENED: handle_incident}
+HANDLERS = {jobs.OPENED: handle_incident, jobs.WORSENED: handle_incident}
 
 
 def run_with_timeout(handler, job: dict, seconds: float) -> tuple[str, str]:
@@ -74,13 +74,13 @@ def process(redis_client, raw: str, handlers=None, timeout: float = JOB_TIMEOUT_
         job = json.loads(raw)
         handler = handlers[job["type"]]
     except (ValueError, KeyError, TypeError):
-        agent_jobs.finish(redis_client, raw, {"type": "unknown"}, "failed", "Not a job this worker knows.")
+        jobs.finish(redis_client, raw, {"type": "unknown"}, "failed", "Not a job this worker knows.")
         return "failed"
     try:
         status_text, note_text = run_with_timeout(handler, job, timeout)
     except Exception as exc:
-        return agent_jobs.retry_or_fail(redis_client, raw, job, f"{type(exc).__name__}: {exc}", round((time.monotonic() - started) * 1000))
-    agent_jobs.finish(redis_client, raw, job, status_text, note_text, round((time.monotonic() - started) * 1000))
+        return jobs.retry_or_fail(redis_client, raw, job, f"{type(exc).__name__}: {exc}", round((time.monotonic() - started) * 1000))
+    jobs.finish(redis_client, raw, job, status_text, note_text, round((time.monotonic() - started) * 1000))
     return status_text
 
 
@@ -90,19 +90,19 @@ def main() -> int:
     # Waiting for a job blocks for POLL_SECONDS, so reads must be allowed to take longer than that.
     client = redis.Redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=POLL_SECONDS + 10, socket_connect_timeout=5)
     if "--health" in sys.argv:
-        return 0 if client.get(agent_jobs.HEARTBEAT) else 1
+        return 0 if client.get(jobs.HEARTBEAT) else 1
 
     stopping = threading.Event()
     for name in (signal.SIGTERM, signal.SIGINT):
         signal.signal(name, lambda *_: stopping.set())
-    started_at = agent_jobs.now_iso()
-    recovered = agent_jobs.recover(client)
+    started_at = jobs.now_iso()
+    recovered = jobs.recover(client)
     print(f"Agent worker started{f'; {recovered} unfinished jobs back in the queue' if recovered else ''}.", flush=True)
     while not stopping.is_set():
         try:
-            agent_jobs.beat(client, started_at)
-            agent_jobs.promote_due(client)
-            raw = agent_jobs.take(client, POLL_SECONDS)
+            jobs.beat(client, started_at)
+            jobs.promote_due(client)
+            raw = jobs.take(client, POLL_SECONDS)
             if raw is not None:
                 outcome = process(client, raw)
                 print(f"Agent job {outcome}: {raw[:200]}", flush=True)

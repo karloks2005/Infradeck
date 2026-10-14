@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from src.agent import collector
+from src.collector import collector
 from src.backend import main
 from src.backend.models import Base, ContainerMetric, Server, User
 

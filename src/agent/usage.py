@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func
 
-from .models import AgentRun, AppSetting
+from ..backend.models import AgentRun, AppSetting
 
 PRICES_KEY = "agent_prices"
 CAP_KEY = "agent_monthly_cap_usd"

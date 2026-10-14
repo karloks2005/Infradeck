@@ -1,4 +1,4 @@
-# Kontrolna lista: collector, docker proxy, system helper, LLM asistent (`src/agent/**`)
+# Kontrolna lista: collector, docker proxy, system helper (`src/collector/**`), incident agent (`src/agent/**`)
 
 Čitaj `collector.py`, `docker_proxy.py`, `system_helper.py`, `health_checks.py`, `service.py`,
 `prompts.py`, `main.py`, `utils.py` i `SYSTEM_PROMPT.md` u cijelosti. Docker proxy i system
