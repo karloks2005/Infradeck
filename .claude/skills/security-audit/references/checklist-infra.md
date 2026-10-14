@@ -2,7 +2,7 @@
 
 Čitaj `docker/*` (Dockerfile-ove, `nginx*.conf`, `Caddyfile`, `postgres/init/*.sql`),
 `compose.yml`, `docker-compose.server.yml`, `collector-compose.yml`, `example.env`,
-`.env.example`, `.dockerignore`, `.gitignore`, `.github/workflows/*.yml`, `requirements*.txt`,
+`.dockerignore`, `.gitignore`, `.github/workflows/*.yml`, `requirements*.txt`,
 `src/frontend/package.json` + lockfile.
 
 ## 1. Dockerfile-ovi
@@ -108,8 +108,8 @@ Ovo je opskrbni lanac slika koje hostovi pokreću s root-ekvivalentnim pristupom
 
 - [ ] `.gitignore` pokriva `.env`, `*.db`, `*.sqlite`, ključeve, `venv`, `node_modules`.
       `git ls-files | grep -Ei '\.env$|\.db$|\.sqlite|\.pem$|\.key$|id_rsa|secret|credential'`:
-      što je **pod gitom**? (`dev.db` je ranije bio.) `.env` i `.env.example` obje postoje:
-      provjeri da `.env.example` nema stvarne vrijednosti.
+      što je **pod gitom**? (`dev.db` je ranije bio.) `.env` i `example.env` obje postoje:
+      provjeri da `example.env` nema stvarne vrijednosti.
 - [ ] **Povijest:** `git log --all --diff-filter=A --name-only | grep -Ei '\.env|\.db|key|secret'`
       i pretraga uzoraka tajni (`git log -p --all -S'SECRET' -S'PASSWORD' -S'TOKEN'` na
       razumnom opsegu). Tajna koja je ikad bila u povijesti smatra se kompromitiranom čak i

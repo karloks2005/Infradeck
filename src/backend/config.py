@@ -1,10 +1,14 @@
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 
 BASE_DIR = Path(__file__).resolve().parents[2]
-load_dotenv(BASE_DIR / ".env")
+# example.env lists every setting with an empty value; an empty line means "use the default", as it does in
+# the compose files, so only lines with a value are loaded. Variables already set in the environment win.
+for _name, _value in dotenv_values(BASE_DIR / ".env").items():
+    if _value:
+        os.environ.setdefault(_name, _value)
 
 # Shown in the sidebar and compared with what each collector reports.
 APP_VERSION = "0.9.2"

@@ -4,15 +4,20 @@
 
 ## Stack (`.env` next to the Compose file)
 
+Every setting below is listed, with no values, in [`example.env`](../example.env): copy it to `.env` and fill in what you need. An empty value means the default shown here.
+
 | Variable | Default | Description |
 |---|---|---|
 | `POSTGRES_PASSWORD` | *(required)* | PostgreSQL password. |
+| `POSTGRES_DB` / `POSTGRES_USER` | `infradeck` / `infradeck` | Name of the database and its user. Installs from before the rename can keep `homelab` (see [SETUP_DATABASES.md](../SETUP_DATABASES.md)). |
 | `REDIS_PASSWORD` | *(required)* | Redis password. Redis holds the login sessions, so nothing that can merely reach it may use it. Use letters and digits only (`openssl rand -hex 24`) because it is put into a URL. |
 | `GEMINI_API_KEY` | empty | Enables the Homie chat assistant. |
 | `AGENT_MODEL` | `models/gemini-3.5-flash` | Gemini model for the assistant. |
 | `ADMIN_ALERT_WEBHOOK_URL` | empty | Receives JSON alerts for critical `daily_checkup` findings. |
 | `SESSION_COOKIE_SECURE` | `false` (dev), `true` (server file) | Send the login cookie over HTTPS only. |
-| `SESSION_TTL_SECONDS` | `86400` | Session lifetime. |
+| `SESSION_TTL_SECONDS` | `86400` | Session lifetime without *Remember me*. |
+| `SESSION_COOKIE_NAME` | `homie_session` | Name of the sign-in cookie. Change it only if it clashes with another app on the same domain. |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_STARTTLS` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | empty / `587` / `true` / empty / empty / empty | Email for incident notifications. Email is off unless `SMTP_HOST` and `SMTP_FROM` are set. |
 | `ALLOW_REGISTRATION` | `false` | Let anyone create an account. When `false` (the default), only the first account can be created. Turning it on prints a security warning at every start. |
 | `MAX_SERVERS` | `200` | The most servers the install holds, however they are added (enrollment key, approval or by hand). |
 | `INGEST_MIN_SPACING_RATIO` | `0.25` | A check-in must arrive at least this share of the server's check interval (and never sooner than 5 seconds) after the previous one, or it is refused with 429. `0` switches the limit off. |

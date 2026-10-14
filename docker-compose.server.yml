@@ -66,6 +66,13 @@ services:
       REGISTER_RATE_LIMIT: ${REGISTER_RATE_LIMIT:-3}
       REGISTER_RATE_WINDOW_SECONDS: ${REGISTER_RATE_WINDOW_SECONDS:-3600}
       ADMIN_ALERT_WEBHOOK_URL: ${ADMIN_ALERT_WEBHOOK_URL:-}
+      # Email notifications (Account → Notifications). Off unless SMTP_HOST and SMTP_FROM are set.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
       # Limits on what collectors can do. A check-in must come at least this share of the check interval after the
       # previous one (0 switches it off); the install holds at most MAX_SERVERS; /docs is off unless enabled.
       INGEST_MIN_SPACING_RATIO: ${INGEST_MIN_SPACING_RATIO:-0.25}

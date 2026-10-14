@@ -119,7 +119,7 @@ stack splits them as described above.
 Requirements: Docker with Compose v2.
 
 ```bash
-cp .env.example .env              # then set POSTGRES_PASSWORD and REDIS_PASSWORD (openssl rand -hex 24)
+cp example.env .env               # then set POSTGRES_PASSWORD and REDIS_PASSWORD (openssl rand -hex 24)
 docker compose up -d --build
 ```
 
