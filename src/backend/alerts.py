@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import datetime, timezone
 
+from . import agent_jobs
 from .models import IncidentAlert
 
 INFO, WARNING, CRITICAL = "INFO", "WARNING", "CRITICAL"
@@ -32,9 +33,14 @@ def raise_alert(db, server_id: int, rule_key: str, severity: str, title: str, de
         raise ValueError(f"Unknown severity: {severity}")
     existing = _active(db, server_id).filter(IncidentAlert.rule_key == rule_key).first()
     if existing:
+        # A more severe state is worth a new look by the agent; the same or a milder one is not.
+        if agent_jobs.SEVERITY_RANK.get(severity, 0) > agent_jobs.SEVERITY_RANK.get(existing.severity, 0):
+            agent_jobs.note(db, agent_jobs.WORSENED, existing, severity)
         existing.severity, existing.title, existing.description = severity, title[:255], description
         return False
-    db.add(IncidentAlert(server_id=server_id, rule_key=rule_key, severity=severity, title=title[:255], description=description))
+    alert = IncidentAlert(server_id=server_id, rule_key=rule_key, severity=severity, title=title[:255], description=description)
+    db.add(alert)
+    agent_jobs.note(db, agent_jobs.OPENED, alert, severity)
     return True
 
 

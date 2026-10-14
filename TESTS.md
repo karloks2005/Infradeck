@@ -148,6 +148,7 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 | [`test_admin.py`](#test_adminpy) | 18 | Who may do what: admin-only actions, roles, retention cleanup, the chat on/off switch. |
 | [`test_agent_errors.py`](#test_agent_errorspy) | 5 | Helpful, non-leaking error messages from the AI assistant. |
 | [`test_agent_service.py`](#test_agent_servicepy) | 9 | The assistant can only run the fixed read-only checks; the OpenAI provider and conversation history. |
+| [`test_agent_worker.py`](#test_agent_workerpy) | 12 | The agent's job queue and worker: one job per opened or worsened incident after the commit, retries, time limit, restarts. |
 | [`test_alerts.py`](#test_alertspy) | 10 | The incident engine: one incident per problem, resolve, container rules. |
 | [`test_auth_backend.py`](#test_auth_backendpy) | 50 | Accounts, passwords, the first-account setup token, and the cross-site request check. |
 | [`test_collector_mounts.py`](#test_collector_mountspy) | 1 | Which filesystems the collector reports. |
@@ -316,6 +317,23 @@ shouldn't, or an admin might be locked out.
 | `test_a_conversation_sends_the_system_prompt_and_its_history` | Each request carries the system prompt and the conversation so far, in order. |
 | `test_only_recent_turns_go_back_to_the_model` | Long conversations send only the most recent turns. |
 | `test_a_failed_turn_is_not_kept_in_the_conversation` | A message that failed (timeout, provider error) is not remembered as part of the conversation. |
+
+### test_agent_worker.py
+
+| Test | What it checks |
+|---|---|
+| `test_opening_an_incident_queues_exactly_one_job_after_the_commit` | A new WARNING or CRITICAL incident queues one job, only once the database commit is done, and refreshing it queues no more. |
+| `test_getting_worse_queues_one_more_job_and_getting_better_does_not` | Going from warning to critical queues one `incident.worsened` job; repeating it or going back down queues nothing. |
+| `test_info_incidents_and_rolled_back_ones_queue_nothing` | INFO notes and incidents whose transaction was rolled back never reach the queue. |
+| `test_the_incident_is_saved_even_when_redis_is_down` | A Redis failure loses the job, not the incident. |
+| `test_a_finished_job_leaves_the_processing_list_and_shows_in_recent` | A finished job leaves the processing list and shows in the recent results. |
+| `test_a_failing_job_is_retried_later_and_given_up_after_three_attempts` | A failing job is tried three times in all and then marked failed with its error. |
+| `test_a_retry_waits_before_it_runs_again` | A retry waits 30 seconds before it can run. |
+| `test_a_job_that_hangs_is_abandoned_after_its_time_limit` | A job past its time limit is abandoned and retried. |
+| `test_jobs_interrupted_by_a_restart_go_back_to_the_queue` | Jobs a worker took but never finished go back to the queue when it starts again. |
+| `test_garbage_in_the_queue_is_dropped_not_retried` | Something in the queue that isn't a job is dropped, not retried forever. |
+| `test_a_job_checks_that_its_incident_still_needs_a_diagnosis` | A job skips incidents that are gone or resolved. |
+| `test_status_says_whether_a_worker_is_alive` | The worker's heartbeat is what Admin shows as online. |
 
 ### test_alerts.py
 

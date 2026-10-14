@@ -16,7 +16,8 @@ For the settings, see [Configuration](configuration.md).
 | `infradeck-frontend` | built from `docker/frontend.Dockerfile` (nginx) | dashboard machine | yes | Serves the web app and passes `/api` to the backend. |
 | `infradeck-backend` | built from `docker/backend.Dockerfile` (Python, FastAPI) | dashboard machine | yes | The API: sign-in, metrics intake, alerts, statistics, notifications, the assistant. |
 | `infradeck-postgres` | `postgres:16-alpine` | dashboard machine | yes | Everything that must be kept: accounts, servers, metric history, incidents, settings. |
-| `infradeck-redis` | `redis:7-alpine` | dashboard machine | yes | Short-lived state: sign-in sessions, rate-limit counters, pending two-factor logins, a small cache. |
+| `infradeck-redis` | `redis:7-alpine` | dashboard machine | yes | Short-lived state: sign-in sessions, rate-limit counters, pending two-factor logins, a small cache, the agent's job queue. |
+| `infradeck-agent-worker` | the backend image | dashboard machine | for the incident agent | Runs the agent's jobs (diagnoses) from the queue in Redis, apart from the API. |
 | `infradeck-collector` | built from `docker/collector.Dockerfile` | every monitored machine | yes, one per machine | Reads the machine's CPU, memory, disks, network and containers and sends them to the backend. |
 | `infradeck-docker-proxy` | built from `docker/docker-proxy.Dockerfile` | every monitored machine | yes, next to each collector | The only container with the Docker socket; answers six read-only questions. |
 | `infradeck-collector-gate` | `nginx:alpine` | dashboard machine, server stack only | yes in `docker-compose.server.yml` | The only door to the collector endpoints, published on your VPN address. |
@@ -170,6 +171,7 @@ fails until it is back. Nothing already stored is lost: it is all in the volume.
 | `2fa-pending:…` and its attempt counter | A password check that still waits for the authenticator code. | 5 minutes |
 | `rate-limit:…` | Attempt counters for sign-in, registration, two-factor, password change, collector registration, invite checks, the assistant chat, notification tests and more. | the length of each window (e.g. 60 s) |
 | `stats:…` | Cached fleet statistics, so the Statistics page doesn't recompute them on every load. | 60 seconds |
+| `agent:queue`, `agent:processing`, `agent:delayed`, `agent:recent`, `agent:worker` | The agent worker's jobs: waiting, being run, waiting to be retried, the last 50 results, and the worker's heartbeat. | until done; the heartbeat 30 seconds |
 
 Session IDs and the values limited per address or email are stored only as SHA-256 digests, so a copy of
 Redis doesn't hand out working sessions or a list of email addresses.
@@ -197,6 +199,32 @@ It is on the internal `data` network only and publishes no port; the backend con
 checked, so users appear signed out. `/health` shows `redis: down`. Collectors keep checking in (they
 authenticate with their own credentials stored in PostgreSQL), so no monitoring data is lost. When Redis
 comes back, sessions saved in its volume work again.
+
+## infradeck-agent-worker
+
+**What it does.** Runs the incident agent's jobs. When an incident opens, or gets more severe, the backend puts one
+job in a queue in Redis; the worker takes jobs one at a time and works on them. Automatic diagnosis (#116) is not
+built yet, so for now a job only checks that its incident still needs a diagnosis and notes that; the chat runs in
+the backend.
+
+**How it works.** It is the backend image started with `python -m src.agent.worker`. Jobs are published only after
+the database commit that opened the incident, and each event once. A job the worker takes moves to a processing
+list and leaves it only when it is done, so a job interrupted by a restart goes back to the queue. A failed job is
+tried again after 30 and 60 seconds and then given up; a job running longer than 2 minutes is abandoned. The
+worker writes a heartbeat every few seconds, which **Admin → Incident agent → Worker** and the container's
+healthcheck read. It runs with no capabilities, a read-only filesystem and no published port.
+
+**Why a separate container.** A diagnosis means calls to a language model that can take tens of seconds or hang.
+In the backend, that would tie up the threads that serve the dashboard and take check-ins. In its own container
+it can be slow, restarted or stopped without the rest noticing. Redis is already part of the stack, so the queue
+needed nothing new; a dedicated queue system (Celery, RabbitMQ) would add containers for one job type.
+
+**Networks.** `data` (PostgreSQL and Redis) and `front`, because `data` has no route out and the worker has to
+reach the model provider on the internet.
+
+**If it stops.** New incidents wait in the queue for their diagnosis and are worked on when it starts again (each
+waiting job is kept). Incidents, notifications, the chat and everything else keep working. Admin shows the
+worker as offline.
 
 ## infradeck-collector
 

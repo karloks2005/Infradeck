@@ -7,6 +7,7 @@ import { AnotherMachineCard, ThisMachineCard } from '../dashboard/EmptyFleet.jsx
 import { INTERVALS, intervalLabel } from '../dashboard/ServerPanel.jsx'
 import { serverState } from '../dashboard/logic.js'
 import { Sparkline } from '../dashboard/charts.jsx'
+import { usePolled } from '../dashboard/data.js'
 import { Icon } from '../icons.jsx'
 import { refreshOverview, useOverview } from '../overviewStore.js'
 import { AppShell, serverLink } from '../shell.jsx'
@@ -291,8 +292,37 @@ function Agent({ settings, system, onSaved }) {
       <Row title="Redact IPs and hostnames before sending" detail="Not available yet. Until then, turn Chat off if names must not leave this machine."><Switch label="Redact before sending" checked={false} disabled onChange={() => {}} /></Row>
     </div>
     <Outcome state={state} />
+    <AgentWorker />
     <AgentSpending settings={settings} onSaved={onSaved} />
   </>
+}
+
+const JOB_TONE = { failed: 'chip-warn', noted: '', skipped: '', done: 'chip-ok' }
+
+// The worker that runs the agent's jobs: is it alive, what is waiting, and what it did last.
+function AgentWorker() {
+  const { data, error } = usePolled('/admin/agent/worker', 15)
+  if (!data) return <Notice tone="plain">{error || 'Checking the agent worker…'}</Notice>
+  const waiting = [data.queued ? `${data.queued} queued` : null, data.processing ? `${data.processing} running` : null, data.retrying ? `${data.retrying} waiting to retry` : null].filter(Boolean).join(' · ') || 'nothing waiting'
+  return (
+    <div className="card overflow-hidden">
+      <Row icon="Q" title="Worker" tone={data.online ? undefined : 'warn'}
+        detail={data.online ? `Running since ${ago(data.worker.started_at).replace(' ago', '')} · ${waiting}` : `Not running, so new incidents wait for their diagnosis · ${waiting}. Start it with docker compose up -d agent-worker.`}>
+        <span className={`chip ${data.online ? 'chip-ok' : 'chip-warn'}`}>{data.online ? 'Online' : 'Offline'}</span>
+      </Row>
+      {data.recent.length > 0 && <ul className="m-0 list-none divide-y divide-line border-t border-line p-0">
+        {data.recent.slice(0, 5).map((job) => (
+          <li key={job.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-[18px] py-2.5 text-xs">
+            <span className="w-16 shrink-0 text-muted">{ago(job.finished_at)}</span>
+            <span className="mono shrink-0 text-soft">INC-{String(job.incident_id).padStart(4, '0')}</span>
+            <span className="shrink-0 text-muted">{job.type === 'incident.worsened' ? 'got worse' : 'opened'}</span>
+            <span className={`chip ${JOB_TONE[job.status] ?? ''}`}>{job.status}</span>
+            <span className="min-w-0 flex-1 basis-60 text-muted">{job.note}</span>
+          </li>
+        ))}
+      </ul>}
+    </div>
+  )
 }
 
 // "$0.0031" for small amounts, "$1.84" from a cent up.

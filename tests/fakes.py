@@ -80,6 +80,66 @@ class FakeRedis:
         entry = self.hashes.get(key, {})
         return sum(int(entry.pop(field, None) is not None) for field in fields)
 
+    # lists and sorted sets, for the agent's job queue (left is the head, as in Redis)
+    def _list(self, key):
+        return self.store.setdefault(key, [])
+
+    def lpush(self, key, *values):
+        for value in values:
+            self._list(key).insert(0, value)
+        return len(self.store[key])
+
+    def rpush(self, key, *values):
+        self._list(key).extend(values)
+        return len(self.store[key])
+
+    def llen(self, key):
+        return len(self.store.get(key) or [])
+
+    def lrange(self, key, start, end):
+        items = self.store.get(key) or []
+        return items[start:] if end == -1 else items[start:end + 1]
+
+    def ltrim(self, key, start, end):
+        self.store[key] = self.lrange(key, start, end)
+        return True
+
+    def lrem(self, key, count, value):
+        items = self.store.get(key) or []
+        if value in items:
+            items.remove(value)
+            return 1
+        return 0
+
+    def lmove(self, source, destination, src="LEFT", dest="RIGHT"):
+        items = self.store.get(source) or []
+        if not items:
+            return None
+        value = items.pop(0 if src == "LEFT" else -1)
+        target = self._list(destination)
+        target.insert(0, value) if dest == "LEFT" else target.append(value)
+        return value
+
+    def blmove(self, source, destination, timeout, src="LEFT", dest="RIGHT"):
+        return self.lmove(source, destination, src, dest)
+
+    def zadd(self, key, mapping):
+        self.hashes.setdefault(key, {}).update(mapping)
+        return len(mapping)
+
+    def zrangebyscore(self, key, low, high):
+        entries = self.hashes.get(key, {})
+        low = float("-inf") if low == "-inf" else float(low)
+        high = float("inf") if high == "+inf" else float(high)
+        return [member for member, score in sorted(entries.items(), key=lambda item: item[1]) if low <= score <= high]
+
+    def zrem(self, key, *members):
+        entries = self.hashes.get(key, {})
+        return sum(int(entries.pop(member, None) is not None) for member in members)
+
+    def zcard(self, key):
+        return len(self.hashes.get(key, {}))
+
     # the rate limiter pipelines an increment with an expiry
     def pipeline(self):
         parent = self

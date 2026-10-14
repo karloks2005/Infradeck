@@ -10,6 +10,7 @@ This page says what each component can reach, so you can decide what to run.
 | Collector | container | host `/proc`, the host filesystem (read-only), the Docker proxy, the backend over HTTP | No Docker socket in the compose installs. |
 | Docker proxy | container, uid 0, no capabilities | the Docker socket; a Unix socket shared only with the collector; no network | Allows four read-only requests. See below. |
 | System helper (optional) | container, uid 0 with **one** capability | kernel log, `/var/log/wtmp` (read-only), one output volume | Off by default. Details below. |
+| Agent worker | container, no capabilities, read-only filesystem | PostgreSQL, Redis, the model provider on the internet | Runs the agent's jobs from a queue in Redis; no published port. |
 | Collector gate (server stack) | nginx container, no capabilities | the backend; publishes one port on your VPN address | The only way to reach collector endpoints. See below. |
 | Backend / frontend / database / Redis | containers | each other, over separate networks | Only the frontend port is published. Redis and PostgreSQL are on a network with no route out and are reachable only by the backend. Redis needs a password. |
 

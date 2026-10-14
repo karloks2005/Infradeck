@@ -30,6 +30,7 @@ All paths are relative to `/api` when going through the frontend/nginx.
 | `GET` / `PUT /admin/settings` | admin | Metrics retention, chat on/off, require two-factor for admins, alert thresholds and per-mount disk thresholds; the agent's model prices, monthly budget and daily chat limit. |
 | `GET /agent/config` | session | Whether chat with the agent can be used: switched on, a key configured, and the monthly budget not used up. |
 | `GET /admin/agent/usage` | admin | This month's model calls, tokens and estimated cost against the budget, per model and per day, with the prices and limits. |
+| `GET /admin/agent/worker` | admin | Whether the agent worker is running, how many jobs wait, are running or wait to be retried, and the latest results. |
 | `POST /admin/agent/test` | admin | Checks the OpenAI key and that the configured model exists, without spending tokens. |
 | `POST /monitoring/collectors/register` | join token (rate limited) | Collector asks to join; returns a poll secret and pairing code. |
 | `POST /monitoring/collectors/register/poll` | poll secret | Collector checks approval; returns its token once approved. |

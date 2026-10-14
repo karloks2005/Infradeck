@@ -465,3 +465,9 @@ def test_a_failed_call_is_recorded_without_tokens(app, monkeypatch):
 ])
 def test_spending_settings_are_checked(app, body):
     assert signed_in(app, 1).put("/admin/settings", json=body).status_code == 400
+
+
+def test_admins_see_the_agent_workers_status(app):
+    status = signed_in(app, 1).get("/admin/agent/worker")
+    assert status.status_code == 200 and status.json()["online"] is False and status.json()["queued"] >= 0
+    assert signed_in(app, 3).get("/admin/agent/worker").status_code == 403

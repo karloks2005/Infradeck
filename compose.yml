@@ -99,6 +99,39 @@ services:
       timeout: 5s
       retries: 5
 
+  # Runs the incident agent's jobs (diagnoses) from the queue in Redis, apart from the backend, so a slow or
+  # stuck model never holds up the API. Stopping it only delays diagnoses; everything else keeps working.
+  # It needs the database, Redis and the internet (the model provider), and nothing else. See docs/containers.md.
+  agent-worker:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    image: infradeck-backend:latest
+    container_name: infradeck-agent-worker
+    restart: unless-stopped
+    command: ["python", "-m", "src.agent.worker"]
+    networks: [data, front]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-infradeck}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-infradeck}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env (generate one with openssl rand -hex 24)}@redis:6379/0
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      AGENT_MODEL: ${AGENT_MODEL:-gpt-5-mini}
+      PYTHONDONTWRITEBYTECODE: "1"
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-m", "src.agent.worker", "--health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      backend:
+        condition: service_healthy
+
   # Monitors the machine running this stack. Other servers use collector-compose.yml.
   collector:
     build:
