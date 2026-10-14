@@ -516,3 +516,27 @@ class AgentRun(Base):
     incident_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     error: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class AgentReport(Base):
+    """The agent's diagnosis of one incident. Each new diagnosis is a new version; the page shows the latest.
+
+    ``body`` holds the checked answer (signals with the evidence they cite, fix steps, how to verify), ``evidence``
+    the masked evidence pack it was given, so a report can always be traced back to its data. A report the model
+    couldn't produce has status ``failed`` and says why."""
+
+    __tablename__ = "agent_reports"
+    __table_args__ = (UniqueConstraint("incident_id", "version"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    incident_id: Mapped[int] = mapped_column(ForeignKey("incident_alerts.id", ondelete="CASCADE"), index=True, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    trigger: Mapped[str] = mapped_column(String(32), nullable=False)  # incident.opened | incident.worsened | manual
+    status: Mapped[str] = mapped_column(String(16), nullable=False)  # ok | failed
+    model: Mapped[str] = mapped_column(String(100), nullable=False)
+    confidence: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    evidence: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)

@@ -1,5 +1,6 @@
 """What the Agent, Account and Admin pages rest on: incidents you can act on, API tokens with a narrow reach,
 notification channels that can't be pointed inwards, invitations, rule switches and two-factor for everyone."""
+import json
 import os
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -471,3 +472,34 @@ def test_admins_see_the_agent_workers_status(app):
     status = signed_in(app, 1).get("/admin/agent/worker")
     assert status.status_code == 200 and status.json()["online"] is False and status.json()["queued"] >= 0
     assert signed_in(app, 3).get("/admin/agent/worker").status_code == 403
+
+
+def test_an_incident_carries_the_agents_latest_report(app):
+    from src.backend.models import AgentReport
+    owner = signed_in(app, 1)
+    assert owner.get("/incidents/42").json()["agent"]["report"] is None
+
+    app.db.add(AgentReport(incident_id=42, version=1, trigger="incident.opened", status="ok", model="gpt-test", confidence="high", summary="gitlab is killed for memory. Raise its limit.",
+                           body=json.dumps({"signals": [{"text": "Memory hits the limit.", "holds": True, "evidence": [{"id": "metric:main", "label": "container memory"}]}],
+                                            "fix_steps": [], "verify": {"type": "manual"}, "dropped_signals": 0}), evidence="{}"))
+    app.db.commit()
+    main.redis_client.delete("infradeck:incident-note:42")
+
+    report = owner.get("/incidents/42").json()["agent"]["report"]
+    assert (report["version"], report["confidence"], report["signals"][0]["evidence"][0]["id"]) == (1, "high", "metric:main")
+    assert "evidence" not in report                       # the pack stays on the server
+    note = next(alert for alert in owner.get("/monitoring/overview").json()["alerts"] if alert["id"] == 42)["agent_note"]
+    assert note == "gitlab is killed for memory."         # the Overview line is the report's first sentence
+
+
+def test_asking_for_a_new_diagnosis_queues_a_job(app, monkeypatch):
+    from src.agent import jobs
+    owner = signed_in(app, 1)
+    assert owner.post("/incidents/42/diagnose").status_code == 409          # no key configured
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    assert owner.post("/incidents/42/diagnose").json() == {"queued": True}
+    assert owner.post("/incidents/42/diagnose").status_code == 200          # asking again is allowed
+    queued = [json.loads(raw) for raw in app.redis.lrange(jobs.QUEUE, 0, -1)]
+    assert [(job["type"], job["incident_id"]) for job in queued] == [("incident.requested", 42)] * 2
+    assert signed_in(app, 3).post("/incidents/42/diagnose").status_code == 403

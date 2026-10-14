@@ -1,6 +1,31 @@
 [← Documentation](README.md)
 
-# Incident agent chat (monitoring-only)
+# Incident agent (monitoring-only)
+
+## Diagnoses
+
+When a warning or critical incident opens, or gets worse, the agent worker diagnoses it (Admin → Incident agent →
+"Diagnose new incidents automatically"; anyone who may act on incidents can also click **Diagnose now** on the
+incident). It works in three steps, in `src/agent/`:
+
+1. **Evidence pack** (`evidence.py`): the incident, the machine, metrics from an hour before it opened until now,
+   recorded events, image changes of the container, the alert rule's own checks, the containers right now, and
+   similar incidents in the last 90 days. Every fact has an ID (`metric:main`, `event:812`, `check:2`,
+   `incident:31`). Series are cut to 40 points and lists to their newest entries, and every text is masked for
+   secrets (`masking.py`).
+2. **The model** (`diagnosis.py`, `DIAGNOSIS_PROMPT.md`) answers in a strict JSON schema: a summary, its confidence,
+   signals that each cite fact IDs, up to five fix steps and a condition that shows the incident is over.
+3. **Checks** before anyone sees it: signals that cite no fact from the pack are dropped and counted ("1
+   unsupported claim left out"), fix commands that could destroy data are flagged and never recommended
+   (`safety.py`), and an answer that doesn't parse is asked for once more, then saved as a failed report.
+
+Each diagnosis is a new version in `agent_reports`; the incident page shows the latest, says which model wrote it
+and how sure it is, and falls back to the rule-based diagnosis when there is none. The evidence chart, recorded
+events and timeline always come from stored data, never from the model. Every model call counts towards the
+budget below, and diagnoses stop while the budget is used up.
+
+## Chat
+
 
 The chat runs on the OpenAI API. Set `OPENAI_API_KEY` in `.env` (and optionally `AGENT_MODEL`, default
 `gpt-5-mini`), then restart the backend. **Admin → Incident agent → Test connection** confirms the key works and

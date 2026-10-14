@@ -21,6 +21,11 @@ who asked about which incident. The month's cost and the budget check add these 
 had a price is priced with the current table when it is counted. The prices, the monthly budget and the daily chat
 limit are rows in `app_settings` (`agent_prices`, `agent_monthly_cap_usd`, `agent_daily_chat_limit`).
 
+**The agent's diagnoses.** `agent_reports` holds the diagnoses, one row per version per incident: the summary,
+how confident the agent is, the checked answer (signals with the evidence they cite, fix steps, how to verify) and
+the masked evidence pack it was given, so every report can be traced to its data. A report the model couldn't
+produce has status `failed` and the reason. Rows are deleted with their incident.
+
 **Summarised history.** A background job (it checks every minute and does nothing when it is up to date) turns the check-in
 samples into `host_rollups`, `mount_rollups` and `container_rollups`: one row per server, mount or container
 per hour, day, week (Monday to Sunday) and month, all in UTC, with the average and maximum of each metric.

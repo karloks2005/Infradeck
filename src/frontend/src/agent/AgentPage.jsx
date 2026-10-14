@@ -72,6 +72,56 @@ function Evidence({ evidence }) {
   )
 }
 
+// The agent's report over the rule-based diagnosis: its summary, signals and fix steps when it has one. The evidence
+// chart, recorded events and timeline always come from stored data, never from the model.
+function withReport(found, agent) {
+  const report = agent?.report
+  if (!report || report.status !== 'ok') return { ...found, byAgent: false }
+  const signals = report.signals.map((signal) => ({ text: signal.text, ok: signal.holds, source: signal.evidence.map((ref) => ref.label).join(' · '), evidence: signal.evidence }))
+  return { ...found, byAgent: true, summary: report.summary, confidence: report.confidence, signals, agreeing: signals.filter((signal) => signal.ok).length,
+    steps: report.fix_steps.length ? report.fix_steps.map((step) => ({ ...step, label: null })) : found.steps }
+}
+
+const CONFIDENCE_TONE = { high: 'chip-ok', medium: '', low: 'chip-warn' }
+
+// Who wrote what's below: the agent (which model, how sure, when) or the rules, and a way to ask for a new diagnosis.
+function AgentLine({ incident, canAct, onChanged, compact = false }) {
+  const [state, run] = useAction()
+  const [asked, setAsked] = useState(false)
+  const agent = incident.agent || {}
+  const report = agent.report
+  const resolved = incident.status === 'resolved'
+  const canAsk = canAct && agent.key_configured && !agent.budget_paused
+  const why = !agent.key_configured ? 'Set OPENAI_API_KEY in .env for the agent to diagnose incidents.' : agent.budget_paused ? 'This month\'s budget for the agent is used up.' : !canAct ? 'Only owners and admins can ask for a diagnosis.' : undefined
+  const ask = () => run(async () => { await post(`/incidents/${incident.id}/diagnose`); setAsked(true); setTimeout(onChanged, 15000) })
+  let text
+  if (asked) text = 'Asked the agent. The new diagnosis appears here when the worker gets to it, usually within a minute.'
+  else if (report?.status === 'ok') text = <>Diagnosed by the agent · <span className="mono">{report.model}</span> · {formatAge(report.created_at)} ago{report.version > 1 ? ` · version ${report.version}` : ''}{report.dropped_signals ? ` · ${report.dropped_signals} unsupported ${report.dropped_signals === 1 ? 'claim' : 'claims'} left out` : ''}</>
+  else if (report?.status === 'failed') text = `The agent couldn't diagnose this (${report.error}). Below is the rule-based diagnosis.`
+  else text = incident.severity === 'INFO' ? 'A note, not a problem: the agent only diagnoses warnings and critical incidents.' : 'The agent hasn\'t diagnosed this yet. Below is the rule-based diagnosis, worked out from the same data.'
+  return (
+    <div className={`flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border px-3.5 py-2.5 text-xs ${report?.status === 'failed' ? 'border-warn/40 text-warn' : 'border-line text-muted'} ${compact ? '' : 'max-w-[760px]'}`}>
+      <span aria-hidden="true" className="inline-flex flex-col gap-[2px]"><i className="block h-[3px] w-[5px] bg-paper" /><i className="ml-[2px] block h-[3px] w-[5px] bg-signal" /><i className="block h-[3px] w-[5px] bg-paper" /></span>
+      <span className="min-w-0 flex-1 basis-48">{text}</span>
+      {report?.status === 'ok' && <span className={`chip ${CONFIDENCE_TONE[report.confidence] || ''}`}>{report.confidence} confidence</span>}
+      {!resolved && incident.severity !== 'INFO' && <button type="button" className="btn btn-sm" disabled={!canAsk || state.busy || asked} title={why} onClick={ask}>{report ? 'Diagnose again' : 'Diagnose now'}</button>}
+      {state.error && <span role="alert" className="basis-full text-warn">{state.error}</span>}
+    </div>
+  )
+}
+
+// Under a signal: the facts it rests on, as chips that wrap (the agent's), or the rule's source in a line.
+function SignalSources({ signal }) {
+  if (signal.evidence?.length) {
+    return <span className="mt-1.5 flex flex-wrap gap-1.5">{signal.evidence.map((ref) => <span key={ref.id} className="chip h-auto min-h-5 max-w-full whitespace-normal break-words py-0.5 text-left leading-4" title={ref.id}>{ref.label}</span>)}</span>
+  }
+  return signal.source ? <span className="mt-0.5 block text-xs text-muted">{signal.source}</span> : null
+}
+
+function StepWarning({ step }) {
+  return step.warning ? <p className="mb-0 mt-2 rounded-md border border-warn/40 px-3 py-2 text-xs text-warn">{step.warning} Read it before you run it.</p> : null
+}
+
 function Command({ step }) {
   const [copied, copy] = useCopy()
   return (
@@ -86,7 +136,7 @@ function Command({ step }) {
 function Incident({ incident, canAct, onChanged }) {
   const [state, run] = useAction()
   const [muteFor, setMuteFor] = useState(60)
-  const found = incident.diagnosis
+  const found = withReport(incident.diagnosis, incident.agent)
   const [label, chip] = SEVERITY[incident.severity] || SEVERITY.INFO
   const resolved = incident.status === 'resolved'
   const act = (action, body) => run(async () => { await post(`/incidents/${incident.id}/${action}`, body); refreshOverview(); onChanged() })
@@ -116,7 +166,8 @@ function Incident({ incident, canAct, onChanged }) {
       </div>
       {state.error && <p role="alert" className="mb-0 mt-2 text-xs text-warn">{state.error}</p>}
 
-      <p className="mb-0 mt-6 max-w-[760px] text-[15px] leading-[25px] text-paper">{found.summary}</p>
+      <div className="mt-6"><AgentLine incident={incident} canAct={canAct} onChanged={onChanged} /></div>
+      <p className="mb-0 mt-4 max-w-[760px] text-[15px] leading-[25px] text-paper">{found.summary}</p>
 
       {found.evidence && <section className={section} aria-label="Evidence">
         <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-2"><h2 className="m-0 text-sm font-semibold text-paper">Evidence</h2><span className="text-xs text-muted">{found.evidence.title} · {clock(found.window.start)} to {resolved ? clock(found.window.end) : 'now'}{found.evidence.limit != null ? ` · ${found.evidence.limit_label?.toLowerCase() || 'limit'} drawn dashed` : ''}</span></div>
@@ -131,9 +182,9 @@ function Incident({ incident, canAct, onChanged }) {
       </section>}
 
       {found.signals.length > 0 && <section className={section} aria-label="Why the agent thinks so">
-        <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-2"><h2 className="m-0 text-sm font-semibold text-paper">Why the agent thinks so</h2><span className="text-xs text-soft">{found.agreeing} of {found.signals.length} checks against the data hold</span></div>
+        <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-2"><h2 className="m-0 text-sm font-semibold text-paper">Why the agent thinks so</h2><span className="text-xs text-soft">{found.byAgent ? `${found.agreeing} of ${found.signals.length} signals hold, each tied to the data` : `${found.agreeing} of ${found.signals.length} checks against the data hold`}</span></div>
         <ul className="card m-0 list-none divide-y divide-line p-0">
-          {found.signals.map((signal) => <li key={signal.text} className="flex items-center gap-3.5 px-[18px] py-3 text-[13px]"><Icon name={signal.ok ? 'check' : 'close'} size={14} className={signal.ok ? 'shrink-0 text-ok' : 'shrink-0 text-muted'} /><span className="min-w-0 flex-1 text-paper">{signal.text}</span><span className="shrink-0 text-xs text-muted">{signal.source}</span></li>)}
+          {found.signals.map((signal) => <li key={signal.text} className="flex items-start gap-3.5 px-[18px] py-3 text-[13px] leading-5"><Icon name={signal.ok ? 'check' : 'close'} size={14} className={`mt-[3px] shrink-0 ${signal.ok ? 'text-ok' : 'text-muted'}`} /><span className="min-w-0 flex-1"><span className="block text-paper">{signal.text}</span><SignalSources signal={signal} /></span></li>)}
         </ul>
       </section>}
 
@@ -143,7 +194,7 @@ function Incident({ incident, canAct, onChanged }) {
           {found.steps.map((step, index) => (
             <li key={step.title} className="grid grid-cols-[34px_minmax(0,1fr)] px-[18px] py-4">
               <span className="mono pt-0.5 text-signal">{String(index + 1).padStart(2, '0')}</span>
-              <div className="min-w-0"><p className="m-0 text-sm font-semibold text-paper">{step.title}{step.recommended && <span className="chip ml-2.5 align-middle font-normal">recommended</span>}</p><p className="mb-0 mt-1 text-[13px] leading-5 text-muted">{step.text}</p>{step.command && <Command step={step} />}</div>
+              <div className="min-w-0"><p className="m-0 text-sm font-semibold text-paper">{step.title}{step.recommended && <span className="chip ml-2.5 align-middle font-normal">recommended</span>}</p><p className="mb-0 mt-1 text-[13px] leading-5 text-muted">{step.text}</p>{step.command && <Command step={step} />}<StepWarning step={step} /></div>
             </li>
           ))}
         </ol>
@@ -264,7 +315,7 @@ function PhoneIncident({ incident, canAct, onChanged, onAsk }) {
   const [state, run] = useAction()
   const [menu, setMenu] = useState(false)
   const [showLines, setShowLines] = useState(false)
-  const found = incident.diagnosis
+  const found = withReport(incident.diagnosis, incident.agent)
   const [label, chip] = SEVERITY[incident.severity] || SEVERITY.INFO
   const resolved = incident.status === 'resolved'
   const act = (action, body) => run(async () => { await post(`/incidents/${incident.id}/${action}`, body); setMenu(false); refreshOverview(); onChanged() })
@@ -277,6 +328,7 @@ function PhoneIncident({ incident, canAct, onChanged, onAsk }) {
       <div>
         <div className="flex flex-wrap items-center gap-2"><span className={`chip ${chip}`}>{label}</span><span className={`chip ${resolved || found.state === 'diagnosed' ? 'chip-ok' : 'chip-warn'}`}>{resolved ? 'Resolved' : incident.muted_until ? 'Muted' : found.state === 'watching' ? 'Watching' : 'Diagnosed'}</span>{incident.acknowledged_at && <span className="chip">Acknowledged</span>}</div>
         <p className="mb-0 mt-2.5 text-[13px] text-muted">{meta}</p>
+        <div className="mt-4"><AgentLine compact incident={incident} canAct={canAct} onChanged={onChanged} /></div>
         <p className="mb-0 mt-4 text-[15px] leading-6 text-paper">{found.summary}</p>
         {state.error && <p role="alert" className="mb-0 mt-2 text-xs text-warn">{state.error}</p>}
       </div>
@@ -293,9 +345,9 @@ function PhoneIncident({ incident, canAct, onChanged, onAsk }) {
       </section>}
 
       {found.signals.length > 0 && <section aria-label="Why">
-        <div className="mb-2.5 flex items-baseline gap-2"><h2 className="m-0 text-[15px] font-semibold text-paper">Why</h2><span className="text-xs text-muted">{found.agreeing} of {found.signals.length} checks hold</span></div>
+        <div className="mb-2.5 flex items-baseline gap-2"><h2 className="m-0 text-[15px] font-semibold text-paper">Why</h2><span className="text-xs text-muted">{found.agreeing} of {found.signals.length} {found.byAgent ? 'signals' : 'checks'} hold</span></div>
         <ul className="m-0 list-none divide-y divide-line overflow-hidden rounded-md border border-line bg-ink p-0">
-          {found.signals.map((signal) => <li key={signal.text} className="flex items-start gap-3 px-4 py-3 text-[13px] leading-5"><Icon name={signal.ok ? 'check' : 'close'} size={14} className={`mt-[3px] shrink-0 ${signal.ok ? 'text-ok' : 'text-muted'}`} /><span className="text-paper">{signal.text}</span></li>)}
+          {found.signals.map((signal) => <li key={signal.text} className="flex items-start gap-3 px-4 py-3 text-[13px] leading-5"><Icon name={signal.ok ? 'check' : 'close'} size={14} className={`mt-[3px] shrink-0 ${signal.ok ? 'text-ok' : 'text-muted'}`} /><span className="min-w-0 flex-1"><span className="block text-paper">{signal.text}</span><SignalSources signal={signal} /></span></li>)}
         </ul>
       </section>}
 
@@ -309,6 +361,7 @@ function PhoneIncident({ incident, canAct, onChanged, onAsk }) {
               <p className="mb-0 mt-1.5 text-sm font-semibold text-paper">{step.title}</p>
               <p className="mb-0 mt-1 text-[13px] leading-5 text-muted">{step.text}</p>
               {step.command && <Command step={step} />}
+              <StepWarning step={step} />
             </li>
           ))}
         </ol>
@@ -420,7 +473,7 @@ export default function AgentPage({ user, onLogout }) {
 
   return (
     <AppShell user={user} onLogout={onLogout} crumbs={crumbs} bare fitViewport>
-      <div className="grid xl:h-full xl:grid-cols-[minmax(300px,380px)_minmax(0,1fr)_minmax(320px,440px)] xl:divide-x xl:divide-line">
+      <div className="grid xl:h-full xl:grid-cols-[280px_minmax(0,1fr)_320px] 2xl:grid-cols-[minmax(300px,380px)_minmax(0,1fr)_minmax(320px,440px)] xl:divide-x xl:divide-line">
         <section className="flex min-h-0 flex-col border-b border-line xl:border-b-0" aria-label="Incidents">
           <div className="px-[18px] pb-3 pt-5">
             <div className="flex items-baseline gap-2.5"><h2 className="m-0 text-[15px] font-semibold text-paper">Incidents</h2><span className="text-xs text-muted">{inbox ? `${inbox.open.length} open` : ''}</span></div>

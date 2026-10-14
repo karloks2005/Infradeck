@@ -4,8 +4,8 @@ It runs in its own container, so a slow or stuck model never holds up the backen
 incidents wait for their diagnosis; everything else keeps working. Run with ``python -m src.agent.worker``;
 ``--health`` exits 0 while a worker is alive, for the container's healthcheck.
 
-Automatic diagnosis (#116) is not built yet, so a job only checks that its incident still needs one and notes
-that. The plumbing (queue, retries, time limit, status in Admin) is what this file provides.
+A job builds the incident's evidence pack and asks the model for a diagnosis (diagnosis.py), unless the incident
+no longer needs one, there is no API key, or this month's budget is used up.
 """
 from __future__ import annotations
 
@@ -15,12 +15,14 @@ import sys
 import threading
 import time
 
-from src.agent import jobs, usage
+from src.agent import diagnosis, jobs, usage
+from src.agent.providers import configured_key, get_provider
 from src.backend.config import REDIS_URL
 from src.backend.db import SessionLocal
 from src.backend.models import IncidentAlert
 
-JOB_TIMEOUT_SECONDS = 120
+# A diagnosis can take two model calls, each with its own retries; past this the job is given up and retried later.
+JOB_TIMEOUT_SECONDS = 300
 POLL_SECONDS = 5
 
 
@@ -35,12 +37,19 @@ def handle_incident(job: dict) -> tuple[str, str]:
             return "skipped", "The incident was already resolved."
         if usage.budget(db)["state"] == "paused":
             return "skipped", "This month's budget for the agent is used up."
-        return "noted", "Automatic diagnosis is not built yet (#116); the incident keeps its rule-based diagnosis."
+        if job.get("type") != jobs.REQUESTED and not usage.auto_diagnose(db):
+            return "skipped", "Automatic diagnosis is switched off in Admin; it runs when someone asks."
+        if not configured_key():
+            return "skipped", "No OPENAI_API_KEY is configured; the incident keeps its rule-based diagnosis."
+        report = diagnosis.diagnose(db, incident, get_provider(), trigger=job.get("type", jobs.OPENED))
+        if report.status != "ok":
+            return "failed", report.error or "The model's answer could not be used."
+        return "diagnosed", f"{report.confidence} confidence · version {report.version}"
     finally:
         db.close()
 
 
-HANDLERS = {jobs.OPENED: handle_incident, jobs.WORSENED: handle_incident}
+HANDLERS = {jobs.OPENED: handle_incident, jobs.WORSENED: handle_incident, jobs.REQUESTED: handle_incident}
 
 
 def run_with_timeout(handler, job: dict, seconds: float) -> tuple[str, str]:

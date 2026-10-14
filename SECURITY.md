@@ -68,8 +68,17 @@ rule. An admin can also switch a rule off entirely in Admin › Alert rules, whi
 
 **The chat about an incident** sends your question together with that incident's title, description
 and the facts Infradeck worked out (signals and recorded events, which contain container and host
-names) to the model provider. Turn Chat off in Admin › Incident agent if that must not happen. The
-diagnosis itself is built locally by fixed rules and sends nothing anywhere.
+names) to the model provider. Turn Chat off in Admin › Incident agent if that must not happen.
+
+**The agent's diagnosis** (when `OPENAI_API_KEY` is set) sends an evidence pack to the model provider: the
+incident, the server's name, OS, cores and memory, metrics around the incident, recorded events, image changes,
+the containers' names, images and figures, and similar incidents before it. Before it leaves, every text in it is
+masked for secrets (tokens, keys, passwords, credentials in URLs, private keys; `src/agent/masking.py`), and the
+model is told the pack is untrusted data. Its answer is checked before anyone sees it: claims that cite no fact
+from the pack are dropped, and fix commands that could destroy data or open the machine up are flagged and never
+marked recommended (`src/agent/safety.py`). Nothing the model writes is run. Turn off "Diagnose new incidents
+automatically" in Admin › Incident agent to send nothing unless someone asks; without a key nothing is sent
+and incidents keep the rule-based diagnosis, which is worked out locally.
 
 ## The optional system helper
 

@@ -148,7 +148,7 @@ def test_a_job_checks_that_its_incident_still_needs_a_diagnosis(db, redis, monke
     db.commit()
     incident = db.query(IncidentAlert).one()
 
-    assert worker.handle_incident({"incident_id": incident.id})[0] == "noted"
+    assert worker.handle_incident({"incident_id": incident.id})[0] == "skipped"   # no API key in tests: rule-based only
     incident.status = "resolved"
     db.commit()
     assert worker.handle_incident({"incident_id": incident.id}) == ("skipped", "The incident was already resolved.")

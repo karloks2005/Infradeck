@@ -28,8 +28,8 @@ RECENT = "infradeck:agent:recent"
 HEARTBEAT = "infradeck:agent:worker"
 ONCE = "infradeck:agent:once:"
 
-OPENED, WORSENED = "incident.opened", "incident.worsened"
-JOB_TYPES = (OPENED, WORSENED)
+OPENED, WORSENED, REQUESTED = "incident.opened", "incident.worsened", "incident.requested"
+JOB_TYPES = (OPENED, WORSENED, REQUESTED)
 # INFO incidents (an image changed, a container went away) are notes, not problems to diagnose.
 DIAGNOSED_SEVERITIES = ("WARNING", "CRITICAL")
 SEVERITY_RANK = {"INFO": 0, "WARNING": 1, "CRITICAL": 2}
@@ -52,11 +52,13 @@ def new_job(job_type: str, incident_id: int, severity: str | None = None) -> dic
 
 
 def publish(redis_client, job_type: str, incident_id: int, severity: str | None = None) -> bool:
-    """Queue one job, unless the same event was already queued. Returns True if it was queued."""
+    """Queue one job, unless the same event was already queued. Returns True if it was queued.
+
+    ``incident.requested`` (someone clicked "Diagnose again") is always queued."""
     if job_type not in JOB_TYPES:
         raise ValueError(f"Unknown agent job: {job_type}")
     once = f"{ONCE}{job_type}:{incident_id}" + (f":{severity}" if job_type == WORSENED else "")
-    if not redis_client.set(once, "1", nx=True, ex=ONCE_SECONDS):
+    if job_type != REQUESTED and not redis_client.set(once, "1", nx=True, ex=ONCE_SECONDS):
         return False
     redis_client.lpush(QUEUE, json.dumps(new_job(job_type, incident_id, severity)))
     return True

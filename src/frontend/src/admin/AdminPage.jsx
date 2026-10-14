@@ -286,7 +286,7 @@ function Agent({ settings, system, onSaved }) {
         <button type="button" className="btn btn-sm" disabled={!agent.key_configured || test.busy} title={agent.key_configured ? 'Checks the key and the model without spending tokens.' : 'Set OPENAI_API_KEY first.'} onClick={() => runTest(() => apiRequest('/admin/agent/test', { method: 'POST' }))}>{test.busy ? 'Testing…' : 'Test connection'}</button>
       </Row>
       {(test.error || tested) && <div className="px-[18px] py-2.5">{test.error ? <p role="alert" className="m-0 text-xs text-warn">{test.error}</p> : <p role="status" className="m-0 text-xs text-ok">Connected. {tested.provider} accepts the key and offers {tested.model}.</p>}</div>}
-      <Row title="Diagnose new incidents automatically" detail="Always on. The diagnosis is built from stored metrics and events by fixed rules, so it costs nothing and sends nothing to the provider."><Switch label="Diagnose automatically" checked disabled onChange={() => {}} /></Row>
+      <Row title="Diagnose new incidents automatically" detail="When a warning or critical incident opens or gets worse, the agent worker sends its evidence (masked) to the model and writes a diagnosis. Off: incidents keep the rule-based diagnosis, and anyone who may act on incidents can still ask for one."><Switch label="Diagnose automatically" checked={settings.agent_auto_diagnose !== false} disabled={state.busy} onChange={(on) => run(async () => onSaved(await put({ agent_auto_diagnose: on })))} /></Row>
       <Row title="Read container logs" detail="Not available: Infradeck's Docker proxy can't read logs. See SECURITY.md."><Switch label="Read container logs" checked={false} disabled onChange={() => {}} /></Row>
       <Row title="Chat" detail="Available to every signed-in user while it is on. Questions and the incident's facts are sent to the provider."><Switch label="Chat with the agent" checked={settings.agent_chat_enabled} disabled={state.busy} onChange={(on) => run(async () => onSaved(await put({ agent_chat_enabled: on })))} /></Row>
       <Row title="Redact IPs and hostnames before sending" detail="Not available yet. Until then, turn Chat off if names must not leave this machine."><Switch label="Redact before sending" checked={false} disabled onChange={() => {}} /></Row>
@@ -297,7 +297,7 @@ function Agent({ settings, system, onSaved }) {
   </>
 }
 
-const JOB_TONE = { failed: 'chip-warn', noted: '', skipped: '', done: 'chip-ok' }
+const JOB_TONE = { failed: 'chip-warn', noted: '', skipped: '', diagnosed: 'chip-ok' }
 
 // The worker that runs the agent's jobs: is it alive, what is waiting, and what it did last.
 function AgentWorker() {
@@ -315,7 +315,7 @@ function AgentWorker() {
           <li key={job.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-[18px] py-2.5 text-xs">
             <span className="w-16 shrink-0 text-muted">{ago(job.finished_at)}</span>
             <span className="mono shrink-0 text-soft">INC-{String(job.incident_id).padStart(4, '0')}</span>
-            <span className="shrink-0 text-muted">{job.type === 'incident.worsened' ? 'got worse' : 'opened'}</span>
+            <span className="shrink-0 text-muted">{job.type === 'incident.worsened' ? 'got worse' : job.type === 'incident.requested' ? 'asked for' : 'opened'}</span>
             <span className={`chip ${JOB_TONE[job.status] ?? ''}`}>{job.status}</span>
             <span className="min-w-0 flex-1 basis-60 text-muted">{job.note}</span>
           </li>

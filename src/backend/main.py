@@ -65,6 +65,7 @@ from .config import (
 from .rules import HELPER_EVENT_KINDS, DEFAULT_THRESHOLDS, HOST_RULE_PREFIX, container_rules, host_rules, validate_thresholds, detect_system_events, system_rules, SYSTEM_RULE_PREFIX, validate_mount_thresholds, validate_helper_events, REBOOT_DETAILS, REBOOT_KEY_PREFIX, detect_container_events, memory_trend_rules, CONTAINER_EVENT_KINDS, MAX_CONTAINER_EVENTS_PER_CHECKIN, MAX_CONTAINER_EVENTS_PER_HOUR, TREND_RULE_PREFIX, NETWORK_EVENT_KINDS, NETWORK_RULE_PREFIX, MAX_NETWORK_EVENTS_PER_CHECKIN, MAX_NETWORK_EVENTS_PER_HOUR, INTERNET_STATUSES, LISTENER_SCOPES, LISTENER_PROTOCOLS, MAX_LISTENERS, FIREWALL_LABELS, detect_listener_changes, detect_firewall_changes, network_rules, validate_listeners, validate_firewall
 from .rate_limit import enforce_ip_limit, enforce_limit, enforce_login_limit, enforce_register_limit, refund_attempt, reset_limits
 from ..agent import jobs as agent_jobs, usage as agent_usage
+from ..agent.diagnosis import latest as latest_report, report_json
 from ..agent.providers import configured_key
 from ..agent.chat import check_provider_connection, delete_agent_conversation, send_agent_message
 
@@ -194,6 +195,7 @@ class AdminSettingsRequest(BaseModel):
     agent_prices: dict | None = None
     agent_monthly_cap_usd: float | None = None
     agent_daily_chat_limit: int | None = None
+    agent_auto_diagnose: bool | None = None
 
 
 class MetricsIngestRequest(BaseModel):
@@ -1003,7 +1005,7 @@ def get_mount_thresholds(db) -> dict:
 def _admin_settings(db) -> dict:
     return {"instance_name": get_instance_name(db), "metrics_retention_days": get_metrics_retention_days(db), "agent_chat_enabled": is_agent_chat_enabled(db), "alert_thresholds": get_alert_thresholds(db), "mount_thresholds": get_mount_thresholds(db), "require_2fa_for_admins": require_admin_two_factor(db), "secrets_configured": secrets_box.available(),
             "require_2fa_for_everyone": require_two_factor_for_everyone(db), "disabled_rules": sorted(get_disabled_rules(db)),
-            "agent_prices": agent_usage.get_prices(db), "agent_monthly_cap_usd": agent_usage.get_cap(db), "agent_daily_chat_limit": agent_usage.get_daily_limit(db)}
+            "agent_prices": agent_usage.get_prices(db), "agent_monthly_cap_usd": agent_usage.get_cap(db), "agent_daily_chat_limit": agent_usage.get_daily_limit(db), "agent_auto_diagnose": agent_usage.auto_diagnose(db)}
 
 
 def purge_old_metrics(db, now: datetime | None = None) -> int:
@@ -1074,6 +1076,9 @@ def update_admin_settings(payload: AdminSettingsRequest, session_id: Annotated[s
                 changes.append(f"Set the agent chat limit to {limit} messages per person per day")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if payload.agent_auto_diagnose is not None and payload.agent_auto_diagnose != agent_usage.auto_diagnose(db):
+        _set_setting(db, agent_usage.AUTO_DIAGNOSE_KEY, "true" if payload.agent_auto_diagnose else "false")
+        changes.append(f"{'Turned on' if payload.agent_auto_diagnose else 'Turned off'} automatic diagnosis by the agent")
     if payload.agent_chat_enabled is not None:
         _set_setting(db, AGENT_CHAT_ENABLED_KEY, "true" if payload.agent_chat_enabled else "false")
         changes.append(f"{'Enabled' if payload.agent_chat_enabled else 'Disabled'} chat with the agent")
@@ -2651,7 +2656,12 @@ def _agent_note(db, alert: IncidentAlert, server: Server | None) -> str | None:
             return (cached.decode() if isinstance(cached, bytes) else cached) or None
     except Exception:
         pass
-    note = incidents.diagnose(db, alert, server).get("note")
+    report = latest_report(db, alert.id)
+    if report is not None and report.status == "ok" and report.summary:
+        # The agent's own diagnosis, first sentence; the rule-based note when there is none.
+        note = re.split(r"(?<=[.!?])\s", report.summary.strip(), maxsplit=1)[0][:160]
+    else:
+        note = incidents.diagnose(db, alert, server).get("note")
     try:
         redis_client.set(key, note or "", ex=60)
     except Exception:
@@ -2695,7 +2705,27 @@ def get_incident(incident_id: PathId, session_id: Annotated[str | None, Cookie(a
     _current_user(session_id, db)
     alert, server = _incident_or_404(db, incident_id)
     users = dict(db.query(User.id, User.name).all())
-    return {**incidents.summary(alert, server.hostname, datetime.now(timezone.utc), users), "diagnosis": incidents.diagnose(db, alert, server), "cpu_cores": server.cpu_cores}
+    return {**incidents.summary(alert, server.hostname, datetime.now(timezone.utc), users), "diagnosis": incidents.diagnose(db, alert, server), "cpu_cores": server.cpu_cores,
+            "agent": {"report": report_json(latest_report(db, alert.id)), "key_configured": bool(configured_key()), "budget_paused": agent_usage.budget(db)["state"] == "paused"}}
+
+
+@app.post("/incidents/{incident_id}/diagnose")
+def request_diagnosis(incident_id: PathId, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    """Ask the agent worker to diagnose this incident (again). It works through the queue, so the report appears
+    on the incident when the worker gets to it."""
+    user = _require_operator(session_id, db)
+    alert, _server = _incident_or_404(db, incident_id)
+    if not configured_key():
+        raise HTTPException(status_code=409, detail="The agent has no API key. An admin sets OPENAI_API_KEY in .env.")
+    if agent_usage.budget(db)["state"] == "paused":
+        raise HTTPException(status_code=429, detail="This month's budget for the agent is used up. An admin can raise it in Admin › Incident agent.")
+    enforce_limit(redis_client, scope="diagnose-user", subject=user["id"], limit=10, window_seconds=600)
+    try:
+        agent_jobs.publish(redis_client, agent_jobs.REQUESTED, alert.id, alert.severity)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Redis is not answering, so the request can't be queued.") from exc
+    record_audit_log(db, user_id=user["id"], level="INFO", message=f"Asked the agent to diagnose {incidents.reference(alert.id)}", source="agent")
+    return {"queued": True}
 
 
 def _incident_action(db, incident_id: int, session_id, change, message: str) -> dict:
