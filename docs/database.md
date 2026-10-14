@@ -24,7 +24,12 @@ limit are rows in `app_settings` (`agent_prices`, `agent_monthly_cap_usd`, `agen
 **The agent's diagnoses.** `agent_reports` holds the diagnoses, one row per version per incident: the summary,
 how confident the agent is, the checked answer (signals with the evidence they cite, fix steps, how to verify) and
 the masked evidence pack it was given, so every report can be traced to its data. A report the model couldn't
-produce has status `failed` and the reason. Rows are deleted with their incident.
+produce has status `failed` and the reason. A diagnosis reused from an earlier incident of the same rule has trigger
+`reused` and names that incident in its body. Rows are deleted with their incident.
+
+`incident_alerts.reopen_after` is set when the agent resolved an incident because its fix held: until then the same
+rule on that server opens no new incident (unless the condition breaks again, which clears it).
+`users.agent_chat_enabled` is the per-user chat switch used when chat access is "per user".
 
 **Summarised history.** A background job (it checks every minute and does nothing when it is up to date) turns the check-in
 samples into `host_rollups`, `mount_rollups` and `container_rollups`: one row per server, mount or container

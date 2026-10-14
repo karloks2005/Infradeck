@@ -148,6 +148,8 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 | [`test_admin.py`](#test_adminpy) | 18 | Who may do what: admin-only actions, roles, retention cleanup, the chat on/off switch. |
 | [`test_agent_errors.py`](#test_agent_errorspy) | 5 | Helpful, non-leaking error messages from the AI assistant. |
 | [`test_agent_service.py`](#test_agent_servicepy) | 9 | The assistant can only run the fixed read-only checks; the OpenAI provider and conversation history. |
+| [`test_agent_diagnosis.py`](#test_agent_diagnosispy) | 42 | The agent's diagnosis: the evidence pack, secret masking, dangerous commands, checking the model's answer, saving reports. |
+| [`test_agent_watch.py`](#test_agent_watchpy) | 10 | Reusing a recent diagnosis, and watching the fix until the agent resolves the incident. |
 | [`test_agent_worker.py`](#test_agent_workerpy) | 12 | The agent's job queue and worker: one job per opened or worsened incident after the commit, retries, time limit, restarts. |
 | [`test_alerts.py`](#test_alertspy) | 10 | The incident engine: one incident per problem, resolve, container rules. |
 | [`test_auth_backend.py`](#test_auth_backendpy) | 50 | Accounts, passwords, the first-account setup token, and the cross-site request check. |
@@ -317,6 +319,45 @@ shouldn't, or an admin might be locked out.
 | `test_a_conversation_sends_the_system_prompt_and_its_history` | Each request carries the system prompt and the conversation so far, in order. |
 | `test_only_recent_turns_go_back_to_the_model` | Long conversations send only the most recent turns. |
 | `test_a_failed_turn_is_not_kept_in_the_conversation` | A message that failed (timeout, provider error) is not remembered as part of the conversation. |
+
+### test_agent_diagnosis.py
+
+| Test | What it checks |
+|---|---|
+| `test_secrets_are_masked` | Passwords, tokens, keys, credentials in URLs, JWTs and private keys are replaced with `[masked]` (8 cases). |
+| `test_ordinary_text_is_left_alone` | Ordinary event text, even with words like "token", is not masked. |
+| `test_destructive_commands_are_flagged` | `rm -rf`, volume pruning, `DROP DATABASE`, `mkfs`, `chmod 777`, `curl \| sh`, `ufw disable` and more are flagged (9 cases). |
+| `test_reading_and_ordinary_commands_are_not` | Reading commands and ordinary fixes are not flagged (7 cases). |
+| `test_the_pack_has_an_id_on_every_fact_and_stays_small` | Every fact in the evidence pack has an ID, series stay within 40 points, similar incidents carry their resolution. |
+| `test_the_pack_is_masked_and_the_same_every_time` | A secret in an event never reaches the pack, and the same data gives the same pack. |
+| `test_signals_keep_only_the_evidence_that_exists` | References to facts that aren't in the pack are removed from a signal. |
+| `test_a_signal_with_no_real_evidence_is_dropped_and_confidence_follows` | A signal citing nothing real is dropped and counted, and confidence falls to low. |
+| `test_a_dangerous_step_is_flagged_and_never_recommended` | A destructive fix gets a warning and loses "recommended"; the first safe step may keep it. |
+| `test_only_one_step_is_recommended` | At most one fix step is recommended. |
+| `test_a_verify_condition_on_an_unknown_metric_becomes_manual` | A condition on a metric that isn't in the pack is not watched. |
+| `test_an_unusable_answer_is_rejected` | Answers that aren't JSON, aren't an object or have no summary are rejected (3 cases). |
+| `test_a_diagnosis_is_saved_as_a_new_version_and_counted` | Each diagnosis is a new version, each model call counts as `diagnosis`, the evidence is sent as untrusted and masked. |
+| `test_an_unusable_answer_is_asked_for_once_more` | An unusable answer is asked for once more, saying why. |
+| `test_two_unusable_answers_give_a_failed_report` | After two unusable answers the report is saved as failed, with the reason and the evidence. |
+| `test_a_provider_error_is_counted_and_raised_so_the_job_is_retried` | A provider error is recorded and raised so the queue retries the job; no report is saved. |
+| `test_the_worker_diagnoses_and_reports_back` | The worker's job ends as "diagnosed" with the confidence and version. |
+| `test_without_a_key_the_worker_leaves_the_rule_based_diagnosis` | Without an API key the job is skipped and says why. |
+| `test_with_automatic_diagnosis_off_only_a_request_is_diagnosed` | With automatic diagnosis off, only a requested diagnosis runs. |
+
+### test_agent_watch.py
+
+| Test | What it checks |
+|---|---|
+| `test_the_same_problem_within_a_day_reuses_the_diagnosis` | A new incident of the same rule on the same server gets the diagnosis from the last 24 hours, with no tokens spent. |
+| `test_an_older_or_different_diagnosis_is_not_reused` | A diagnosis older than a day, or of another container, is not reused. |
+| `test_the_worker_reuses_before_asking_the_model` | The worker reuses before it would call the model. |
+| `test_getting_worse_or_asking_again_is_never_reused` | Getting worse and "Diagnose again" always ask the model. |
+| `test_a_container_that_ran_long_enough_without_restarting_resolves_the_incident` | A container running past the condition without a restart resolves the incident, with the condition as its resolution, and starts the hold. |
+| `test_a_recent_restart_keeps_it_open_and_shows_progress` | A recent restart keeps the incident open and reports how long the condition has held. |
+| `test_old_data_is_not_proof` | Samples older than 5 minutes never resolve an incident. |
+| `test_a_metric_under_its_threshold_long_enough_holds` | A metric under its threshold for long enough holds, described by the metric's name. |
+| `test_the_rule_does_not_reopen_what_the_agent_closed_until_the_hold_ends_or_it_breaks` | The rule stays quiet after the agent resolved its incident, until the problem comes back. |
+| `test_manual_conditions_are_not_watched` | Conditions that need a person are never acted on. |
 
 ### test_agent_worker.py
 

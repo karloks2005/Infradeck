@@ -85,17 +85,41 @@ function withReport(found, agent) {
 const CONFIDENCE_TONE = { high: 'chip-ok', medium: '', low: 'chip-warn' }
 
 // Who wrote what's below: the agent (which model, how sure, when) or the rules, and a way to ask for a new diagnosis.
+const ASK_POLL_MS = 3000
+const ASK_PATIENCE_MS = 3 * 60 * 1000
+
 function AgentLine({ incident, canAct, onChanged, compact = false }) {
   const [state, run] = useAction()
-  const [asked, setAsked] = useState(false)
+  // While a requested diagnosis is on its way: the report version it should replace, and when it was asked for.
+  const [waiting, setWaiting] = useState(null)
   const agent = incident.agent || {}
   const report = agent.report
+  const version = report?.version ?? 0
+  const arrived = waiting !== null && version > waiting.version
+  const asked = waiting !== null && !arrived
+  const slow = asked && waiting.late
+
+  // Look for the new report every few seconds until it is there, so it shows without reloading the page.
+  useEffect(() => {
+    if (!asked || waiting.late) return undefined   // past the patience, the page's own 20 s refresh carries on
+    const timer = setInterval(() => {
+      onChanged()
+      if (Date.now() - waiting.at > ASK_PATIENCE_MS) setWaiting((current) => (current ? { ...current, late: true } : current))
+    }, ASK_POLL_MS)
+    return () => clearInterval(timer)
+    // onChanged is a new function each render; polling only follows the request.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asked, waiting?.at, waiting?.late])
+  useEffect(() => { if (arrived) setWaiting(null) }, [arrived])
   const resolved = incident.status === 'resolved'
   const canAsk = canAct && agent.key_configured && !agent.budget_paused
   const why = !agent.key_configured ? 'Set OPENAI_API_KEY in .env for the agent to diagnose incidents.' : agent.budget_paused ? 'This month\'s budget for the agent is used up.' : !canAct ? 'Only owners and admins can ask for a diagnosis.' : undefined
-  const ask = () => run(async () => { await post(`/incidents/${incident.id}/diagnose`); setAsked(true); setTimeout(onChanged, 15000) })
+  const ask = () => run(async () => { await post(`/incidents/${incident.id}/diagnose`); setWaiting({ version, at: Date.now(), late: false }) })
   let text
-  if (asked) text = 'Asked the agent. The new diagnosis appears here when the worker gets to it, usually within a minute.'
+  if (slow) text = 'Still waiting for the agent. It is taking longer than usual; the worker may be busy or stopped (Admin › Incident agent › Worker).'
+  else if (asked) text = <span className="inline-flex items-center gap-2"><span className="spinner" />Asked the agent. The new diagnosis appears here as soon as it is ready, usually within a minute.</span>
+  else if (agent.hidden) text = 'Below is the rule-based diagnosis. An admin has kept the agent\'s diagnoses to admins.'
+  else if (report?.status === 'ok' && report.reused_from) text = <>Same problem as <Link className="link" to={`/agent?incident=${report.reused_from.incident_id}`}>{report.reused_from.reference}</Link> {formatAge(report.reused_from.created_at)} ago, so its diagnosis is reused and no tokens were spent · <span className="mono">{report.model}</span></>
   else if (report?.status === 'ok') text = <>Diagnosed by the agent · <span className="mono">{report.model}</span> · {formatAge(report.created_at)} ago{report.version > 1 ? ` · version ${report.version}` : ''}{report.dropped_signals ? ` · ${report.dropped_signals} unsupported ${report.dropped_signals === 1 ? 'claim' : 'claims'} left out` : ''}</>
   else if (report?.status === 'failed') text = `The agent couldn't diagnose this (${report.error}). Below is the rule-based diagnosis.`
   else text = incident.severity === 'INFO' ? 'A note, not a problem: the agent only diagnoses warnings and critical incidents.' : 'The agent hasn\'t diagnosed this yet. Below is the rule-based diagnosis, worked out from the same data.'
@@ -105,6 +129,9 @@ function AgentLine({ incident, canAct, onChanged, compact = false }) {
       <span className="min-w-0 flex-1 basis-48">{text}</span>
       {report?.status === 'ok' && <span className={`chip ${CONFIDENCE_TONE[report.confidence] || ''}`}>{report.confidence} confidence</span>}
       {!resolved && incident.severity !== 'INFO' && <button type="button" className="btn btn-sm" disabled={!canAsk || state.busy || asked} title={why} onClick={ask}>{report ? 'Diagnose again' : 'Diagnose now'}</button>}
+      {report?.watch && !asked && <span className="basis-full text-soft">{report.watch.known
+        ? <>Watching: resolves itself once {report.watch.text}. {report.watch.held_minutes >= 1 ? `Held for ${Math.floor(report.watch.held_minutes)} of ${report.watch.minutes} min.` : 'Not holding yet.'}</>
+        : <>Watching for {report.watch.text}, but there is no recent data to judge it by.</>}</span>}
       {state.error && <span role="alert" className="basis-full text-warn">{state.error}</span>}
     </div>
   )
@@ -456,6 +483,7 @@ export default function AgentPage({ user, onLogout }) {
   const crumbs = selected ? [{ label: 'Agent', to: '/agent' }, { label: selected.reference }] : [{ label: 'Agent' }]
   // Why the chat can't be used right now, or null when it can.
   const chatOff = !config ? null : !config.chat_enabled ? 'Chat with the agent has been turned off by an admin.'
+    : config.may_chat === false ? 'Chat with the agent is for admins. An admin can allow it for you in Admin › Users.'
     : config.key_configured === false ? 'The agent has no API key yet. An admin sets OPENAI_API_KEY in .env.'
       : config.budget_paused ? 'This month\'s budget for the agent is used up. An admin can raise it in Admin › Incident agent.' : null
 

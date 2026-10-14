@@ -11,7 +11,7 @@ The [README](../README.md) is the short version: what the project is, how to sta
 | [Metrics: what every number means](metrics.md) | CPU %, load, memory, swap, disk, inodes, network, container and system figures: how each is measured and its limits. |
 | [Alerts and incidents](alerts.md) | Every rule, its default thresholds, and how incidents open and resolve. |
 | [Accounts, roles and two-factor sign-in](accounts.md) | Passwords, roles, the Account page, authenticator codes, recovery codes, locked-out accounts. |
-| [Homie assistant](assistant.md) | The optional, monitoring-only AI assistant. |
+| [Incident agent](assistant.md) | The optional agent: diagnoses, watching the fix, notifications, chat, who sees what, and what it costs. |
 
 ## Installing and running
 

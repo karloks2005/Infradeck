@@ -46,6 +46,7 @@ def app(monkeypatch):
     monkeypatch.setenv("SECRETS_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(main, "send_agent_message", lambda *args, **kwargs: "ok")
     monkeypatch.setattr(main, "is_agent_chat_enabled", lambda db: True)
+    monkeypatch.setattr(main.agent_settings, "may_chat", lambda db, user: True)   # chat access has its own tests
     client = TestClient(main.app, raise_server_exceptions=False)
     client.Session, client.redis = Session, redis
     yield client

@@ -17,7 +17,6 @@ from ..backend.models import AgentRun, AppSetting
 PRICES_KEY = "agent_prices"
 CAP_KEY = "agent_monthly_cap_usd"
 DAILY_LIMIT_KEY = "agent_daily_chat_limit"
-AUTO_DIAGNOSE_KEY = "agent_auto_diagnose"
 DEFAULT_DAILY_CHAT_LIMIT = 100
 MAX_DAILY_CHAT_LIMIT = 10000
 WARN_SHARE = 0.8
@@ -80,11 +79,6 @@ def validate_cap(value) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= MAX_CAP_USD:
         raise ValueError(f"The monthly budget must be between 0 and {MAX_CAP_USD} USD.")
     return float(value) or None
-
-
-def auto_diagnose(db) -> bool:
-    """Whether new and worsening incidents are diagnosed without anyone asking. On unless an admin turned it off."""
-    return _setting(db, AUTO_DIAGNOSE_KEY) != "false"
 
 
 def get_daily_limit(db) -> int:

@@ -38,6 +38,11 @@ def raise_alert(db, server_id: int, rule_key: str, severity: str, title: str, de
             agent_jobs.note(db, agent_jobs.WORSENED, existing, severity)
         existing.severity, existing.title, existing.description = severity, title[:255], description
         return False
+    # The agent closed the last one because its fix held; events still inside the rule's window don't reopen it.
+    held = db.query(IncidentAlert.reopen_after).filter(IncidentAlert.server_id == server_id, IncidentAlert.rule_key == rule_key, IncidentAlert.status == "resolved",
+                                                     IncidentAlert.reopen_after.isnot(None)).order_by(IncidentAlert.reopen_after.desc()).limit(1).scalar()
+    if held is not None and (held if held.tzinfo else held.replace(tzinfo=timezone.utc)) > datetime.now(timezone.utc):
+        return False
     alert = IncidentAlert(server_id=server_id, rule_key=rule_key, severity=severity, title=title[:255], description=description)
     db.add(alert)
     agent_jobs.note(db, agent_jobs.OPENED, alert, severity)

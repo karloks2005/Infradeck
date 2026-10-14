@@ -203,14 +203,14 @@ comes back, sessions saved in its volume work again.
 ## infradeck-agent-worker
 
 **What it does.** Runs the incident agent's jobs. When an incident opens, or gets more severe, the backend puts one
-job in a queue in Redis; the worker takes jobs one at a time and works on them. Automatic diagnosis (#116) is not
-built yet, so for now a job only checks that its incident still needs a diagnosis and notes that; the chat runs in
-the backend.
+job in a queue in Redis; the worker takes jobs one at a time and diagnoses the incident (see
+[Incident agent](assistant.md)). Every minute it also checks the conditions its diagnoses gave and resolves the
+incidents whose fix held. The chat runs in the backend.
 
 **How it works.** It is the backend image started with `python -m src.agent.worker`. Jobs are published only after
 the database commit that opened the incident, and each event once. A job the worker takes moves to a processing
 list and leaves it only when it is done, so a job interrupted by a restart goes back to the queue. A failed job is
-tried again after 30 and 60 seconds and then given up; a job running longer than 2 minutes is abandoned. The
+tried again after 30 and 60 seconds and then given up; a job running longer than 5 minutes is abandoned. The
 worker writes a heartbeat every few seconds, which **Admin → Incident agent → Worker** and the container's
 healthcheck read. It runs with no capabilities, a read-only filesystem and no published port.
 
@@ -223,7 +223,8 @@ needed nothing new; a dedicated queue system (Celery, RabbitMQ) would add contai
 reach the model provider on the internet.
 
 **If it stops.** New incidents wait in the queue for their diagnosis and are worked on when it starts again (each
-waiting job is kept). Incidents, notifications, the chat and everything else keep working. Admin shows the
+waiting job is kept), and nothing is resolved by the agent. Notifications stop waiting for a diagnosis. Incidents,
+the chat and everything else keep working. Admin shows the
 worker as offline.
 
 ## infradeck-collector

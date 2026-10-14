@@ -27,8 +27,12 @@ All paths are relative to `/api` when going through the frontend/nginx.
 | `POST /monitoring/join-tokens` | admin | Create the single-use join token for **Connect a server** (shown once). |
 | `GET /monitoring/install-info` | admin | The collector address and images the panel uses. |
 | `GET` / `POST` / `DELETE /monitoring/enrollment-key` | admin | Show status / create or rotate / revoke the enrollment key. |
-| `GET` / `PUT /admin/settings` | admin | Metrics retention, chat on/off, require two-factor for admins, alert thresholds and per-mount disk thresholds; the agent's model prices, monthly budget and daily chat limit. |
-| `GET /agent/config` | session | Whether chat with the agent can be used: switched on, a key configured, and the monthly budget not used up. |
+| `GET` / `PUT /admin/settings` | admin | Metrics retention, chat on/off, require two-factor for admins, alert thresholds and per-mount disk thresholds; the agent's model prices, monthly budget, daily chat limit, automatic diagnosis, whether users see diagnoses, and chat access (`admins_only` or `per_user`). |
+| `GET /admin/users`, `PATCH /admin/users/{id}` | admin | Users and invitations; change someone's role, switch them off, or (with per-user chat access) allow them the agent chat (`agent_chat_enabled`). |
+| `GET /agent/config` | session | Whether chat with the agent can be used: switched on, allowed for you (`may_chat`), a key configured, and the monthly budget not used up. |
+| `GET /incidents`, `GET /incidents/{id}` | session | The incident inbox; one incident with its rule-based diagnosis and, under `agent`, the agent's latest report (with `watch` progress while it is open, `reused_from` when it was reused). The report is left out (`hidden: true`) for users who aren't admins while diagnoses aren't shown to users. |
+| `POST /incidents/{id}/acknowledge`, `…/resolve`, `…/mute`, `…/unmute` | admin | Act on an incident. |
+| `POST /incidents/{id}/diagnose` | admin | Queue a new diagnosis by the agent (409 without a key, 429 while the budget is used up). |
 | `GET /admin/agent/usage` | admin | This month's model calls, tokens and estimated cost against the budget, per model and per day, with the prices and limits. |
 | `GET /admin/agent/worker` | admin | Whether the agent worker is running, how many jobs wait, are running or wait to be retried, and the latest results. |
 | `POST /admin/agent/test` | admin | Checks the OpenAI key and that the configured model exists, without spending tokens. |
@@ -36,7 +40,7 @@ All paths are relative to `/api` when going through the frontend/nginx.
 | `POST /monitoring/collectors/register/poll` | poll secret | Collector checks approval; returns its token once approved. |
 | `POST /monitoring/collectors/enroll` | enrollment key | Join without approval. |
 | `POST /monitoring/metrics/ingest` | collector token | Collector reports host, container and system metrics. |
-| `GET /conversations`, `POST /conversations`, `DELETE /conversations/{id}`, `POST /agent/chat` | session | Homie assistant chats. |
+| `GET /conversations`, `POST /conversations`, `DELETE /conversations/{id}`, `POST /agent/chat` | session | Chats with the incident agent (403 for users chat isn't allowed for). |
 | `GET /logs`, `POST /logs`, `GET /dashboard/summary` | session | Audit log and summary counts. `POST /logs` adds an entry to your own log (level from a fixed list, message up to 2000 characters, at most 120 an hour); its source is always `dashboard`. |
 
 The four collector endpoints above exist only on the collector gate in the server

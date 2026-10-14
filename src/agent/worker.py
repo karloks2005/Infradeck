@@ -4,6 +4,9 @@ It runs in its own container, so a slow or stuck model never holds up the backen
 incidents wait for their diagnosis; everything else keeps working. Run with ``python -m src.agent.worker``;
 ``--health`` exits 0 while a worker is alive, for the container's healthcheck.
 
+Every minute it also checks the conditions its diagnoses gave ("gitlab runs 15 min without a restart") and resolves
+the incidents whose fix held (verify.py).
+
 A job builds the incident's evidence pack and asks the model for a diagnosis (diagnosis.py), unless the incident
 no longer needs one, there is no API key, or this month's budget is used up.
 """
@@ -15,7 +18,7 @@ import sys
 import threading
 import time
 
-from src.agent import diagnosis, jobs, usage
+from src.agent import diagnosis, jobs, settings, usage, verify
 from src.agent.providers import configured_key, get_provider
 from src.backend.config import REDIS_URL
 from src.backend.db import SessionLocal
@@ -24,6 +27,8 @@ from src.backend.models import IncidentAlert
 # A diagnosis can take two model calls, each with its own retries; past this the job is given up and retried later.
 JOB_TIMEOUT_SECONDS = 300
 POLL_SECONDS = 5
+# How often the conditions the agent gave are checked against the data (see verify.py).
+WATCH_SECONDS = 60
 
 
 def handle_incident(job: dict) -> tuple[str, str]:
@@ -37,10 +42,15 @@ def handle_incident(job: dict) -> tuple[str, str]:
             return "skipped", "The incident was already resolved."
         if usage.budget(db)["state"] == "paused":
             return "skipped", "This month's budget for the agent is used up."
-        if job.get("type") != jobs.REQUESTED and not usage.auto_diagnose(db):
+        if job.get("type") != jobs.REQUESTED and not settings.auto_diagnose(db):
             return "skipped", "Automatic diagnosis is switched off in Admin; it runs when someone asks."
         if not configured_key():
             return "skipped", "No OPENAI_API_KEY is configured; the incident keeps its rule-based diagnosis."
+        if job.get("type", jobs.OPENED) == jobs.OPENED:
+            # The same problem again within a day: its diagnosis still applies, and asking again would cost tokens.
+            reused = diagnosis.reuse_recent(db, incident)
+            if reused is not None:
+                return "reused", f"Same diagnosis as INC-{json.loads(reused.body)['reused_from']['incident_id']:04d}; no tokens spent"
         report = diagnosis.diagnose(db, incident, get_provider(), trigger=job.get("type", jobs.OPENED))
         if report.status != "ok":
             return "failed", report.error or "The model's answer could not be used."
@@ -93,6 +103,14 @@ def process(redis_client, raw: str, handlers=None, timeout: float = JOB_TIMEOUT_
     return status_text
 
 
+def watch_once() -> dict:
+    db = SessionLocal()
+    try:
+        return verify.watch(db)
+    finally:
+        db.close()
+
+
 def main() -> int:
     import redis
 
@@ -107,7 +125,16 @@ def main() -> int:
     started_at = jobs.now_iso()
     recovered = jobs.recover(client)
     print(f"Agent worker started{f'; {recovered} unfinished jobs back in the queue' if recovered else ''}.", flush=True)
+    last_watch = 0.0
     while not stopping.is_set():
+        if time.monotonic() - last_watch >= WATCH_SECONDS:
+            last_watch = time.monotonic()
+            try:
+                watched = watch_once()
+                if watched["resolved"] or watched["released"]:
+                    print(f"Agent watch: resolved {watched['resolved']}, lifted the hold on {watched['released']}", flush=True)
+            except Exception as exc:   # a database hiccup must not stop the jobs
+                print(f"Agent watch failed: {type(exc).__name__}: {exc}", flush=True)
         try:
             jobs.beat(client, started_at)
             jobs.promote_due(client)

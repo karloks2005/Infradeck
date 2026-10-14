@@ -7,9 +7,9 @@ One machine runs the dashboard; every other machine runs a small collector that
 reports host and Docker container metrics back to it. It works the same whether
 the machines share a LAN or are spread across sites and VPSes.
 
-It also includes an optional, monitoring-only incident agent (OpenAI API, set `OPENAI_API_KEY`)
-that can run a fixed set of read-only health checks and never executes commands.
-It's main purpose is to report errors, diagnose errors and propose optimal fixes.
+It also includes an optional incident agent (OpenAI API, set `OPENAI_API_KEY`): it diagnoses each
+incident from the data Infradeck already has, proposes fixes, watches whether the fix holds and adds its
+diagnosis to your notifications. It reads; it never runs commands on your servers.
 
 Security comes first: the collectors never get the Docker socket, remote machines
 report over a VPN to a listener the public internet can't reach, and nothing
@@ -66,7 +66,10 @@ for what every component can touch and the limits of each protection.
 - **Account security**: optional two-factor sign-in (authenticator app and single-use
   recovery codes), **required for admins by default**; change your password, review
   and end your sessions, and reset a locked-out account from the host.
-- **Homie chat assistant** (optional) restricted to predefined read-only checks.
+- **Incident agent** (optional): diagnoses every warning and critical incident from masked evidence, with each
+  claim tied to the data; reuses a diagnosis when the same problem returns within a day; resolves the incident once
+  its fix holds; adds the diagnosis to notifications; chat about any incident. Monthly budget, per-model prices and
+  who-sees-what in Admin. See [Incident agent](docs/assistant.md).
 
 <ui - Three phone screenshots side by side (about 390 px wide): the dashboard top with the bottom tab bar, a server card with the Containers list open, and Admin → Alerts thresholds>
 
@@ -171,7 +174,7 @@ Full documentation is in the [`docs/`](docs/README.md) folder:
 | [Accounts and two-factor sign-in](docs/accounts.md) | Roles, passwords, authenticator codes, recovery and reset. |
 | [The containers](docs/containers.md) | What each container (backend, PostgreSQL, Redis, collector, Docker proxy, helpers) does and why it is there. |
 | [Deploying](docs/deployment.md), [Adding servers](docs/adding-servers.md), [Configuration](docs/configuration.md), [Troubleshooting](docs/troubleshooting.md) | Installing, running and fixing it. |
-| [Development](docs/development.md), [Database schema](docs/database.md), [API overview](docs/api.md), [Homie assistant](docs/assistant.md) | For contributors. |
+| [Development](docs/development.md), [Database schema](docs/database.md), [API overview](docs/api.md), [Incident agent](docs/assistant.md) | For contributors. |
 
 ## Security
 

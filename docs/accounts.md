@@ -17,13 +17,14 @@
 - Everyone signed in can see all servers, containers and incidents.
 - Only admins can add, approve, dismiss or delete servers, change check
   intervals, manage the enrollment key and open the **Admin** page.
-- **Admin** page settings that are connected today: alert thresholds (including
-  per-mount disk thresholds), how long metrics are kept (default 30 days; older
-  check-in samples and system events are deleted hourly, but only after the check-ins have
-  been summarised; the summaries behind the Statistics page are not deleted yet, and a
-  retention setting for each level is planned), and turning
-  chat with the assistant on or off. The other sections on the page show
-  placeholder data and aren't saved yet.
+- **Admin** page: servers, users and invitations, alert rules and thresholds (including per-mount disk
+  thresholds), how long metrics are kept (default 30 days; older check-in samples and system events are deleted
+  hourly, but only after the check-ins have been summarised), and the incident agent.
+- **The incident agent and roles**: admins always see the agent's diagnoses and may use its chat. Whether other
+  users see diagnoses is the **Show diagnoses to users** switch in Admin → Incident agent (on by default). The chat
+  is for admins only by default; with **Chat access: Per user**, an **Agent chat** switch next to each user in
+  Admin → Users allows it (new users start with it off). Only admins can ask for a new diagnosis. See
+  [Incident agent](assistant.md#who-sees-what).
 
 ## Two-factor sign-in
 

@@ -28,6 +28,8 @@ class User(Base):
     avatar_color: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     # Display and notification choices, as checked JSON.
     preferences: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # May use the chat with the incident agent when Admin sets chat access to "per user" (admins always may).
+    agent_chat_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -347,6 +349,9 @@ class IncidentAlert(Base):
     # When the notifier handled its opening and its resolving, so each is sent once.
     notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     resolve_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set when the agent resolved it because its fix held: until then the same rule on this server opens no new
+    # incident, so events still inside the rule's window don't reopen it (see src/agent/verify.py).
+    reopen_after: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class HostRollup(Base):

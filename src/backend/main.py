@@ -64,7 +64,7 @@ from .config import (
 )
 from .rules import HELPER_EVENT_KINDS, DEFAULT_THRESHOLDS, HOST_RULE_PREFIX, container_rules, host_rules, validate_thresholds, detect_system_events, system_rules, SYSTEM_RULE_PREFIX, validate_mount_thresholds, validate_helper_events, REBOOT_DETAILS, REBOOT_KEY_PREFIX, detect_container_events, memory_trend_rules, CONTAINER_EVENT_KINDS, MAX_CONTAINER_EVENTS_PER_CHECKIN, MAX_CONTAINER_EVENTS_PER_HOUR, TREND_RULE_PREFIX, NETWORK_EVENT_KINDS, NETWORK_RULE_PREFIX, MAX_NETWORK_EVENTS_PER_CHECKIN, MAX_NETWORK_EVENTS_PER_HOUR, INTERNET_STATUSES, LISTENER_SCOPES, LISTENER_PROTOCOLS, MAX_LISTENERS, FIREWALL_LABELS, detect_listener_changes, detect_firewall_changes, network_rules, validate_listeners, validate_firewall
 from .rate_limit import enforce_ip_limit, enforce_limit, enforce_login_limit, enforce_register_limit, refund_attempt, reset_limits
-from ..agent import jobs as agent_jobs, usage as agent_usage
+from ..agent import jobs as agent_jobs, settings as agent_settings, usage as agent_usage, verify as agent_verify
 from ..agent.diagnosis import latest as latest_report, report_json
 from ..agent.providers import configured_key
 from ..agent.chat import check_provider_connection, delete_agent_conversation, send_agent_message
@@ -196,6 +196,8 @@ class AdminSettingsRequest(BaseModel):
     agent_monthly_cap_usd: float | None = None
     agent_daily_chat_limit: int | None = None
     agent_auto_diagnose: bool | None = None
+    agent_show_diagnoses_to_users: bool | None = None
+    agent_chat_access: Literal["admins_only", "per_user"] | None = None
 
 
 class MetricsIngestRequest(BaseModel):
@@ -354,9 +356,9 @@ def startup_event():
             connection.execute(text("ALTER TABLE incident_alerts ADD COLUMN IF NOT EXISTS rule_key VARCHAR(255)"))
             connection.execute(text("ALTER TABLE incident_alerts ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP WITH TIME ZONE"))
             for column, column_type in (("resolution", "VARCHAR(255)"), ("acknowledged_at", "TIMESTAMP WITH TIME ZONE"), ("acknowledged_by", "INTEGER"), ("muted_until", "TIMESTAMP WITH TIME ZONE"),
-                                        ("notified_at", "TIMESTAMP WITH TIME ZONE"), ("resolve_notified_at", "TIMESTAMP WITH TIME ZONE")):
+                                        ("notified_at", "TIMESTAMP WITH TIME ZONE"), ("resolve_notified_at", "TIMESTAMP WITH TIME ZONE"), ("reopen_after", "TIMESTAMP WITH TIME ZONE")):
                 connection.execute(text(f"ALTER TABLE incident_alerts ADD COLUMN IF NOT EXISTS {column} {column_type}"))
-            for column, column_type in (("username", "VARCHAR(64)"), ("avatar_color", "VARCHAR(16)"), ("preferences", "TEXT"), ("last_seen_at", "TIMESTAMP WITH TIME ZONE")):
+            for column, column_type in (("username", "VARCHAR(64)"), ("avatar_color", "VARCHAR(16)"), ("preferences", "TEXT"), ("last_seen_at", "TIMESTAMP WITH TIME ZONE"), ("agent_chat_enabled", "BOOLEAN NOT NULL DEFAULT FALSE")):
                 connection.execute(text(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {column} {column_type}"))
             connection.execute(text("CREATE INDEX IF NOT EXISTS ix_incident_alerts_rule_key ON incident_alerts (rule_key)"))
             # Alerts from before the alert engine: offline alerts keep going under their rule, the rest were
@@ -1005,7 +1007,8 @@ def get_mount_thresholds(db) -> dict:
 def _admin_settings(db) -> dict:
     return {"instance_name": get_instance_name(db), "metrics_retention_days": get_metrics_retention_days(db), "agent_chat_enabled": is_agent_chat_enabled(db), "alert_thresholds": get_alert_thresholds(db), "mount_thresholds": get_mount_thresholds(db), "require_2fa_for_admins": require_admin_two_factor(db), "secrets_configured": secrets_box.available(),
             "require_2fa_for_everyone": require_two_factor_for_everyone(db), "disabled_rules": sorted(get_disabled_rules(db)),
-            "agent_prices": agent_usage.get_prices(db), "agent_monthly_cap_usd": agent_usage.get_cap(db), "agent_daily_chat_limit": agent_usage.get_daily_limit(db), "agent_auto_diagnose": agent_usage.auto_diagnose(db)}
+            "agent_prices": agent_usage.get_prices(db), "agent_monthly_cap_usd": agent_usage.get_cap(db), "agent_daily_chat_limit": agent_usage.get_daily_limit(db), "agent_auto_diagnose": agent_settings.auto_diagnose(db),
+            "agent_show_diagnoses_to_users": agent_settings.show_diagnoses_to_users(db), "agent_chat_access": agent_settings.chat_access(db)}
 
 
 def purge_old_metrics(db, now: datetime | None = None) -> int:
@@ -1076,9 +1079,15 @@ def update_admin_settings(payload: AdminSettingsRequest, session_id: Annotated[s
                 changes.append(f"Set the agent chat limit to {limit} messages per person per day")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if payload.agent_auto_diagnose is not None and payload.agent_auto_diagnose != agent_usage.auto_diagnose(db):
-        _set_setting(db, agent_usage.AUTO_DIAGNOSE_KEY, "true" if payload.agent_auto_diagnose else "false")
+    if payload.agent_auto_diagnose is not None and payload.agent_auto_diagnose != agent_settings.auto_diagnose(db):
+        _set_setting(db, agent_settings.AUTO_DIAGNOSE_KEY, "true" if payload.agent_auto_diagnose else "false")
         changes.append(f"{'Turned on' if payload.agent_auto_diagnose else 'Turned off'} automatic diagnosis by the agent")
+    if payload.agent_show_diagnoses_to_users is not None and payload.agent_show_diagnoses_to_users != agent_settings.show_diagnoses_to_users(db):
+        _set_setting(db, agent_settings.SHOW_TO_USERS_KEY, "true" if payload.agent_show_diagnoses_to_users else "false")
+        changes.append(f"{'Showed' if payload.agent_show_diagnoses_to_users else 'Hid'} the agent's diagnoses {'to' if payload.agent_show_diagnoses_to_users else 'from'} users who aren't admins")
+    if payload.agent_chat_access is not None and payload.agent_chat_access != agent_settings.chat_access(db):
+        _set_setting(db, agent_settings.CHAT_ACCESS_KEY, payload.agent_chat_access)
+        changes.append("Agent chat is now for admins only" if payload.agent_chat_access == "admins_only" else "Agent chat is now allowed per user")
     if payload.agent_chat_enabled is not None:
         _set_setting(db, AGENT_CHAT_ENABLED_KEY, "true" if payload.agent_chat_enabled else "false")
         changes.append(f"{'Enabled' if payload.agent_chat_enabled else 'Disabled'} chat with the agent")
@@ -1109,9 +1118,10 @@ def update_admin_settings(payload: AdminSettingsRequest, session_id: Annotated[s
 @app.get("/agent/config")
 def agent_config(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     """What the Agent page needs to know about the agent; readable by every signed-in user."""
-    _current_user(session_id, db)
+    user = _current_user(session_id, db)
     spend = agent_usage.budget(db)
-    return {"chat_enabled": is_agent_chat_enabled(db), "key_configured": bool(configured_key()), "budget_paused": spend["state"] == "paused"}
+    account = db.get(User, user["id"])
+    return {"chat_enabled": is_agent_chat_enabled(db), "may_chat": bool(account) and agent_settings.may_chat(db, account), "key_configured": bool(configured_key()), "budget_paused": spend["state"] == "paused"}
 
 
 OVERVIEW_ALERT_LIMIT = 50
@@ -1250,6 +1260,7 @@ def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_C
     # Most severe first, then newest.
     severity_rank = case({severity: rank for rank, severity in enumerate(reversed(SEVERITIES))}, value=IncidentAlert.severity, else_=len(SEVERITIES))
     alerts = _spread_alerts(active_alerts.order_by(severity_rank, IncidentAlert.created_at.desc()).limit(OVERVIEW_ALERT_SCAN).all())
+    sees_reports = agent_settings.sees_diagnoses(db, "admin" if _is_admin(db, user["id"]) else "user")
     hostnames = {server.id: server.hostname for server in servers}
     servers_by_id = {server.id: server for server in servers}
     thresholds = get_alert_thresholds(db)
@@ -1269,7 +1280,7 @@ def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_C
         "alert_thresholds": {key: thresholds[key] for key in ("memory_warning_pct", "memory_critical_pct", "swap_warning_pct")},
         "disk_thresholds": {key: thresholds[key] for key in ("disk_warning_pct", "disk_critical_pct", "inodes_warning_pct", "inodes_critical_pct")},
         "alerts": [{"id": a.id, "server_id": a.server_id, "hostname": hostnames.get(a.server_id), "severity": a.severity, "title": a.title, "description": a.description, "rule_key": a.rule_key, "created_at": a.created_at.isoformat(), "reference": incidents.reference(a.id), "acknowledged": a.acknowledged_at is not None,
-                    "agent_note": _agent_note(db, a, servers_by_id.get(a.server_id))} for a in alerts],
+                    "agent_note": _agent_note(db, a, servers_by_id.get(a.server_id), sees_reports)} for a in alerts],
     }
 
 
@@ -2566,6 +2577,9 @@ def agent_chat(payload: AgentChatRequest, session_id: Annotated[str | None, Cook
         raise HTTPException(status_code=401, detail="Session is invalid or expired.")
     if not is_agent_chat_enabled(db):
         raise HTTPException(status_code=403, detail="Chat with the agent has been turned off by an admin.")
+    account = db.get(User, user["id"])
+    if account is None or not agent_settings.may_chat(db, account):
+        raise HTTPException(status_code=403, detail="Chat with the agent is not switched on for your account. An admin can allow it in Admin › Users.")
     enforce_limit(redis_client, scope="chat-user", subject=user["id"], limit=CHAT_MESSAGE_LIMIT, window_seconds=3600)
     spend = agent_usage.budget(db)
     if spend["state"] == "paused":
@@ -2644,19 +2658,19 @@ def agent_chat(payload: AgentChatRequest, session_id: Annotated[str | None, Cook
 # ---------------------------------------------------------------------------------------------------------
 # Incidents (the Agent page)
 
-def _agent_note(db, alert: IncidentAlert, server: Server | None) -> str | None:
+def _agent_note(db, alert: IncidentAlert, server: Server | None, from_report: bool = True) -> str | None:
     """The one line the Overview shows next to an incident, from its diagnosis. Remembered for a minute: the
     Overview is polled every few seconds and working it out reads samples."""
     if server is None:
         return None
-    key = f"infradeck:incident-note:{alert.id}"
+    key = f"infradeck:incident-note:{alert.id}" + ("" if from_report else ":rules")
     try:
         cached = redis_client.get(key)
         if cached is not None:
             return (cached.decode() if isinstance(cached, bytes) else cached) or None
     except Exception:
         pass
-    report = latest_report(db, alert.id)
+    report = latest_report(db, alert.id) if from_report else None
     if report is not None and report.status == "ok" and report.summary:
         # The agent's own diagnosis, first sentence; the rule-based note when there is none.
         note = re.split(r"(?<=[.!?])\s", report.summary.strip(), maxsplit=1)[0][:160]
@@ -2702,11 +2716,16 @@ def list_incidents(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE
 
 @app.get("/incidents/{incident_id}")
 def get_incident(incident_id: PathId, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
-    _current_user(session_id, db)
+    user = _current_user(session_id, db)
     alert, server = _incident_or_404(db, incident_id)
     users = dict(db.query(User.id, User.name).all())
+    # Admins always see the agent's diagnosis; others only while Admin shows it to them (checked here, not in the page).
+    visible = agent_settings.sees_diagnoses(db, "admin" if _is_admin(db, user["id"]) else "user")
+    report = report_json(latest_report(db, alert.id)) if visible else None
+    if report and report["status"] == "ok" and alert.status == "active":
+        report["watch"] = agent_verify.evaluate(db, alert, report["verify"])
     return {**incidents.summary(alert, server.hostname, datetime.now(timezone.utc), users), "diagnosis": incidents.diagnose(db, alert, server), "cpu_cores": server.cpu_cores,
-            "agent": {"report": report_json(latest_report(db, alert.id)), "key_configured": bool(configured_key()), "budget_paused": agent_usage.budget(db)["state"] == "paused"}}
+            "agent": {"report": report, "hidden": not visible, "key_configured": bool(configured_key()), "budget_paused": agent_usage.budget(db)["state"] == "paused"}}
 
 
 @app.post("/incidents/{incident_id}/diagnose")
@@ -2991,6 +3010,30 @@ NOTIFY_WINDOW = timedelta(hours=24)
 NOTIFY_MARK_SECONDS = 7 * 24 * 3600
 
 
+# A new warning or critical incident waits this long for the agent's diagnosis, so the notification can carry it.
+DIAGNOSIS_WAIT = timedelta(minutes=3)
+
+
+def _diagnosis_coming(db) -> bool:
+    """Whether a diagnosis can be expected for a new incident: there is a key, automatic diagnosis is on, the budget
+    isn't used up and a worker is running. When not, notifications don't wait for one."""
+    if not configured_key() or not agent_settings.auto_diagnose(db) or agent_usage.budget(db)["state"] == "paused":
+        return False
+    try:
+        return bool(redis_client.get(agent_jobs.HEARTBEAT))
+    except Exception:
+        return False
+
+
+def _agent_summary(report) -> str | None:
+    """The first two sentences of a report, for a notification."""
+    if report is None or report.status != "ok" or not report.summary:
+        return None
+    sentences = re.split(r"(?<=[.!?])\s+", report.summary.strip())
+    text = " ".join(sentences[:2])
+    return text if len(text) <= 320 else text[:319] + "…"
+
+
 def dispatch_notifications(db, now: datetime | None = None) -> int:
     """Send what hasn't been sent: incidents that opened or resolved in the last day, to every user with channels,
     following each user's routing and quiet hours. Returns how many messages went out.
@@ -3007,6 +3050,7 @@ def dispatch_notifications(db, now: datetime | None = None) -> int:
         return 0
     recent = db.query(IncidentAlert).filter((IncidentAlert.created_at >= now - NOTIFY_WINDOW) | (IncidentAlert.resolved_at >= now - NOTIFY_WINDOW), IncidentAlert.severity != "INFO").order_by(IncidentAlert.created_at).limit(200).all()
     hostnames = dict(db.query(Server.id, Server.hostname).all())
+    coming = None
     sent = 0
     for alert in recent:
         if incidents.is_muted(alert, now):
@@ -3014,6 +3058,13 @@ def dispatch_notifications(db, now: datetime | None = None) -> int:
         event = "resolved" if alert.status == "resolved" else alert.severity.lower()
         if event not in notify.EVENTS:
             continue
+        report = latest_report(db, alert.id)
+        if event != "resolved" and report is None:
+            coming = _diagnosis_coming(db) if coming is None else coming
+            created = alert.created_at if alert.created_at.tzinfo else alert.created_at.replace(tzinfo=timezone.utc)
+            if coming and now - created < DIAGNOSIS_WAIT:
+                continue   # checked again in 15 s; after DIAGNOSIS_WAIT it goes out without the diagnosis
+        summary = _agent_summary(report) if event != "resolved" else None
         for user_id, channels in by_user.items():
             preferences = _preferences(owners[user_id])
             routing = preferences["routing"].get(event, {})
@@ -3028,6 +3079,8 @@ def dispatch_notifications(db, now: datetime | None = None) -> int:
                 return sent
             title = f"{'Resolved: ' if event == 'resolved' else ''}{alert.title}"
             body = f"{hostnames.get(alert.server_id, 'server')} · {alert.severity.lower()} · {incidents.reference(alert.id)}\n{alert.resolution or 'The condition cleared.' if event == 'resolved' else alert.description}"
+            if summary and agent_settings.sees_diagnoses(db, owners[user_id].role):
+                body += f"\nAgent: {summary}"
             for channel in wanted:
                 sent += 1 if _deliver(db, channel, owners[user_id], title, body, "INFO" if event == "resolved" else alert.severity) else 0
             if event == "resolved":
@@ -3079,6 +3132,8 @@ INVITE_TTL = timedelta(days=7)
 class UserUpdateRequest(BaseModel):
     role: Literal["admin", "user"] | None = None
     is_active: bool | None = None
+    # Whether they may use the agent chat when chat access is "per user".
+    agent_chat_enabled: bool | None = None
 
 
 class InviteRequest(BaseModel):
@@ -3098,10 +3153,11 @@ def _admin_users(db) -> dict:
     for account in db.query(User).order_by(User.id):
         users.append({"id": account.id, "name": account.name, "email": account.email, "role": account.role, "role_name": "Owner" if account.id == owner else "Admin" if account.role == "admin" else "Viewer",
                       "is_active": account.is_active, "two_factor": account.totp_enabled, "avatar_color": account.avatar_color, "sessions": len(list_user_sessions(redis_client, account.id, None)),
-                      "last_seen_at": account.last_seen_at.isoformat() if account.last_seen_at else None, "created_at": account.created_at.isoformat()})
+                      "last_seen_at": account.last_seen_at.isoformat() if account.last_seen_at else None, "created_at": account.created_at.isoformat(), "agent_chat_enabled": account.agent_chat_enabled})
     invites = [{"id": invite.id, "email": invite.email, "role": invite.role, "created_at": invite.created_at.isoformat(), "expires_at": invite.expires_at.isoformat()}
                for invite in db.query(Invite).filter(Invite.used_at.is_(None), Invite.expires_at > now).order_by(Invite.created_at)]
-    return {"users": users, "invites": invites, "require_2fa_for_everyone": require_two_factor_for_everyone(db), "require_2fa_for_admins": require_admin_two_factor(db), "secrets_configured": secrets_box.available()}
+    return {"users": users, "invites": invites, "require_2fa_for_everyone": require_two_factor_for_everyone(db), "require_2fa_for_admins": require_admin_two_factor(db), "secrets_configured": secrets_box.available(),
+            "agent_chat_access": agent_settings.chat_access(db)}
 
 
 @app.get("/admin/users")
@@ -3129,6 +3185,9 @@ def admin_update_user(user_id: PathId, payload: UserUpdateRequest, session_id: A
     if payload.is_active is not None and payload.is_active != account.is_active:
         account.is_active = payload.is_active
         changes.append("enabled" if payload.is_active else "disabled")
+    if payload.agent_chat_enabled is not None and payload.agent_chat_enabled != account.agent_chat_enabled:
+        account.agent_chat_enabled = payload.agent_chat_enabled
+        record_audit_log(db, user_id=admin["id"], level="INFO", message=f"{'Allowed' if payload.agent_chat_enabled else 'Stopped'} agent chat for {account.email}", source="admin")
     db.commit()
     if changes:
         # A role in a live session would outlast the change, and a disabled account must be out at once.

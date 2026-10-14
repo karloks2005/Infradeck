@@ -80,6 +80,13 @@ marked recommended (`src/agent/safety.py`). Nothing the model writes is run. Tur
 automatically" in Admin › Incident agent to send nothing unless someone asks; without a key nothing is sent
 and incidents keep the rule-based diagnosis, which is worked out locally.
 
+**Who sees the agent.** With "Show diagnoses to users" off, the backend leaves the agent's report out of every
+incident, Overview line and notification for users who aren't admins. Chat access is "Admins only" by default; with
+"Per user", only users an admin switched on in Admin › Users may chat, and the backend answers 403 to everyone
+else. **The agent resolving incidents**: it only resolves an incident when the condition from its own diagnosis
+holds in fresh data (a sample from the last 5 minutes), and the rule stays quiet only for its event window, ending
+at once if the problem comes back. A wrong condition can close an incident early, but not hide a new one for long.
+
 ## The optional system helper
 
 Reading the kernel log (`dmesg`) needs a privilege, and crash-vs-clean-shutdown detection needs

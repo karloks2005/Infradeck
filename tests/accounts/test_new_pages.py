@@ -503,3 +503,76 @@ def test_asking_for_a_new_diagnosis_queues_a_job(app, monkeypatch):
     queued = [json.loads(raw) for raw in app.redis.lrange(jobs.QUEUE, 0, -1)]
     assert [(job["type"], job["incident_id"]) for job in queued] == [("incident.requested", 42)] * 2
     assert signed_in(app, 3).post("/incidents/42/diagnose").status_code == 403
+
+
+# --- the agent in notifications, who sees diagnoses, who may chat (#120, #121, #124) -----------------------------
+
+def _report(app, incident_id=42, summary="gitlab is killed for memory after the update. Its limit is 4 GB. A third sentence."):
+    from src.backend.models import AgentReport
+    app.db.add(AgentReport(incident_id=incident_id, version=1, trigger="incident.opened", status="ok", model="gpt-test", confidence="high", summary=summary,
+                           body=json.dumps({"signals": [], "fix_steps": [], "verify": {"type": "manual"}, "dropped_signals": 0}), evidence="{}"))
+    app.db.commit()
+
+
+def test_a_notification_waits_for_the_diagnosis_and_carries_it(app, outbox, monkeypatch):
+    monkeypatch.setattr(main, "_diagnosis_coming", lambda db: True)
+    signed_in(app, 1).post("/account/channels", json={"kind": "ntfy", "target": "https://ntfy.example/t"})
+    for incident_id in (42, 43):
+        app.db.get(IncidentAlert, incident_id).created_at = datetime.now(timezone.utc) - timedelta(seconds=20)
+    app.db.commit()
+
+    assert main.dispatch_notifications(app.db) == 0          # both incidents are new: wait for the agent
+    _report(app)
+    assert main.dispatch_notifications(app.db) == 1          # INC-0042's diagnosis is in; INC-0043 still waits
+    assert b"Agent: gitlab is killed for memory after the update. Its limit is 4 GB." in outbox[-1][1] and b"third" not in outbox[-1][1]
+
+
+def test_after_three_minutes_it_goes_out_without_the_diagnosis(app, outbox, monkeypatch):
+    monkeypatch.setattr(main, "_diagnosis_coming", lambda db: True)
+    signed_in(app, 1).post("/account/channels", json={"kind": "ntfy", "target": "https://ntfy.example/t"})
+    for incident_id in (42, 43):
+        app.db.get(IncidentAlert, incident_id).created_at = NOW - timedelta(seconds=20)
+    app.db.commit()
+
+    assert main.dispatch_notifications(app.db, now=NOW + timedelta(seconds=30)) == 0
+    assert main.dispatch_notifications(app.db, now=NOW + timedelta(minutes=4)) == 2
+    assert all(b"Agent:" not in message[1] for message in outbox)
+
+
+def test_without_a_diagnosis_on_the_way_nothing_waits(app, outbox):
+    signed_in(app, 1).post("/account/channels", json={"kind": "ntfy", "target": "https://ntfy.example/t"})
+
+    assert main.dispatch_notifications(app.db) == 2          # no key in tests, so no diagnosis is coming
+
+
+def test_hidden_diagnoses_stay_hidden_from_users_in_the_page_the_overview_and_notifications(app, outbox):
+    _report(app)
+    owner, viewer = signed_in(app, 1), signed_in(app, 3)
+    viewer.post("/account/channels", json={"kind": "ntfy", "target": "https://ntfy.example/v"})
+    assert owner.put("/admin/settings", json={"agent_show_diagnoses_to_users": False}).json()["agent_show_diagnoses_to_users"] is False
+
+    seen = viewer.get("/incidents/42").json()["agent"]
+    assert seen["report"] is None and seen["hidden"] is True
+    assert owner.get("/incidents/42").json()["agent"]["report"]["summary"].startswith("gitlab")   # admins always see it
+    note = next(alert for alert in viewer.get("/monitoring/overview").json()["alerts"] if alert["id"] == 42)["agent_note"]
+    assert note is None or not note.startswith("gitlab is killed")
+    main.dispatch_notifications(app.db)
+    assert outbox and all(b"Agent:" not in message[1] for message in outbox)
+
+
+def test_chat_is_for_admins_unless_allowed_per_user(app, monkeypatch):
+    monkeypatch.setattr(main, "send_agent_message", lambda *args, **kwargs: "ok")
+    monkeypatch.setattr(main, "is_agent_chat_enabled", lambda db: True)
+    owner, viewer = signed_in(app, 1), signed_in(app, 3)
+    viewer.post("/conversations", json={"conversation_id": "v1"})
+    ask = lambda: viewer.post("/agent/chat", json={"conversation_id": "v1", "message": "hi"})  # noqa: E731
+
+    assert ask().status_code == 403 and viewer.get("/agent/config").json()["may_chat"] is False          # admins only, the default
+    owner.put("/admin/settings", json={"agent_chat_access": "per_user"})
+    assert ask().status_code == 403                                                                       # per user, but not allowed yet
+    users = owner.patch("/admin/users/3", json={"agent_chat_enabled": True}).json()
+    assert next(user for user in users["users"] if user["id"] == 3)["agent_chat_enabled"] is True and users["agent_chat_access"] == "per_user"
+    assert ask().status_code == 200 and viewer.get("/agent/config").json()["may_chat"] is True
+    owner.put("/admin/settings", json={"agent_chat_access": "admins_only"})
+    assert ask().status_code == 403                                                                       # admins only wins over the per-user switch
+    assert owner.put("/admin/settings", json={"agent_chat_access": "everyone"}).status_code == 422

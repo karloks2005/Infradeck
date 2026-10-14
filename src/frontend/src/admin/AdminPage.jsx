@@ -8,7 +8,7 @@ import { INTERVALS, intervalLabel } from '../dashboard/ServerPanel.jsx'
 import { serverState } from '../dashboard/logic.js'
 import { Sparkline } from '../dashboard/charts.jsx'
 import { usePolled } from '../dashboard/data.js'
-import { Icon } from '../icons.jsx'
+import { Caret, Icon } from '../icons.jsx'
 import { refreshOverview, useOverview } from '../overviewStore.js'
 import { AppShell, serverLink } from '../shell.jsx'
 import { ADMIN_GROUPS } from '../more/groups.js'
@@ -131,7 +131,7 @@ function Users({ me }) {
   return (
     <div className="card overflow-hidden">
       <div className="custom-scroll overflow-x-auto"><table className="w-full min-w-[680px] border-collapse text-left text-[13px]">
-        <thead><tr className="grid-head h-10"><th className="pl-[18px] font-medium">User</th><th className="font-medium">Role</th><th className="font-medium">Two-factor</th><th className="font-medium">Last seen</th><th className="pr-[18px]" /></tr></thead>
+        <thead><tr className="grid-head h-10"><th className="pl-[18px] font-medium">User</th><th className="font-medium">Role</th><th className="font-medium">Two-factor</th>{data.agent_chat_access === 'per_user' && <th className="font-medium">Agent chat</th>}<th className="font-medium">Last seen</th><th className="pr-[18px]" /></tr></thead>
         <tbody>
           {data.users.map((user) => {
             const fixed = user.role_name === 'Owner' || user.id === me.id
@@ -140,6 +140,7 @@ function Users({ me }) {
                 <td className="pl-[18px]"><span className="flex items-center gap-3"><span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-line bg-raised text-[11px] font-semibold" style={{ color: user.avatar_color || undefined }}>{initials(user.name)}</span><span className="min-w-0"><span className="block truncate font-medium text-paper">{user.name}{user.id === me.id && <span className="ml-2 text-xs font-normal text-muted">you</span>}</span><span className="block truncate text-xs text-muted">{user.email}</span></span></span></td>
                 <td>{fixed ? <span className="text-paper">{user.role_name}</span> : <select className="select h-8" aria-label={`Role of ${user.name}`} value={user.role} onChange={(event) => change(user, { role: event.target.value })}><option value="admin">Admin</option><option value="user">Viewer</option></select>}</td>
                 <td><span className={`chip ${user.two_factor ? 'chip-ok' : ''}`}>{user.two_factor ? 'On' : 'Off'}</span></td>
+                {data.agent_chat_access === 'per_user' && <td>{user.role === 'admin' ? <span className="text-xs text-muted">always</span> : <Switch label={`Agent chat for ${user.name}`} checked={user.agent_chat_enabled} disabled={state.busy} onChange={(on) => change(user, { agent_chat_enabled: on })} />}</td>}
                 <td className="text-soft">{!user.is_active ? 'disabled' : user.sessions > 0 && user.id === me.id ? 'now' : ago(user.last_seen_at)}</td>
                 <td className="whitespace-nowrap pr-[18px] text-right">{!fixed && <>
                   {user.sessions > 0 && <button type="button" className="link" onClick={() => run(async () => { await post(`/admin/users/${user.id}/sign-out`); reload() })}>Sign out</button>}
@@ -151,7 +152,7 @@ function Users({ me }) {
           {data.invites.map((invite) => (
             <tr key={`invite-${invite.id}`} className="h-[54px] border-t border-line">
               <td className="pl-[18px]"><span className="flex items-center gap-3"><span className="flex h-7 w-7 items-center justify-center rounded-md border border-dashed border-edge text-[11px] text-muted">?</span><span><span className="block font-medium text-paper">Invite pending</span><span className="block text-xs text-muted">{invite.email} · made {ago(invite.created_at)}</span></span></span></td>
-              <td className="text-soft">{invite.role === 'admin' ? 'Admin' : 'Viewer'}</td><td className="text-muted">n/a</td><td className="text-muted">never</td>
+              <td className="text-soft">{invite.role === 'admin' ? 'Admin' : 'Viewer'}</td><td className="text-muted">n/a</td>{data.agent_chat_access === 'per_user' && <td className="text-muted">off</td>}<td className="text-muted">never</td>
               <td className="pr-[18px] text-right"><button type="button" className="link" onClick={() => run(async () => setData(await apiRequest(`/admin/invites/${invite.id}`, { method: 'DELETE' })))}>Cancel</button></td>
             </tr>
           ))}
@@ -288,7 +289,13 @@ function Agent({ settings, system, onSaved }) {
       {(test.error || tested) && <div className="px-[18px] py-2.5">{test.error ? <p role="alert" className="m-0 text-xs text-warn">{test.error}</p> : <p role="status" className="m-0 text-xs text-ok">Connected. {tested.provider} accepts the key and offers {tested.model}.</p>}</div>}
       <Row title="Diagnose new incidents automatically" detail="When a warning or critical incident opens or gets worse, the agent worker sends its evidence (masked) to the model and writes a diagnosis. Off: incidents keep the rule-based diagnosis, and anyone who may act on incidents can still ask for one."><Switch label="Diagnose automatically" checked={settings.agent_auto_diagnose !== false} disabled={state.busy} onChange={(on) => run(async () => onSaved(await put({ agent_auto_diagnose: on })))} /></Row>
       <Row title="Read container logs" detail="Not available: Infradeck's Docker proxy can't read logs. See SECURITY.md."><Switch label="Read container logs" checked={false} disabled onChange={() => {}} /></Row>
-      <Row title="Chat" detail="Available to every signed-in user while it is on. Questions and the incident's facts are sent to the provider."><Switch label="Chat with the agent" checked={settings.agent_chat_enabled} disabled={state.busy} onChange={(on) => run(async () => onSaved(await put({ agent_chat_enabled: on })))} /></Row>
+      <Row title="Chat" detail="The main switch for the chat; who may use it is set under Chat access. Questions and the incident's facts are sent to the provider."><Switch label="Chat with the agent" checked={settings.agent_chat_enabled} disabled={state.busy} onChange={(on) => run(async () => onSaved(await put({ agent_chat_enabled: on })))} /></Row>
+      <Row title="Chat access" detail={settings.agent_chat_access === 'per_user' ? 'Admins always; everyone else only with the Agent chat switch next to their name in Users.' : 'Only owners and admins can use the chat.'}>
+        <select className="select" aria-label="Chat access" value={settings.agent_chat_access || 'admins_only'} disabled={state.busy} onChange={(event) => run(async () => onSaved(await put({ agent_chat_access: event.target.value })))}><option value="admins_only">Admins only</option><option value="per_user">Per user</option></select>
+      </Row>
+      <Row title="Show diagnoses to users" detail="Off: only owners and admins see the agent's diagnoses and their summary in notifications; everyone else sees the rule-based diagnosis.">
+        <Switch label="Show diagnoses to users" checked={settings.agent_show_diagnoses_to_users !== false} disabled={state.busy} onChange={(on) => run(async () => onSaved(await put({ agent_show_diagnoses_to_users: on })))} />
+      </Row>
       <Row title="Redact IPs and hostnames before sending" detail="Not available yet. Until then, turn Chat off if names must not leave this machine."><Switch label="Redact before sending" checked={false} disabled onChange={() => {}} /></Row>
     </div>
     <Outcome state={state} />
@@ -297,30 +304,43 @@ function Agent({ settings, system, onSaved }) {
   </>
 }
 
-const JOB_TONE = { failed: 'chip-warn', noted: '', skipped: '', diagnosed: 'chip-ok' }
+const JOB_TONE = { failed: 'chip-warn', noted: '', skipped: '', diagnosed: 'chip-ok', reused: 'chip-ok' }
 
-// The worker that runs the agent's jobs: is it alive, what is waiting, and what it did last.
+// The worker that runs the agent's jobs, in one line: is it alive, does anything wait, how did the last jobs go.
+// The jobs themselves fold away; Redis keeps only the latest 50 and this shows at most 10.
 function AgentWorker() {
   const { data, error } = usePolled('/admin/agent/worker', 15)
   if (!data) return <Notice tone="plain">{error || 'Checking the agent worker…'}</Notice>
   const waiting = [data.queued ? `${data.queued} queued` : null, data.processing ? `${data.processing} running` : null, data.retrying ? `${data.retrying} waiting to retry` : null].filter(Boolean).join(' · ') || 'nothing waiting'
+  const counts = {}
+  for (const job of data.recent) counts[job.status] = (counts[job.status] || 0) + 1
+  const failed = counts.failed || 0
+  const last = data.recent[0]
+  const lastLine = last ? `last job ${ago(last.finished_at)}: ${last.status} INC-${String(last.incident_id).padStart(4, '0')}` : 'no jobs yet'
+  const detail = !data.online ? `Not running, so new incidents wait for their diagnosis · ${waiting}. Start it with docker compose up -d agent-worker.`
+    : `Running since ${ago(data.worker.started_at).replace(' ago', '')} · ${waiting} · ${lastLine}${failed ? ` · ${failed} of the last ${data.recent.length} failed` : ''}`
   return (
     <div className="card overflow-hidden">
-      <Row icon="Q" title="Worker" tone={data.online ? undefined : 'warn'}
-        detail={data.online ? `Running since ${ago(data.worker.started_at).replace(' ago', '')} · ${waiting}` : `Not running, so new incidents wait for their diagnosis · ${waiting}. Start it with docker compose up -d agent-worker.`}>
+      <Row icon="Q" title="Worker" tone={!data.online || failed ? 'warn' : undefined} detail={detail}>
         <span className={`chip ${data.online ? 'chip-ok' : 'chip-warn'}`}>{data.online ? 'Online' : 'Offline'}</span>
       </Row>
-      {data.recent.length > 0 && <ul className="m-0 list-none divide-y divide-line border-t border-line p-0">
-        {data.recent.slice(0, 5).map((job) => (
-          <li key={job.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-[18px] py-2.5 text-xs">
-            <span className="w-16 shrink-0 text-muted">{ago(job.finished_at)}</span>
-            <span className="mono shrink-0 text-soft">INC-{String(job.incident_id).padStart(4, '0')}</span>
-            <span className="shrink-0 text-muted">{job.type === 'incident.worsened' ? 'got worse' : job.type === 'incident.requested' ? 'asked for' : 'opened'}</span>
-            <span className={`chip ${JOB_TONE[job.status] ?? ''}`}>{job.status}</span>
-            <span className="min-w-0 flex-1 basis-60 text-muted">{job.note}</span>
-          </li>
-        ))}
-      </ul>}
+      {data.recent.length > 0 && <details className="group border-t border-line">
+        <summary className="flex cursor-pointer list-none items-center gap-2.5 px-[18px] py-2.5 text-xs text-muted hover:text-soft">
+          <Caret open={false} className="transition-transform group-open:rotate-90" />
+          Last {data.recent.length} {data.recent.length === 1 ? 'job' : 'jobs'}: {Object.entries(counts).map(([status, count]) => `${count} ${status}`).join(', ')}
+        </summary>
+        <ul className="m-0 list-none divide-y divide-line border-t border-line p-0">
+          {data.recent.map((job) => (
+            <li key={job.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-[18px] py-2.5 text-xs">
+              <span className="w-16 shrink-0 text-muted">{ago(job.finished_at)}</span>
+              <Link to={`/agent?incident=${job.incident_id}`} className="mono shrink-0 text-soft hover:text-paper">INC-{String(job.incident_id).padStart(4, '0')}</Link>
+              <span className="shrink-0 text-muted">{job.type === 'incident.worsened' ? 'got worse' : job.type === 'incident.requested' ? 'asked for' : 'opened'}</span>
+              <span className={`chip ${JOB_TONE[job.status] ?? ''}`}>{job.status}</span>
+              <span className="min-w-0 flex-1 basis-60 text-muted">{job.note}</span>
+            </li>
+          ))}
+        </ul>
+      </details>}
     </div>
   )
 }

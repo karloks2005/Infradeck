@@ -155,7 +155,8 @@ def test_admin_can_turn_agent_chat_off_and_on(fleet, monkeypatch):
     result = main.update_admin_settings(main.AdminSettingsRequest(agent_chat_enabled=False), session_id="s", db=fleet)
 
     assert result == {"instance_name": main.get_instance_name(fleet), "metrics_retention_days": main.DEFAULT_METRICS_RETENTION_DAYS, "agent_chat_enabled": False, "alert_thresholds": rules.DEFAULT_THRESHOLDS, "mount_thresholds": {}, "require_2fa_for_admins": True, "secrets_configured": main.secrets_box.available(), "require_2fa_for_everyone": False, "disabled_rules": [],
-                      "agent_prices": {}, "agent_monthly_cap_usd": None, "agent_daily_chat_limit": main.agent_usage.DEFAULT_DAILY_CHAT_LIMIT, "agent_auto_diagnose": True}
+                      "agent_prices": {}, "agent_monthly_cap_usd": None, "agent_daily_chat_limit": main.agent_usage.DEFAULT_DAILY_CHAT_LIMIT, "agent_auto_diagnose": True,
+                      "agent_show_diagnoses_to_users": True, "agent_chat_access": "admins_only"}
     _login_as(monkeypatch, 2)
     config = main.agent_config(session_id="s", db=fleet)
     assert config["chat_enabled"] is False and config["budget_paused"] is False

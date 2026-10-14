@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func
 
@@ -28,6 +29,9 @@ VERIFY_TYPES = ("container_running_for", "metric_below_for", "incident_quiet_for
 MAX_SIGNALS = 6
 MAX_STEPS = 5
 MAX_ATTEMPTS = 2
+# A diagnosis of the same rule on the same server (so the same container, mount or check) this recent is reused for a
+# new incident instead of asking the model again.
+REUSE_WITHIN = timedelta(hours=24)
 
 SCHEMA = {
     "type": "object",
@@ -103,7 +107,8 @@ def check_answer(raw: str, labels: dict[str, str]) -> dict:
     if not signals:
         confidence = "low"   # a cause with nothing in the data behind it can't be more than a guess
     return {"summary": _clip(answer["summary"], 1200), "confidence": confidence, "signals": signals[:MAX_SIGNALS], "fix_steps": steps,
-            "verify": {"type": verify["type"], "target": _clip(verify.get("target"), 120) or None, "threshold": verify.get("threshold"), "minutes": verify.get("minutes")},
+            "verify": {"type": verify["type"], "target": _clip(verify.get("target"), 120) or None, "threshold": verify.get("threshold"), "minutes": verify.get("minutes"),
+                       "label": labels.get(verify.get("target")) if verify["type"] == "metric_below_for" else None},
             "dropped_signals": dropped}
 
 
@@ -155,14 +160,40 @@ def diagnose(db, incident: IncidentAlert, provider: Provider, trigger: str = "in
     return _save(db, incident, trigger, model, pack, "failed", error=f"The model's answer could not be used twice: {reason}")
 
 
+def reuse_recent(db, incident: IncidentAlert, now: datetime | None = None) -> AgentReport | None:
+    """When the same problem came back within REUSE_WITHIN, copy its diagnosis to the new incident instead of paying
+    for a new one. Returns the copy, or None when there is nothing recent to reuse. Costs no tokens."""
+    now = now or datetime.now(timezone.utc)
+    earlier = db.query(AgentReport).join(IncidentAlert, IncidentAlert.id == AgentReport.incident_id) \
+        .filter(IncidentAlert.server_id == incident.server_id, IncidentAlert.rule_key == incident.rule_key, IncidentAlert.id != incident.id,
+                AgentReport.status == "ok", AgentReport.created_at >= now - REUSE_WITHIN) \
+        .order_by(AgentReport.created_at.desc()).first()
+    if earlier is None:
+        return None
+    body = json.loads(earlier.body) if earlier.body else {}
+    body["reused_from"] = {"incident_id": earlier.incident_id, "version": earlier.version, "created_at": _iso(earlier.created_at)}
+    version = (db.query(func.max(AgentReport.version)).filter(AgentReport.incident_id == incident.id).scalar() or 0) + 1
+    report = AgentReport(incident_id=incident.id, version=version, trigger="reused", status="ok", model=earlier.model, confidence=earlier.confidence,
+                         summary=earlier.summary, body=json.dumps(body), evidence=earlier.evidence)
+    db.add(report)
+    db.commit()
+    return report
+
+
+def _iso(moment: datetime) -> str:
+    return (moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)).isoformat()
+
+
 def report_json(report: AgentReport | None) -> dict | None:
     """What the incident page gets: the latest report, without the evidence pack."""
     if report is None:
         return None
     body = json.loads(report.body) if report.body else {}
-    return {"version": report.version, "status": report.status, "model": report.model, "trigger": report.trigger, "created_at": report.created_at.isoformat() if report.created_at.tzinfo else report.created_at.isoformat() + "+00:00",
+    reused = body.get("reused_from")
+    return {"version": report.version, "status": report.status, "model": report.model, "trigger": report.trigger, "created_at": _iso(report.created_at),
             "summary": report.summary, "confidence": report.confidence, "signals": body.get("signals", []), "fix_steps": body.get("fix_steps", []), "verify": body.get("verify"),
-            "dropped_signals": body.get("dropped_signals", 0), "error": report.error}
+            "dropped_signals": body.get("dropped_signals", 0), "error": report.error,
+            "reused_from": {**reused, "reference": f"INC-{reused['incident_id']:04d}"} if reused else None}
 
 
 def latest(db, incident_id: int) -> AgentReport | None:
