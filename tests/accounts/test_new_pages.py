@@ -306,6 +306,19 @@ def test_a_rule_can_be_switched_off_and_the_table_shows_how_often_each_fired(app
     assert signed_in(app, 3).get("/admin/rules").status_code == 403
 
 
+def test_every_threshold_the_old_admin_page_could_change_can_still_be_changed(app):
+    rules = signed_in(app, 1).get("/admin/rules").json()["rules"]
+    editable = {key for rule in rules for key in rule["edit"]}
+    assert editable == set(main.DEFAULT_THRESHOLDS)
+    by_kind = {rule["kind"]: rule for rule in rules}
+    assert by_kind["system:docker_slow"]["when"] == "Docker takes > 2000 ms to list containers"
+    assert by_kind["trend:memory"]["window"] == "12 h"
+    # Rules that exist in rules.py but were missing from the table could not be switched off.
+    firing = {"system:docker_slow": ("WARNING", "t", "d"), "system:collect_slow": ("WARNING", "t", "d")}
+    signed_in(app, 1).put("/admin/settings", json={"disabled_rules": ["system:docker_slow", "system:collect_slow"]})
+    assert main._enabled_rules(app.db, firing) == {}
+
+
 def test_a_server_is_renamed_and_keeps_the_name_and_the_install_describes_itself(app):
     owner = signed_in(app, 1)
     assert owner.patch("/monitoring/servers/1", json={"hostname": "media-box", "check_interval_seconds": 15}).json() == {"id": 1, "hostname": "media-box", "check_interval_seconds": 15}

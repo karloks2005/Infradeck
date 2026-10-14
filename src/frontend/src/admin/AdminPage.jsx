@@ -16,6 +16,7 @@ const SEVERITY = { CRITICAL: ['Critical', 'chip-signal'], WARNING: ['Warning', '
 const THRESHOLD_LABELS = {
   restart_loop_count: 'Restarts', restart_loop_window_minutes: 'Within (min)', disk_warning_pct: 'Warning from %', disk_critical_pct: 'Critical from %', inodes_warning_pct: 'Warning from %', inodes_critical_pct: 'Critical from %',
   memory_warning_pct: 'Warning from %', memory_critical_pct: 'Critical from %', swap_warning_pct: 'Warning from %', load_warning_per_core: 'Warning × cores', load_critical_per_core: 'Critical × cores', event_window_minutes: 'Stays open (min)',
+  sustained_checks: 'Check-ins in a row', docker_slow_ms: 'Slower than (ms)', collect_slow_pct: 'Over % of interval', leak_min_mb_per_hour: 'Rises MB/h', leak_min_growth_pct: 'Grows by %', leak_window_hours: 'Over (h)',
 }
 const put = (body) => apiRequest('/admin/settings', { method: 'PUT', body: JSON.stringify(body) })
 const post = (path, body) => apiRequest(path, { method: 'POST', body: JSON.stringify(body || {}) })

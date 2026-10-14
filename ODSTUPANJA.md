@@ -123,7 +123,7 @@ su anotacije dizajna i namjerno nisu ugrađeni.
 | „Removing a server keeps its history" | Brisanje servera briše i njegove metrike i incidente | Tako radi postojeće brisanje | – |
 | Users: „Invite pending · Resend" | Poveznica se prikaže jednom; „Cancel" i nova pozivnica | Infradeck ne šalje e-mail | – |
 | Uloge Owner / Admin / Viewer | Owner je prvi admin i ne može se mijenjati; ostalo Admin ili Viewer | Nema zasebne uloge vlasnika | #106 |
-| Alert rules: „Disk forecast full in < 30 days", „CPU > 90%" | Ne postoje; popis ima 16 stvarnih pravila | Ta pravila nisu napravljena | – |
+| Alert rules: „Disk forecast full in < 30 days", „CPU > 90%" | Ne postoje; popis ima 18 stvarnih pravila | Ta pravila nisu napravljena | – |
 | Alert rules: stupac Servers s izborom servera | Uvijek „All" | Pravila vrijede za sve servere | – |
 | Alert rules: „New rule" | Gumb je onemogućen | Vlastita pravila ne postoje | – |
 | Alert rules: bilješka zašto je pravilo isključeno | Samo broj isključenih pravila | Razlog se ne upisuje | – |
