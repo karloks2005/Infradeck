@@ -500,7 +500,7 @@ validation of container data, because everything a collector reports is untruste
 | `test_only_latest_claimant_is_dashboard_host_and_flag_can_be_dropped` | Only one machine can be the dashboard host at a time, and a collector that stops claiming it loses the flag. |
 | `test_history_returns_recent_samples_oldest_first` | The charts' history contains only the requested window, for the right server, in time order. |
 | `test_history_of_unknown_server_is_404` | History for an unknown server is a clean 404. |
-| `test_collector_sends_flag_only_when_configured` | The collector marks itself as the dashboard host only when `HOMELAB_DASHBOARD_HOST` is set. |
+| `test_collector_sends_flag_only_when_configured` | The collector marks itself as the dashboard host only when `INFRADECK_DASHBOARD_HOST` is set. |
 | `test_overview_lists_only_containers_from_latest_check_in` | The container list shows what the latest check-in reported, not every container ever seen. |
 | `test_overview_lists_no_containers_when_latest_check_in_had_none` | If the latest check-in had no containers, none are shown even though older samples exist. |
 | `test_overview_counts_active_alerts_per_server` | Each server's incident badge counts only its own open incidents, not resolved ones. |

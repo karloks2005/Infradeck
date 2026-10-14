@@ -50,7 +50,7 @@ def _session_key(session_id: str) -> str:
 
 
 def _key_for_digest(digest: str) -> str:
-    return f"homelab:session:{digest}"
+    return f"infradeck:session:{digest}"
 
 
 def session_lifetime(stage: str, remember: bool) -> int:
@@ -73,15 +73,15 @@ def _delete_session(redis_client, session_id: str):
 
 
 def _user_sessions_key(user_id: int) -> str:
-    return f"homelab:user-sessions:{user_id}"
+    return f"infradeck:user-sessions:{user_id}"
 
 
 def _pending_key(token: str) -> str:
-    return f"homelab:2fa-pending:{_digest(token)}"
+    return f"infradeck:2fa-pending:{_digest(token)}"
 
 
 def _attempts_key(token: str) -> str:
-    return f"homelab:2fa-attempts:{_digest(token)}"
+    return f"infradeck:2fa-attempts:{_digest(token)}"
 
 
 def _printable(text: str | None, limit: int) -> str | None:
@@ -232,16 +232,38 @@ def delete_pending_two_factor(redis_client, token: str) -> None:
     redis_client.delete(_pending_key(token), _attempts_key(token))
 
 
+LEGACY_KEY_PREFIX = "homelab:"
+KEY_PREFIX = "infradeck:"
+
+
+def migrate_key_prefix(redis_client) -> int:
+    """Move what Redis holds under the name used before the rename to Infradeck (sessions, rate limits, notification
+    markers) to the new prefix, so an upgrade signs nobody out and sends no alert twice. A key that already exists
+    under the new name is left alone. Safe to run at every start; returns how many keys moved."""
+    moved = 0
+    try:
+        for key in list(redis_client.scan_iter(match=f"{LEGACY_KEY_PREFIX}*")):
+            name = key.decode() if isinstance(key, bytes) else key
+            target = KEY_PREFIX + name[len(LEGACY_KEY_PREFIX):]
+            if redis_client.exists(target):
+                continue
+            redis_client.rename(name, target)
+            moved += 1
+    except Exception:  # a missing key or a Redis hiccup must not stop the backend from starting
+        return moved
+    return moved
+
+
 def purge_legacy_session_keys(redis_client) -> int:
     """Delete session data written before session IDs were hashed: the keys that still contain a raw session ID or
     pending-login token, and the per-user indexes that point at them. Those sessions stopped working when the
     format changed; this stops their secrets from sitting in Redis until they expire. Returns how many were removed."""
     removed = 0
     try:
-        for key in list(redis_client.scan_iter(match="homelab:session:*")) + list(redis_client.scan_iter(match="homelab:2fa-pending:*")) + list(redis_client.scan_iter(match="homelab:2fa-attempts:*")):
+        for key in list(redis_client.scan_iter(match="infradeck:session:*")) + list(redis_client.scan_iter(match="infradeck:2fa-pending:*")) + list(redis_client.scan_iter(match="infradeck:2fa-attempts:*")):
             if not _DIGEST.fullmatch(key.rsplit(":", 1)[-1]):
                 removed += int(bool(redis_client.delete(key)))
-        for key in redis_client.scan_iter(match="homelab:user-sessions:*"):
+        for key in redis_client.scan_iter(match="infradeck:user-sessions:*"):
             if any(not _DIGEST.fullmatch(value) for value in redis_client.hvals(key)):
                 removed += int(bool(redis_client.delete(key)))
     except Exception:

@@ -25,7 +25,7 @@ class AdminNotifier:
             return {"status": "not_configured"}
         webhook_request = request.Request(
             webhook_url,
-            data=json.dumps({"source": "homelab-health", "finding": finding}).encode(),
+            data=json.dumps({"source": "infradeck-health", "finding": finding}).encode(),
             headers={"Content-Type": "application/json"},
             method="POST",
         )

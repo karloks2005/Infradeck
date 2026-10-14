@@ -1,11 +1,11 @@
 """Read-only host and Docker metrics collector for a registered Infradeck server.
 
-Only HOMELAB_API_URL is required. On first start the collector asks to join and
+Only INFRADECK_API_URL is required. On first start the collector asks to join and
 appears on the dashboard under "New servers detected"; once someone clicks Add
-it receives its token (no restart) and saves it under HOMELAB_STATE_DIR.
-HOMELAB_JOIN_TOKEN (from the dashboard's Connect a server command) proves who asked it to join.
-HOMELAB_ENROLL_KEY skips the approval step for automated installs, and
-HOMELAB_SERVER_ID / HOMELAB_COLLECTOR_TOKEN still work as explicit credentials.
+it receives its token (no restart) and saves it under INFRADECK_STATE_DIR.
+INFRADECK_JOIN_TOKEN (from the dashboard's Connect a server command) proves who asked it to join.
+INFRADECK_ENROLL_KEY skips the approval step for automated installs, and
+INFRADECK_SERVER_ID / INFRADECK_COLLECTOR_TOKEN still work as explicit credentials.
 Run with ``python -m src.agent.collector`` or as a standalone script (standard
 library only; it ships as a container image). Docker access is optional; when
 the socket is unavailable, host metrics continue to be sent.
@@ -33,6 +33,11 @@ from typing import Any
 MiB = 1024 * 1024
 GiB = 1024**3
 # In a container the host is mounted at /host/proc and /hostfs; fall back to our own view otherwise.
+# Installs from before the rename to Infradeck set HOMELAB_* variables; they keep working unchanged.
+for _name, _value in list(os.environ.items()):
+    if _name.startswith("HOMELAB_"):
+        os.environ.setdefault("INFRADECK_" + _name[len("HOMELAB_"):], _value)
+
 HOST_PROC = Path(os.getenv("HOST_PROC") or ("/host/proc" if Path("/host/proc").is_dir() else "/proc"))
 HOST_ROOT = Path(os.getenv("HOST_ROOT") or ("/hostfs" if Path("/hostfs").is_dir() else "/"))
 
@@ -218,9 +223,9 @@ CONNECTIVITY_DEADLINE_SECONDS = 6.0
 
 
 def _connectivity_targets() -> list[tuple[str, int]]:
-    """``host:port`` entries from HOMELAB_CONNECTIVITY_TARGETS (hostnames or IPv4 only). Empty means the check is off."""
+    """``host:port`` entries from INFRADECK_CONNECTIVITY_TARGETS (hostnames or IPv4 only). Empty means the check is off."""
     targets: list[tuple[str, int]] = []
-    for entry in os.getenv("HOMELAB_CONNECTIVITY_TARGETS", "").split(","):
+    for entry in os.getenv("INFRADECK_CONNECTIVITY_TARGETS", "").split(","):
         host, _, port = entry.strip().rpartition(":")
         # A name whose last label is all digits isn't a valid hostname; it is a mistyped IP address.
         valid_host = _IPV4.fullmatch(host) and all(int(part) <= 255 for part in host.split(".")) or (_HOSTNAME.fullmatch(host) and not host.rsplit(".", 1)[-1].isdigit())
@@ -256,7 +261,7 @@ def summarise_connectivity(results: list[dict[str, Any]]) -> str:
 
 
 def collect_connectivity() -> dict[str, Any]:
-    """Can this host reach the internet? Off unless HOMELAB_CONNECTIVITY_TARGETS is set on this collector.
+    """Can this host reach the internet? Off unless INFRADECK_CONNECTIVITY_TARGETS is set on this collector.
 
     The targets come from the collector's own environment, never from the dashboard, so a compromised
     dashboard can't point these probes anywhere.
@@ -457,7 +462,7 @@ HELPER_MAX_AGE_SECONDS = 300
 
 
 def _helper_path() -> Path:
-    return Path(os.getenv("HOMELAB_HELPER_FILE", "/helper/system.json"))
+    return Path(os.getenv("INFRADECK_HELPER_FILE", "/helper/system.json"))
 
 
 def collect_helper(boot_id: str | None, path: Path | None = None, now: float | None = None) -> dict[str, Any]:
@@ -713,7 +718,7 @@ MAX_PORT_OWNERS = 512
 
 
 def _port_owners_path() -> Path:
-    return Path(os.getenv("HOMELAB_PORT_OWNERS_FILE", "/helper/ports.json"))
+    return Path(os.getenv("INFRADECK_PORT_OWNERS_FILE", "/helper/ports.json"))
 
 
 def collect_port_owners(path: Path | None = None, now: float | None = None) -> list[dict[str, Any]] | None:
@@ -777,7 +782,7 @@ def collect_system_info(listeners: list[dict[str, Any]] | None, reboot_required:
 
 def registration_details() -> dict[str, Any]:
     """What a collector found on its machine, shown next to the Add button before anyone approves it."""
-    socket_path = os.getenv("HOMELAB_DOCKER_HOST") or os.getenv("DOCKER_SOCKET_PATH", "/var/run/docker.sock")
+    socket_path = os.getenv("INFRADECK_DOCKER_HOST") or os.getenv("DOCKER_SOCKET_PATH", "/var/run/docker.sock")
     try:
         containers = len(_docker_request(socket_path, "/containers/json?all=1")) if Path(socket_path).exists() else None
     except (OSError, ValueError, TypeError, http.client.HTTPException):
@@ -785,7 +790,7 @@ def registration_details() -> dict[str, Any]:
     return {
         "cpu_cores": _host_cpu_cores(), "containers": containers, "mounts": len(collect_mounts()),
         "helper_installed": _helper_path().exists(),
-        "dashboard_host": os.getenv("HOMELAB_DASHBOARD_HOST", "").lower() in {"1", "true", "yes"},
+        "dashboard_host": os.getenv("INFRADECK_DASHBOARD_HOST", "").lower() in {"1", "true", "yes"},
     }
 
 
@@ -832,7 +837,7 @@ def collect_host() -> tuple[dict[str, Any], dict[str, Any]]:
         "system": collect_system_info(host["listeners"], host.get("reboot_required"), host["mounts"]),
     }
     # Set only on the collector in the dashboard's own compose stack; the dashboard's top charts follow it.
-    if os.getenv("HOMELAB_DASHBOARD_HOST", "").lower() in {"1", "true", "yes"}:
+    if os.getenv("INFRADECK_DASHBOARD_HOST", "").lower() in {"1", "true", "yes"}:
         server["dashboard_host"] = True
     return server, host
 
@@ -845,7 +850,7 @@ def _memory_total_gb() -> float:
 
 
 def _host_hostname() -> str:
-    override = os.getenv("HOMELAB_SERVER_NAME")
+    override = os.getenv("INFRADECK_SERVER_NAME")
     if override:
         return override
     try:
@@ -925,7 +930,7 @@ def _docker_failure_reason(error: BaseException) -> str:
 def collect_containers(socket_path: str | None = None, info: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Every container with its state and usage. ``info`` receives how long listing them took."""
     # The read-only proxy is preferred: it keeps the Docker socket, which is root on the host, out of this container.
-    socket_path = socket_path or os.getenv("HOMELAB_DOCKER_HOST") or os.getenv("DOCKER_SOCKET_PATH", "/var/run/docker.sock")
+    socket_path = socket_path or os.getenv("INFRADECK_DOCKER_HOST") or os.getenv("DOCKER_SOCKET_PATH", "/var/run/docker.sock")
     if not Path(socket_path).exists():
         return []
     listing_started = time.monotonic()
@@ -1023,7 +1028,7 @@ def collect_docker(socket_path: str | None = None) -> tuple[list[dict[str, Any]]
     "No Docker on this host" is not an error, and an empty list is not proof of a problem, so the
     backend only alerts on ``unreachable`` for a host that had Docker working before.
     """
-    explicit = socket_path or os.getenv("HOMELAB_DOCKER_HOST")
+    explicit = socket_path or os.getenv("INFRADECK_DOCKER_HOST")
     target = explicit or os.getenv("DOCKER_SOCKET_PATH", "/var/run/docker.sock")
     if not Path(target).exists():
         # A proxy that is configured but missing is a failure; a host that simply has no Docker socket is not.
@@ -1184,7 +1189,7 @@ def send_payload(api_url: str, server_id: int, token: str, payload: dict[str, An
 
 
 def _machine_id() -> str | None:
-    override = os.getenv("HOMELAB_MACHINE_ID")
+    override = os.getenv("INFRADECK_MACHINE_ID")
     if override:
         return override.strip()
     for candidate in ("etc/machine-id", "var/lib/dbus/machine-id"):
@@ -1197,8 +1202,18 @@ def _machine_id() -> str | None:
     return None
 
 
+LEGACY_STATE_DIR = Path("/var/lib/homelab-collector")
+
+
 def _credentials_path() -> Path:
-    return Path(os.getenv("HOMELAB_STATE_DIR", "/var/lib/homelab-collector")) / "credentials.json"
+    """Where this collector keeps its credentials. A collector installed before the rename to Infradeck has its state
+    volume mounted at the old path; it keeps using that, so an image update doesn't make it ask to join again."""
+    configured = os.getenv("INFRADECK_STATE_DIR")
+    if configured:
+        return Path(configured) / "credentials.json"
+    current = Path("/var/lib/infradeck-collector") / "credentials.json"
+    legacy = LEGACY_STATE_DIR / "credentials.json"
+    return legacy if not current.exists() and LEGACY_STATE_DIR.is_dir() else current
 
 
 def load_credentials(path: Path | None = None) -> tuple[int, str] | None:
@@ -1257,7 +1272,7 @@ def request_approval(api_url: str) -> tuple[int, str]:
     base = api_url.rstrip("/")
     while True:
         try:
-            registration = _post_json(f"{base}/monitoring/collectors/register", {"hostname": _host_hostname(), "machine_id": _machine_id(), "os_info": _host_os_info(), "join_token": os.getenv("HOMELAB_JOIN_TOKEN", "").strip() or None, "details": registration_details()})
+            registration = _post_json(f"{base}/monitoring/collectors/register", {"hostname": _host_hostname(), "machine_id": _machine_id(), "os_info": _host_os_info(), "join_token": os.getenv("INFRADECK_JOIN_TOKEN", "").strip() or None, "details": registration_details()})
         except urllib.error.HTTPError as exc:
             print(f"Registration refused (HTTP {exc.code}): {_error_detail(exc)}; retrying in 5 minutes", flush=True)
             time.sleep(300)
@@ -1294,13 +1309,13 @@ def request_approval(api_url: str) -> tuple[int, str]:
 
 def resolve_credentials(api_url: str) -> tuple[int, str]:
     """Explicit env credentials win, then saved credentials, then an enrollment key, then dashboard approval."""
-    if os.getenv("HOMELAB_SERVER_ID") and os.getenv("HOMELAB_COLLECTOR_TOKEN"):
-        return int(os.environ["HOMELAB_SERVER_ID"]), os.environ["HOMELAB_COLLECTOR_TOKEN"]
+    if os.getenv("INFRADECK_SERVER_ID") and os.getenv("INFRADECK_COLLECTOR_TOKEN"):
+        return int(os.environ["INFRADECK_SERVER_ID"]), os.environ["INFRADECK_COLLECTOR_TOKEN"]
     saved = load_credentials()
     if saved:
         return saved
     credentials = None
-    enroll_key = os.getenv("HOMELAB_ENROLL_KEY", "").strip()
+    enroll_key = os.getenv("INFRADECK_ENROLL_KEY", "").strip()
     if enroll_key:
         try:
             credentials = enroll(api_url, enroll_key)
@@ -1319,9 +1334,9 @@ def resolve_credentials(api_url: str) -> tuple[int, str]:
 
 
 def run_collector() -> None:
-    api_url = os.getenv("HOMELAB_API_URL", "http://localhost:8060")
+    api_url = os.getenv("INFRADECK_API_URL", "http://localhost:8060")
     server_id, token = resolve_credentials(api_url)
-    interval = max(15, int(os.getenv("HOMELAB_CHECK_INTERVAL_SECONDS", "60")))
+    interval = max(15, int(os.getenv("INFRADECK_CHECK_INTERVAL_SECONDS", "60")))
     print(f"Collector started for server {server_id}; API={api_url}", flush=True)
     while True:
         started = time.monotonic()
@@ -1336,7 +1351,7 @@ def run_collector() -> None:
             print(f"Sent host metrics and {len(containers)} container records; next check in {interval}s", flush=True)
             delay = max(0, interval - (time.monotonic() - started))
         except urllib.error.HTTPError as exc:
-            if exc.code in (401, 404) and not os.getenv("HOMELAB_SERVER_ID"):
+            if exc.code in (401, 404) and not os.getenv("INFRADECK_SERVER_ID"):
                 # Removed from the dashboard: ask to join again. This needs a fresh Add, so a
                 # deleted server never comes back on its own.
                 print(f"Backend no longer accepts server {server_id} (HTTP {exc.code}); requesting approval again", flush=True)
@@ -1348,7 +1363,7 @@ def run_collector() -> None:
                     pass
                 delay = 0
             elif exc.code in (401, 404):
-                print(f"Backend rejected server {server_id} (HTTP {exc.code}); check HOMELAB_SERVER_ID / HOMELAB_COLLECTOR_TOKEN", flush=True)
+                print(f"Backend rejected server {server_id} (HTTP {exc.code}); check INFRADECK_SERVER_ID / INFRADECK_COLLECTOR_TOKEN", flush=True)
                 delay = 300
             else:
                 print(f"Send failed (HTTP {exc.code})", flush=True)

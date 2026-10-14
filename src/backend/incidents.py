@@ -188,7 +188,7 @@ def _host_diagnosis(db, alert: IncidentAlert, server: Server, kind: str, since: 
 PLAYBOOKS: dict[str, list[dict]] = {
     SERVER_OFFLINE_RULE: [
         _step("Check that the machine is up", "If it answers a ping, the machine is fine and the collector or the network path is the problem.", None, None, True),
-        _step("Look at the collector on that machine", "It logs why it could not send.", "docker compose -p homelab-collector logs --tail 50 collector", "shell"),
+        _step("Look at the collector on that machine", "It logs why it could not send.", "docker compose -p infradeck-collector logs --tail 50 collector", "shell"),
         _step("Confirm it's back", "This incident resolves on the collector's next check-in."),
     ],
     "network:port": [

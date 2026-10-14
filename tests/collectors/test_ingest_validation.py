@@ -229,7 +229,7 @@ def test_a_check_in_that_follows_the_last_one_too_closely_is_refused(app, spaced
 
 def test_the_next_check_in_is_accepted_when_the_slot_has_passed(app, spaced):
     ingest(app, 1, {"host": {}})
-    main.redis_client.delete("homelab:ingest:1")                                    # the key expires after the spacing
+    main.redis_client.delete("infradeck:ingest:1")                                    # the key expires after the spacing
 
     assert ingest(app, 1, {"host": {}}).status_code == 200
 

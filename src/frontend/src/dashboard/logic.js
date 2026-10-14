@@ -611,27 +611,27 @@ export function eventsToCsv(events) {
 
 // The same two hardened containers (collector plus read-only Docker proxy), three ways to start them.
 export function installCommands({ url, token, name, collectorImage, proxyImage }) {
-  const nameLine = name ? `\n      HOMELAB_SERVER_NAME: ${name}` : ''
+  const nameLine = name ? `\n      INFRADECK_SERVER_NAME: ${name}` : ''
   const compose = `services:
   collector:
     image: ${collectorImage}
-    container_name: homelab-collector
+    container_name: infradeck-collector
     restart: unless-stopped
     environment:
-      HOMELAB_API_URL: ${url}
-      HOMELAB_JOIN_TOKEN: ${token}${nameLine}
-      HOMELAB_DOCKER_HOST: /run/docker-proxy/docker.sock
+      INFRADECK_API_URL: ${url}
+      INFRADECK_JOIN_TOKEN: ${token}${nameLine}
+      INFRADECK_DOCKER_HOST: /run/docker-proxy/docker.sock
     volumes:
       - /proc:/host/proc:ro
       - /:/hostfs:ro
-      - collector_state:/var/lib/homelab-collector
+      - collector_state:/var/lib/infradeck-collector
       - docker_proxy_socket:/run/docker-proxy:ro
     cap_drop: [ALL]
     read_only: true
     security_opt: [no-new-privileges:true]
   docker-proxy:
     image: ${proxyImage}
-    container_name: homelab-docker-proxy
+    container_name: infradeck-docker-proxy
     restart: unless-stopped
     user: "0:0"
     network_mode: none
@@ -645,19 +645,19 @@ volumes:
   collector_state:
   docker_proxy_socket:`
   const hardened = '--restart unless-stopped --cap-drop ALL --read-only --security-opt no-new-privileges:true'
-  const nameFlag = name ? ` \\\n  -e HOMELAB_SERVER_NAME=${name}` : ''
-  const dockerRun = `docker run -d --name homelab-docker-proxy ${hardened} \\
+  const nameFlag = name ? ` \\\n  -e INFRADECK_SERVER_NAME=${name}` : ''
+  const dockerRun = `docker run -d --name infradeck-docker-proxy ${hardened} \\
   --user 0:0 --network none \\
   -v /var/run/docker.sock:/var/run/docker.sock \\
-  -v homelab_docker_proxy_socket:/run/docker-proxy \\
+  -v infradeck_docker_proxy_socket:/run/docker-proxy \\
   ${proxyImage}
-docker run -d --name homelab-collector ${hardened} \\
-  -e HOMELAB_API_URL=${url} \\
-  -e HOMELAB_JOIN_TOKEN=${token}${nameFlag} \\
-  -e HOMELAB_DOCKER_HOST=/run/docker-proxy/docker.sock \\
+docker run -d --name infradeck-collector ${hardened} \\
+  -e INFRADECK_API_URL=${url} \\
+  -e INFRADECK_JOIN_TOKEN=${token}${nameFlag} \\
+  -e INFRADECK_DOCKER_HOST=/run/docker-proxy/docker.sock \\
   -v /proc:/host/proc:ro -v /:/hostfs:ro \\
-  -v homelab_collector_state:/var/lib/homelab-collector \\
-  -v homelab_docker_proxy_socket:/run/docker-proxy:ro \\
+  -v infradeck_collector_state:/var/lib/infradeck-collector \\
+  -v infradeck_docker_proxy_socket:/run/docker-proxy:ro \\
   ${collectorImage}`
   const systemd = `sudo mkdir -p /etc/infradeck-collector
 sudo tee /etc/infradeck-collector/compose.yml >/dev/null <<'EOF'
@@ -672,13 +672,13 @@ After=docker.service network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/docker compose -p homelab-collector -f /etc/infradeck-collector/compose.yml up -d
-ExecStop=/usr/bin/docker compose -p homelab-collector -f /etc/infradeck-collector/compose.yml down
+ExecStart=/usr/bin/docker compose -p infradeck-collector -f /etc/infradeck-collector/compose.yml up -d
+ExecStop=/usr/bin/docker compose -p infradeck-collector -f /etc/infradeck-collector/compose.yml down
 
 [Install]
 WantedBy=multi-user.target
 EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now infradeck-collector`
-  return { 'docker run': dockerRun, compose: `docker compose -p homelab-collector -f - up -d <<'EOF'\n${compose}\nEOF`, systemd }
+  return { 'docker run': dockerRun, compose: `docker compose -p infradeck-collector -f - up -d <<'EOF'\n${compose}\nEOF`, systemd }
 }

@@ -140,8 +140,8 @@ docker compose down                                 # stop (data volumes are kep
 ```
 
 To try **Connect a server** on the same machine, set `COLLECTOR_IMAGE` and
-`DOCKER_PROXY_IMAGE` in `.env` to `homelab-collector:latest` and
-`homelab-docker-proxy:latest` (the images Compose just built). Other machines
+`DOCKER_PROXY_IMAGE` in `.env` to `infradeck-collector:latest` and
+`infradeck-docker-proxy:latest` (the images Compose just built). Other machines
 need published images; see [Publishing the collector images](docs/deployment.md#publishing-the-collector-images).
 
 ## Deploying on a server
@@ -169,6 +169,7 @@ Full documentation is in the [`docs/`](docs/README.md) folder:
 | [The dashboard and system health](docs/dashboard.md) | Fleet cards, storage, the Network and System rows, the optional system helper. |
 | [Alerts and incidents](docs/alerts.md) | Every rule and its default thresholds. |
 | [Accounts and two-factor sign-in](docs/accounts.md) | Roles, passwords, authenticator codes, recovery and reset. |
+| [The containers](docs/containers.md) | What each container (backend, PostgreSQL, Redis, collector, Docker proxy, helpers) does and why it is there. |
 | [Deploying](docs/deployment.md), [Adding servers](docs/adding-servers.md), [Configuration](docs/configuration.md), [Troubleshooting](docs/troubleshooting.md) | Installing, running and fixing it. |
 | [Development](docs/development.md), [Database schema](docs/database.md), [API overview](docs/api.md), [Homie assistant](docs/assistant.md) | For contributors. |
 

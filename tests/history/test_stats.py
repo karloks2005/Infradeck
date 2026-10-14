@@ -206,7 +206,7 @@ def test_answers_are_cached_for_a_minute_per_range_only(db, client, monkeypatch)
     client.get("/stats/fleet?range=7d"); client.get("/stats/fleet?range=7d"); client.get("/stats/fleet?range=30d")
 
     assert calls == ["7d", "30d"]
-    assert sorted(key for key in main.redis_client.keys("*")) == ["homelab:stats:fleet:30d", "homelab:stats:fleet:7d"]
+    assert sorted(key for key in main.redis_client.keys("*")) == ["infradeck:stats:fleet:30d", "infradeck:stats:fleet:7d"]
 
 
 def test_a_broken_cache_does_not_break_the_page(db, client, monkeypatch):
@@ -286,11 +286,11 @@ def test_the_heatmap_is_the_same_before_and_after_summarising(db):
 def test_the_heatmap_endpoint_validates_everything_and_caches_per_server_metric_and_offset(db, client):
     assert client.get("/stats/servers/1/heatmap?metric=cpu&offset=60").status_code == 200
     assert client.get("/stats/servers/1/heatmap?metric=cpu&offset=60").status_code == 200
-    assert main.redis_client.keys("*") == ["homelab:stats:heatmap:1:cpu:60"]
+    assert main.redis_client.keys("*") == ["infradeck:stats:heatmap:1:cpu:60"]
     for query in ("metric=disk", "metric=cpu;x", "offset=900", "offset=-900", "offset=abc", "offset=1.5"):
         assert client.get(f"/stats/servers/1/heatmap?{query}").status_code == 422
     assert client.get("/stats/servers/999/heatmap").status_code == 404
-    assert main.redis_client.keys("*") == ["homelab:stats:heatmap:1:cpu:60"]       # refused requests left nothing behind
+    assert main.redis_client.keys("*") == ["infradeck:stats:heatmap:1:cpu:60"]       # refused requests left nothing behind
 
 
 def test_the_heatmap_endpoint_needs_a_session(db, monkeypatch):

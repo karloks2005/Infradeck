@@ -134,7 +134,7 @@ Passive, and only what the collector can read without privileges.
 |---|---|
 | **Listening ports** | Which TCP/UDP ports the host listens on, and whether each is reachable from other machines or only from the machine itself (**scope**). Protocol, port and scope only, with no process names. Short-lived programs on random high ports are ignored. |
 | **Firewall** | A hash and a rule count of the known firewall configuration files, plus whether `ufw` is enabled. Never the rules themselves, and not the live ruleset. A changed hash raises an informational incident. |
-| **Internet reachability** | Off unless you set `HOMELAB_CONNECTIVITY_TARGETS` on that collector. `ok` (all targets reachable), `degraded` (some), `dns_failed` (names don't resolve and nothing else is wrong) or `down`; plus the median connection time in milliseconds. |
+| **Internet reachability** | Off unless you set `INFRADECK_CONNECTIVITY_TARGETS` on that collector. `ok` (all targets reachable), `degraded` (some), `dns_failed` (names don't resolve and nothing else is wrong) or `down`; plus the median connection time in milliseconds. |
 
 ## Collector self-metrics
 

@@ -10,7 +10,7 @@ with fixed patterns, strings are reduced to printable text and truncated, and th
 fixed schema. The helper is stateless; each run re-reads the kernel ring buffer and publishes
 a snapshot, and the backend de-duplicates events by their key.
 
-A second, separate mode (``HOMELAB_HELPER_MODE=port-owners``, the ``port-owners`` compose profile) names the
+A second, separate mode (``INFRADECK_HELPER_MODE=port-owners``, the ``port-owners`` compose profile) names the
 process behind each listening port. That needs far more than the kernel log does: the host's /proc and the
 right to look at other users' processes (CAP_SYS_PTRACE and CAP_DAC_READ_SEARCH), which together can read
 any file on the host. It therefore runs as its own container, so enabling the kernel-log helper never grants
@@ -31,9 +31,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Installs from before the rename to Infradeck set HOMELAB_* variables; they keep working unchanged.
+for _name, _value in list(os.environ.items()):
+    if _name.startswith("HOMELAB_"):
+        os.environ.setdefault("INFRADECK_" + _name[len("HOMELAB_"):], _value)
+
 HOST_PROC = Path(os.getenv("HOST_PROC") or "/proc")
-WTMP_PATH = Path(os.getenv("HOMELAB_WTMP_PATH", "/host/wtmp"))
-OUTPUT_PATH = Path(os.getenv("HOMELAB_HELPER_OUTPUT", "/out/system.json"))
+WTMP_PATH = Path(os.getenv("INFRADECK_WTMP_PATH", "/host/wtmp"))
+OUTPUT_PATH = Path(os.getenv("INFRADECK_HELPER_OUTPUT", "/out/system.json"))
 
 SYSLOG_ACTION_READ_ALL = 3  # reads the ring buffer without clearing it
 SYSLOG_ACTION_SIZE_BUFFER = 10
@@ -142,9 +147,9 @@ def classify_last_shutdown(records: list[tuple[int, str, int]], boot_time: float
     return "unclean" if any(is_shutdown(record) for record in records[:latest]) else "unknown"
 
 
-PORTS_OUTPUT_PATH = Path(os.getenv("HOMELAB_PORT_OWNERS_OUTPUT", "/out/ports.json"))
+PORTS_OUTPUT_PATH = Path(os.getenv("INFRADECK_PORT_OWNERS_OUTPUT", "/out/ports.json"))
 # Where the host's /proc is mounted for the port-owners mode (its own /proc only shows this container).
-PORTS_HOST_PROC = Path(os.getenv("HOMELAB_PORT_OWNERS_PROC", "/host/proc"))
+PORTS_HOST_PROC = Path(os.getenv("INFRADECK_PORT_OWNERS_PROC", "/host/proc"))
 MAX_SOCKET_LINES = 200_000
 MAX_PROCESSES = 20_000
 MAX_FDS_PER_PROCESS = 4096
@@ -254,8 +259,8 @@ def write_snapshot(snapshot: dict[str, Any], path: Path = OUTPUT_PATH) -> None:
 
 
 def run() -> None:
-    interval = max(10, int(os.getenv("HOMELAB_HELPER_INTERVAL_SECONDS", "30")))
-    ports_mode = os.getenv("HOMELAB_HELPER_MODE", "").strip().lower() == "port-owners"
+    interval = max(10, int(os.getenv("INFRADECK_HELPER_INTERVAL_SECONDS", "30")))
+    ports_mode = os.getenv("INFRADECK_HELPER_MODE", "").strip().lower() == "port-owners"
     output = PORTS_OUTPUT_PATH if ports_mode else OUTPUT_PATH
     print(f"{'Port-owners' if ports_mode else 'System'} helper started; writing {output} every {interval}s", flush=True)
     while True:

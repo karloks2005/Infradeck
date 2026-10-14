@@ -6,7 +6,7 @@ WORKDIR /app
 COPY src/agent/docker_proxy.py ./docker_proxy.py
 
 ENV DOCKER_SOCKET_PATH=/var/run/docker.sock \
-    HOMELAB_DOCKER_PROXY_SOCKET=/run/docker-proxy/docker.sock \
+    INFRADECK_DOCKER_PROXY_SOCKET=/run/docker-proxy/docker.sock \
     PYTHONUNBUFFERED=1
 
 USER 0:0

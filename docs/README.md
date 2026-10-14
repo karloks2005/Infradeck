@@ -17,6 +17,7 @@ The [README](../README.md) is the short version: what the project is, how to sta
 
 | Page | What is in it |
 |---|---|
+| [The containers and why each one exists](containers.md) | Every container in the stack: what it does, how it works, why it is separate, and what happens when it stops. |
 | [Deploying on a server](deployment.md) | The server stack behind Traefik, the VPN collector gate, publishing the collector images, updating, running without Traefik. |
 | [Adding servers](adding-servers.md) | **Connect a server**, what its command does, how registration and approval work, networking. |
 | [Configuration](configuration.md) | Every `.env` setting for the stack, the collector and the frontend build. |

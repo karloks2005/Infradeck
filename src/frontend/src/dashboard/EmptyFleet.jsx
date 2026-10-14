@@ -139,7 +139,7 @@ function EnrollmentKey() {
 
   return (
     <div className="mt-2.5 text-xs">
-      <p className="m-0 text-muted">For scripted installs where nobody clicks Add: collectors started with <span className="mono text-soft">HOMELAB_ENROLL_KEY</span> join immediately. Servers already connected are unaffected by rotating or revoking it.</p>
+      <p className="m-0 text-muted">For scripted installs where nobody clicks Add: collectors started with <span className="mono text-soft">INFRADECK_ENROLL_KEY</span> join immediately. Servers already connected are unaffected by rotating or revoking it.</p>
       {error && <div className="mt-2.5"><Notice>{error}</Notice></div>}
       {!keyInfo ? <p className="mb-0 mt-2.5 text-muted">Loading…</p> : enrollKey ? <>
         <p className="mb-0 mt-2.5 text-warn">Copy this key now. It is shown only once.</p>

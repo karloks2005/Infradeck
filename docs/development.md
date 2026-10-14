@@ -12,7 +12,7 @@ in place of PostgreSQL.
 ```bash
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-docker run -d --name homelab-dev-redis -p 127.0.0.1:6379:6379 redis:7-alpine   # if Redis isn't running (no password: for local development only)
+docker run -d --name infradeck-dev-redis -p 127.0.0.1:6379:6379 redis:7-alpine   # if Redis isn't running (no password: for local development only)
 DATABASE_URL=sqlite:///./dev.db REDIS_URL=redis://localhost:6379/0 \
   uvicorn src.backend.main:app --reload --host 0.0.0.0 --port 8060
 ```

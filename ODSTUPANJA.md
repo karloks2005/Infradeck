@@ -1,7 +1,7 @@
 # Odstupanja od dizajna
 
 Popis svega što se u implementaciji redizajna razlikuje od PDF-ova u `design/web/` i `design/mobile/`,
-s razlogom i, gdje postoji, GitHub issueom. Stanje: 13. 10. 2026.
+s razlogom i, gdje postoji, GitHub issueom. Stanje: 14. 10. 2026.
 
 Mobilni prikazi nisu odstupanja nego preostali posao; popisani su na kraju.
 
@@ -12,7 +12,7 @@ su anotacije dizajna i namjerno nisu ugrađeni.
 
 | Dizajn | Implementacija | Razlog | Issue |
 | --- | --- | --- | --- |
-| „karlo's homelab" kao ime instance | Ime se izvodi iz imena prvog admina; može se promijeniti samo kroz API (`instance_name`), u Adminu nema polja | Admin stranica još nije redizajnirana | #106 |
+| „karlo's homelab" kao ime instance | Zadano se izvodi iz imena prvog admina; mijenja se u Admin → General | – | – |
 | „Owner" ispod imena korisnika | „Owner" se prikazuje svakom adminu, „Member" svima ostalima | Ne postoji uloga vlasnika | #106 |
 | Verzija `v0.9.2` | Konstanta u `src/backend/config.py` i druga u `src/agent/collector.py` | Nema jednog izvora verzije pri buildu | #106 |
 | Prečac `⌘K` | Na Linuxu i Windowsu piše `Ctrl K` | Prikazuje se prečac koji stvarno radi na tom sustavu | – |
@@ -21,15 +21,15 @@ su anotacije dizajna i namjerno nisu ugrađeni.
 
 | Dizajn | Implementacija | Razlog | Issue |
 | --- | --- | --- | --- |
-| Agentova bilješka na svakom incidentu („Agent: limit is 4 GB…") | Stupac postoji i puni se ako backend pošalje `agent_note`; backend ga još ne šalje, pa je prazan | Agent još ne dijagnosticira incidente | #95, #93 |
-| „Open diagnosis" i „Ask the agent" otvaraju taj incident / razgovor o tom kontejneru | Vode na `/agent` bez konteksta | Agent stranica je još placeholder | #95 |
-| Zadnji incident: „Resolved 2 h ago · memory limit raised to 6 GB" | Piše samo kada je riješen i na kojem serveru | Nitko ne bilježi kako je incident riješen | #95 |
-| „You'll get a push on ntfy if that changes" | Rečenica je izostavljena | Infradeck nema ntfy obavijesti | #50 |
+| Agentova bilješka na svakom incidentu („Agent: limit is 4 GB…") | Bilješka dolazi iz lokalne dijagnoze po pravilima, ne od jezičnog modela | Automatska LLM dijagnoza ne postoji | #93 |
+| „Ask the agent" otvara razgovor o tom kontejneru | Vodi na `/agent` bez konteksta kontejnera („Open diagnosis" otvara točno taj incident) | Chat još ne prima kontekst kontejnera | – |
+| Zadnji incident: „Resolved 2 h ago · memory limit raised to 6 GB" | Piše samo kada je riješen i na kojem serveru | Nitko ne upisuje kako je incident riješen | – |
+| „You'll get a push on ntfy if that changes" | Rečenica je izostavljena | Obavijesti ovise o kanalima koje je svaki korisnik postavio, pa rečenica ne bi vrijedila za svakoga | – |
 | Gumbi Logs i Restart u proširenom redu kontejnera | Prikazani, ali onemogućeni, s objašnjenjem u tooltipu | Dogovoreno: aplikacija ostaje read-only dok se to sigurnosno ne pregleda | #100 |
-| „Monitor this machine": „Check every 15 s · change later in Admin" | „Checks every minute at first · change it once it reports" | Novi server počinje s intervalom od 60 s; interval se mijenja na Overviewu | #97 |
+| „Monitor this machine": „Check every 15 s · change later in Admin" | „Checks every minute at first · change it once it reports" | Novi server počinje s intervalom od 60 s; interval se mijenja na Overviewu ili u Adminu | – |
 | „Another machine": jedna `docker run` naredba | Dvije `docker run` naredbe (collector i docker-proxy) | Collector namjerno nema Docker socket; drži ga zaseban read-only proxy | – |
 | „Another machine": polje samo za ime | Dodano je i polje za adresu na koju se novi stroj javlja | Bez ispravne adrese naredba ne radi (localhost, VPN) | – |
-| Brisanje servera nije na Overviewu | „Remove this server" je u System tabu | Admin još nema pravi popis servera | #97 |
+| Brisanje servera nije na Overviewu | „Remove this server" je i u System tabu, uz Admin → Servers | Zgodno je imati ga uz podatke servera | – |
 | Kartica „What you'll get": „Kept for a year as 30-minute points" | „Kept as rolled-up points for as long as you set in Admin" | Zadržavanje je postavka, a točke nisu uvijek 30-minutne | – |
 | „The agent only sends data to your model provider when it diagnoses an incident" | „…when you ask it something" | Automatska dijagnoza ne postoji | #93 |
 
@@ -52,7 +52,7 @@ su anotacije dizajna i namjerno nisu ugrađeni.
 | System: `/var/lib/docker` s uređajem i tipom `overlay2` | Uređaj „—", tip „images + cache" | `/system/df` je namjerno sveden na šest brojeva | – |
 | Events: „Events are kept for 90 days, then only alerts are kept for a year" | „Events are kept for N days" (postavka zadržavanja) | Ne postoji zasebno pravilo za alerte | #58 |
 | Events: „watchtower pulled new images…", „restarted by a user through Portainer" | Generičke rečenice („now run a different image build") | Infradeck ne zna tko je pokrenuo promjenu | – |
-| Events: „alert sent to ntfy and email" | Ne piše kamo je alert poslan | Nema kanala obavijesti | #50 |
+| Events: „alert sent to ntfy and email" | Ne piše kamo je alert poslan | Ne bilježi se slanje po kanalu | – |
 
 ## Prijava i registracija (`09-login.pdf`, `mobile/06-login.pdf`)
 

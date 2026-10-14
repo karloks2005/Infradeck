@@ -7,25 +7,25 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: homelab-postgres
+    container_name: infradeck-postgres
     restart: unless-stopped
     networks: [data]
     environment:
-      POSTGRES_DB: homelab
-      POSTGRES_USER: homelab
+      POSTGRES_DB: ${POSTGRES_DB:-infradeck}
+      POSTGRES_USER: ${POSTGRES_USER:-infradeck}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U homelab -d homelab"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-infradeck} -d $${POSTGRES_DB:-infradeck}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:7-alpine
-    container_name: homelab-redis
+    container_name: infradeck-redis
     restart: unless-stopped
     networks: [data]
     # Needs a password: Redis holds the login sessions, so nothing that can merely reach it on the network
@@ -45,12 +45,12 @@ services:
     build:
       context: .
       dockerfile: docker/backend.Dockerfile
-    container_name: homelab-backend
-    image: homelab-backend:latest
+    container_name: infradeck-backend
+    image: infradeck-backend:latest
     restart: unless-stopped
     networks: [data, front]
     environment:
-      DATABASE_URL: postgresql+psycopg://homelab:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/homelab
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-infradeck}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-infradeck}
       REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env (generate one with openssl rand -hex 24)}@redis:6379/0
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       AGENT_MODEL: ${AGENT_MODEL:-models/gemini-3.5-flash}
@@ -103,29 +103,29 @@ services:
     build:
       context: .
       dockerfile: docker/collector.Dockerfile
-    image: homelab-collector:latest
-    container_name: homelab-collector
+    image: infradeck-collector:latest
+    container_name: infradeck-collector
     restart: unless-stopped
     networks: [collector]
     environment:
       # Through the gate's internal listener (not published); the public listener refuses collectors.
-      HOMELAB_API_URL: http://collector-gate:8080/api
+      INFRADECK_API_URL: http://collector-gate:8080/api
       # Marks this collector as the machine running the dashboard (the charts at the top).
-      HOMELAB_DASHBOARD_HOST: "true"
+      INFRADECK_DASHBOARD_HOST: "true"
       # Nothing to configure: this machine shows up under "New servers detected"
       # on the dashboard. An optional enrollment key skips that approval.
-      HOMELAB_ENROLL_KEY: ${HOMELAB_ENROLL_KEY:-}
-      HOMELAB_SERVER_NAME: ${HOMELAB_SERVER_NAME:-}
+      INFRADECK_ENROLL_KEY: ${INFRADECK_ENROLL_KEY:-}
+      INFRADECK_SERVER_NAME: ${INFRADECK_SERVER_NAME:-}
       # Optional internet check, off when empty: comma-separated host:port targets this collector tries to reach.
-      HOMELAB_CONNECTIVITY_TARGETS: ${HOMELAB_CONNECTIVITY_TARGETS:-}
+      INFRADECK_CONNECTIVITY_TARGETS: ${INFRADECK_CONNECTIVITY_TARGETS:-}
       # Docker data comes through the read-only proxy; the collector has no Docker socket.
-      HOMELAB_DOCKER_HOST: /run/docker-proxy/docker.sock
-      HOMELAB_CHECK_INTERVAL_SECONDS: ${HOMELAB_CHECK_INTERVAL_SECONDS:-60}
-      HOMELAB_MACHINE_ID: ${HOMELAB_MACHINE_ID:-}
+      INFRADECK_DOCKER_HOST: /run/docker-proxy/docker.sock
+      INFRADECK_CHECK_INTERVAL_SECONDS: ${INFRADECK_CHECK_INTERVAL_SECONDS:-60}
+      INFRADECK_MACHINE_ID: ${INFRADECK_MACHINE_ID:-}
     volumes:
       - /proc:/host/proc:ro
       - /:/hostfs:ro
-      - collector_state:/var/lib/homelab-collector
+      - collector_state:/var/lib/infradeck-collector
       # Summary from the optional system helper (read-only; empty unless that profile runs).
       - system_events:/helper:ro
       - docker_proxy_socket:/run/docker-proxy:ro
@@ -146,7 +146,7 @@ services:
   # published ports bypass ufw and similar firewalls, so never bind it to 0.0.0.0 and rely on those.
   collector-gate:
     image: nginx:alpine
-    container_name: homelab-collector-gate
+    container_name: infradeck-collector-gate
     restart: unless-stopped
     networks: [front, collector]
     ports:
@@ -166,14 +166,14 @@ services:
         condition: service_healthy
 
   # The only container that mounts the Docker socket (a mount flag can't make it read-only).
-  # It answers four read requests and nothing else. It has no network at all: the collector
+  # It answers six kinds of read request and nothing else. It has no network at all: the collector
   # reaches it through a Unix socket in a volume only the two of them share. See SECURITY.md.
   docker-proxy:
     build:
       context: .
       dockerfile: docker/docker-proxy.Dockerfile
-    image: homelab-docker-proxy:latest
-    container_name: homelab-docker-proxy
+    image: infradeck-docker-proxy:latest
+    container_name: infradeck-docker-proxy
     restart: unless-stopped
     user: "0:0"
     cap_drop: [ALL]
@@ -194,8 +194,8 @@ services:
     build:
       context: .
       dockerfile: docker/system-helper.Dockerfile
-    image: homelab-system-helper:latest
-    container_name: homelab-system-helper
+    image: infradeck-system-helper:latest
+    container_name: infradeck-system-helper
     restart: unless-stopped
     user: "0:0"
     cap_drop: [ALL]
@@ -219,8 +219,8 @@ services:
     build:
       context: .
       dockerfile: docker/system-helper.Dockerfile
-    image: homelab-system-helper:latest
-    container_name: homelab-port-owners
+    image: infradeck-system-helper:latest
+    container_name: infradeck-port-owners
     restart: unless-stopped
     user: "0:0"
     cap_drop: [ALL]
@@ -231,7 +231,7 @@ services:
       - no-new-privileges:true
       - apparmor=unconfined
     environment:
-      HOMELAB_HELPER_MODE: port-owners
+      INFRADECK_HELPER_MODE: port-owners
     volumes:
       - /proc:/host/proc:ro
       - system_events:/out
@@ -243,7 +243,7 @@ services:
       args:
         VITE_API_BASE_URL: /api
         VITE_LIVE_GRAPH_REFRESH_INTERVAL_SECONDS: ${LIVE_GRAPH_REFRESH_INTERVAL_SECONDS:-3}
-    container_name: homelab-frontend
+    container_name: infradeck-frontend
     restart: unless-stopped
     # Serves the dashboard and proxies /api to the backend; Traefik publishes it
     # over HTTPS on your domain. The plain-HTTP port is bound to localhost only
@@ -261,10 +261,10 @@ services:
       # All values come from .env: DASHBOARD_DOMAIN (required), TRAEFIK_ROUTER, TRAEFIK_ENTRYPOINT,
       # TRAEFIK_CERT_RESOLVER and TRAEFIK_NETWORK (defaults shown).
       - traefik.docker.network=${TRAEFIK_NETWORK:-traefik_default}
-      - traefik.http.routers.${TRAEFIK_ROUTER:-homelab}.rule=Host(`${DASHBOARD_DOMAIN:?Set DASHBOARD_DOMAIN in .env}`)
-      - traefik.http.routers.${TRAEFIK_ROUTER:-homelab}.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}
-      - traefik.http.routers.${TRAEFIK_ROUTER:-homelab}.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-letsencrypt}
-      - traefik.http.services.${TRAEFIK_ROUTER:-homelab}.loadbalancer.server.port=80
+      - traefik.http.routers.${TRAEFIK_ROUTER:-infradeck}.rule=Host(`${DASHBOARD_DOMAIN:?Set DASHBOARD_DOMAIN in .env}`)
+      - traefik.http.routers.${TRAEFIK_ROUTER:-infradeck}.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}
+      - traefik.http.routers.${TRAEFIK_ROUTER:-infradeck}.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      - traefik.http.services.${TRAEFIK_ROUTER:-infradeck}.loadbalancer.server.port=80
     depends_on:
       backend:
         condition: service_healthy

@@ -12,7 +12,7 @@ import {
 const COLUMNS = 'grid-cols-[196px_minmax(140px,1.1fr)_128px_150px_161px_minmax(150px,1fr)_52px_72px]'
 const READ_ONLY_NOTE = 'Infradeck only reads from Docker for now, so it cannot fetch logs or restart a container yet.'
 const FILTER_LABELS = { all: 'All', problems: 'Problems', exposed: 'Exposed', restarted: 'Restarted', stopped: 'Stopped' }
-const APP_PROJECT = /infradeck|homelab|homie/i
+const APP_PROJECT = /infradeck|homie/i
 
 function statusTone(container) {
   if (container.status === 'running') return container.healthcheck_status === 'unhealthy' ? 'text-signal' : 'text-ok'

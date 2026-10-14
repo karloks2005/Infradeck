@@ -182,5 +182,5 @@ test('the install commands carry the token and the chosen name three ways', () =
   for (const command of Object.values(commands)) {
     assert.ok(command.includes('jt_abc') && command.includes('homelab-01') && command.includes('ghcr.io/x/proxy@sha256:2'))
   }
-  assert.ok(!installCommands({ url: 'u', token: 't', name: '', collectorImage: 'c', proxyImage: 'p' }).compose.includes('HOMELAB_SERVER_NAME'))
+  assert.ok(!installCommands({ url: 'u', token: 't', name: '', collectorImage: 'c', proxyImage: 'p' }).compose.includes('INFRADECK_SERVER_NAME'))
 })

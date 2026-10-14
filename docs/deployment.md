@@ -28,7 +28,7 @@ Then set at least these:
 | `TRAEFIK_ENTRYPOINT` | `websecure` | Your Traefik HTTPS entrypoint name. |
 | `TRAEFIK_CERT_RESOLVER` | `letsencrypt` | Your Traefik certificate resolver name. |
 | `TRAEFIK_NETWORK` | `traefik_default` | The Docker network Traefik is attached to. |
-| `TRAEFIK_ROUTER` | `homelab` | Name of this dashboard's Traefik router and service; change it only if it clashes with another one. |
+| `TRAEFIK_ROUTER` | `infradeck` | Name of this dashboard's Traefik router and service; change it only if it clashes with another one. |
 | `COMPOSE_FILE` | `docker-compose.server.yml` | Makes plain `docker compose ...` commands use the server file (see below). |
 
 Find the network with `docker network ls` or

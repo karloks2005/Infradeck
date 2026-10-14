@@ -177,7 +177,7 @@ def test_the_listener_report_is_capped(tmp_path, monkeypatch):
 # --- collector: connectivity ------------------------------------------------------------------------
 
 def test_connectivity_is_off_unless_targets_are_configured(monkeypatch):
-    monkeypatch.delenv("HOMELAB_CONNECTIVITY_TARGETS", raising=False)
+    monkeypatch.delenv("INFRADECK_CONNECTIVITY_TARGETS", raising=False)
     assert collector.collect_connectivity() == {"internet_status": None, "internet_latency_ms": None}
 
 
@@ -187,14 +187,14 @@ def test_connectivity_is_off_unless_targets_are_configured(monkeypatch):
     ("a.com:1,b.com:2,c.com:3,d.com:4,e.com:5,f.com:6,g.com:7", [("a.com", 1), ("b.com", 2), ("c.com", 3), ("d.com", 4), ("e.com", 5)]),
 ])
 def test_valid_targets_are_parsed_deduplicated_and_capped(monkeypatch, value, expected):
-    monkeypatch.setenv("HOMELAB_CONNECTIVITY_TARGETS", value)
+    monkeypatch.setenv("INFRADECK_CONNECTIVITY_TARGETS", value)
     assert collector._connectivity_targets() == expected
 
 
 @pytest.mark.parametrize("bad", ["", "nohost", ":443", "host:", "host:0", "host:65536", "host:abc", "host:-1", "http://example.com:443", "exa mple.com:443", "example.com;rm -rf /:443",
                                  "999.1.1.1:443", "1.1.1:443", "[::1]:443", "-bad.com:443", "a" * 300 + ".com:443", "user@host:443", "host:443/path", "host\n:443"])
 def test_malformed_targets_are_ignored(monkeypatch, bad):
-    monkeypatch.setenv("HOMELAB_CONNECTIVITY_TARGETS", bad)
+    monkeypatch.setenv("INFRADECK_CONNECTIVITY_TARGETS", bad)
     assert collector._connectivity_targets() == []
 
 
@@ -210,7 +210,7 @@ def test_results_are_summarised(results, status):
 
 
 def test_a_reachable_target_reports_ok_with_its_latency(monkeypatch):
-    monkeypatch.setenv("HOMELAB_CONNECTIVITY_TARGETS", "example.com:443,1.1.1.1:443")
+    monkeypatch.setenv("INFRADECK_CONNECTIVITY_TARGETS", "example.com:443,1.1.1.1:443")
     monkeypatch.setattr(collector.socket, "getaddrinfo", lambda host, port, **kw: [(None, None, None, "", ("93.184.216.34", port))])
 
     class Connection:
@@ -225,14 +225,14 @@ def test_a_reachable_target_reports_ok_with_its_latency(monkeypatch):
 
 
 def test_unresolvable_names_are_reported_as_dns_failure(monkeypatch):
-    monkeypatch.setenv("HOMELAB_CONNECTIVITY_TARGETS", "example.com:443")
+    monkeypatch.setenv("INFRADECK_CONNECTIVITY_TARGETS", "example.com:443")
     monkeypatch.setattr(collector.socket, "getaddrinfo", lambda *a, **k: (_ for _ in ()).throw(OSError("no dns")))
 
     assert collector.collect_connectivity()["internet_status"] == "dns_failed"
 
 
 def test_a_hung_probe_cannot_stall_the_check_in(monkeypatch):
-    monkeypatch.setenv("HOMELAB_CONNECTIVITY_TARGETS", "1.1.1.1:443")
+    monkeypatch.setenv("INFRADECK_CONNECTIVITY_TARGETS", "1.1.1.1:443")
     monkeypatch.setattr(collector, "CONNECTIVITY_DEADLINE_SECONDS", 0.3)
     monkeypatch.setattr(collector.socket, "create_connection", lambda address, timeout: time.sleep(3))
 
@@ -243,7 +243,7 @@ def test_a_hung_probe_cannot_stall_the_check_in(monkeypatch):
 
 
 def test_probes_only_connect_and_never_send_data(monkeypatch):
-    monkeypatch.setenv("HOMELAB_CONNECTIVITY_TARGETS", "1.1.1.1:443")
+    monkeypatch.setenv("INFRADECK_CONNECTIVITY_TARGETS", "1.1.1.1:443")
     sent = []
 
     class Connection:

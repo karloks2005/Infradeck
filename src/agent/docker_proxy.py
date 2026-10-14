@@ -32,8 +32,13 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any, Callable
 
+# Installs from before the rename to Infradeck set HOMELAB_* variables; they keep working unchanged.
+for _name, _value in list(os.environ.items()):
+    if _name.startswith("HOMELAB_"):
+        os.environ.setdefault("INFRADECK_" + _name[len("HOMELAB_"):], _value)
+
 SOCKET_PATH = os.getenv("DOCKER_SOCKET_PATH", "/var/run/docker.sock")
-LISTEN_PATH = os.getenv("HOMELAB_DOCKER_PROXY_SOCKET", "/run/docker-proxy/docker.sock")
+LISTEN_PATH = os.getenv("INFRADECK_DOCKER_PROXY_SOCKET", "/run/docker-proxy/docker.sock")
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 UPSTREAM_TIMEOUT_SECONDS = 10
 
@@ -137,7 +142,7 @@ class _UnixHTTPConnection(http.client.HTTPConnection):
 
 
 class ProxyHandler(BaseHTTPRequestHandler):
-    server_version = "homelab-docker-proxy"
+    server_version = "infradeck-docker-proxy"
     socket_path = SOCKET_PATH
 
     def _send(self, status: int, body: bytes = b"", content_type: str = "text/plain") -> None:

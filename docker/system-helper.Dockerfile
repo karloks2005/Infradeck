@@ -6,8 +6,8 @@ WORKDIR /app
 COPY src/agent/system_helper.py ./system_helper.py
 
 ENV HOST_PROC=/proc \
-    HOMELAB_WTMP_PATH=/host/wtmp \
-    HOMELAB_HELPER_OUTPUT=/out/system.json \
+    INFRADECK_WTMP_PATH=/host/wtmp \
+    INFRADECK_HELPER_OUTPUT=/out/system.json \
     PYTHONUNBUFFERED=1
 
 # Nothing to write to except the shared output volume.

@@ -148,8 +148,8 @@ def test_collector_waits_for_approval_without_restart(monkeypatch):
 
 
 def test_collector_without_key_or_credentials_requests_approval(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOMELAB_STATE_DIR", str(tmp_path))
-    for name in ("HOMELAB_SERVER_ID", "HOMELAB_COLLECTOR_TOKEN", "HOMELAB_ENROLL_KEY"):
+    monkeypatch.setenv("INFRADECK_STATE_DIR", str(tmp_path))
+    for name in ("INFRADECK_SERVER_ID", "INFRADECK_COLLECTOR_TOKEN", "INFRADECK_ENROLL_KEY"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(collector, "request_approval", lambda api_url: (11, "approved-token"))
 
@@ -166,7 +166,7 @@ def test_collector_sends_its_join_token_when_registering(monkeypatch):
             return {"request_secret": "s", "pairing_code": "ABC-123", "poll_interval_seconds": 2}
         return {"status": "approved", "server_id": 4, "collector_token": "tok"}
 
-    monkeypatch.setenv("HOMELAB_JOIN_TOKEN", "hlj_abc ")
+    monkeypatch.setenv("INFRADECK_JOIN_TOKEN", "hlj_abc ")
     monkeypatch.setattr(collector, "_post_json", fake_post)
     monkeypatch.setattr(collector.time, "sleep", lambda seconds: None)
 
@@ -176,7 +176,7 @@ def test_collector_sends_its_join_token_when_registering(monkeypatch):
 
 def test_collector_without_a_join_token_sends_none(monkeypatch):
     sent = []
-    monkeypatch.delenv("HOMELAB_JOIN_TOKEN", raising=False)
+    monkeypatch.delenv("INFRADECK_JOIN_TOKEN", raising=False)
     monkeypatch.setattr(collector, "_post_json", lambda url, payload, bearer=None: sent.append(payload) or {"request_secret": "s", "pairing_code": "A", "poll_interval_seconds": 2} if url.endswith("/register") else {"status": "approved", "server_id": 1, "collector_token": "t"})
     monkeypatch.setattr(collector.time, "sleep", lambda seconds: None)
     collector.request_approval("http://dash/api")

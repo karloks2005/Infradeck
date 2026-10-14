@@ -24,7 +24,7 @@
 | `BACKEND_PORT` | `8060` | Development stack only: the host port (on `127.0.0.1`) where the backend is published for debugging. The server stack publishes no backend port. |
 | `FRONTEND_PORT` | `5173` | Dashboard port on the host. |
 | `DASHBOARD_DOMAIN` | *(required on a server)* | Domain of the dashboard, without `https://` (server file). |
-| `TRAEFIK_ENTRYPOINT` / `TRAEFIK_CERT_RESOLVER` / `TRAEFIK_NETWORK` / `TRAEFIK_ROUTER` | `websecure` / `letsencrypt` / `traefik_default` / `homelab` | Your Traefik names (server file). |
+| `TRAEFIK_ENTRYPOINT` / `TRAEFIK_CERT_RESOLVER` / `TRAEFIK_NETWORK` / `TRAEFIK_ROUTER` | `websecure` / `letsencrypt` / `traefik_default` / `infradeck` | Your Traefik names (server file). |
 | `CORS_ORIGINS` | `http://localhost:5173` (dev), `https://<DASHBOARD_DOMAIN>` (server file) | Comma-separated origins. Also the allow-list for the cross-site request check: a state-changing request from any other origin is refused unless its `Origin` matches the `Host` the dashboard was reached on. Add your dashboard URL if something in front rewrites `Host`. |
 | `LOGIN_RATE_LIMIT` / `LOGIN_RATE_WINDOW_SECONDS` | `5` / `60` | Login attempts per IP and per email. |
 | `REGISTER_RATE_LIMIT` / `REGISTER_RATE_WINDOW_SECONDS` | `3` / `3600` | Registrations per IP. |
@@ -33,33 +33,33 @@
 | `COLLECTOR_IMAGE` / `DOCKER_PROXY_IMAGE` | empty | Digest-pinned images remote machines install. **Connect a server** needs both. |
 | `JOIN_TOKEN_TTL_SECONDS` | `900` | How long a generated join token stays valid. |
 | `COLLECTOR_ACCESS` | `open` (dev), `strict` (server file) | `strict` makes the backend answer collector endpoints only when they came through the collector gate. |
-| `HOMELAB_ENROLL_KEY` | empty | Lets the stack's own collector skip approval. |
-| `HOMELAB_SERVER_NAME` | host's hostname | Name shown for the stack's own machine. |
+| `INFRADECK_ENROLL_KEY` | empty | Lets the stack's own collector skip approval. |
+| `INFRADECK_SERVER_NAME` | host's hostname | Name shown for the stack's own machine. |
 | `DOMAIN` | `localhost` | Domain for the optional Caddy profile. |
 | `COMPOSE_FILE` | – | Set to `docker-compose.server.yml` on a server so plain `docker compose` uses it. |
 | `LIVE_GRAPH_REFRESH_INTERVAL_SECONDS` | `3` | How often the dashboard refreshes (server file; applied when the frontend image is built). |
-| `HOMELAB_CHECK_INTERVAL_SECONDS` | `60` | Initial check interval of the stack's own collector (server file); the dashboard setting overrides it. |
+| `INFRADECK_CHECK_INTERVAL_SECONDS` | `60` | Initial check interval of the stack's own collector (server file); the dashboard setting overrides it. |
 
 ## Collector (environment of the collector container)
 
 | Variable | Default | Description |
 |---|---|---|
-| `HOMELAB_API_URL` | `http://localhost:8060` | Dashboard API address, e.g. `https://dashboard.example.com/api`. |
-| `HOMELAB_JOIN_TOKEN` | empty | Single-use token from **Connect a server**; required over the VPN listener. |
-| `HOMELAB_ENROLL_KEY` | empty | Join immediately instead of waiting for approval. |
-| `HOMELAB_SERVER_NAME` | host's `/etc/hostname` | Name shown on the dashboard. |
-| `HOMELAB_CONNECTIVITY_TARGETS` | empty (check off) | Optional internet check: up to 5 comma-separated `host:port` targets (hostnames or IPv4), e.g. `1.1.1.1:443,9.9.9.9:443`. The collector opens a TCP connection and looks the name up; it sends nothing. Set on each collector; the dashboard cannot set it. |
-| `HOMELAB_STATE_DIR` | `/var/lib/homelab-collector` | Where the token is saved (mount a volume here). |
-| `HOMELAB_MACHINE_ID` | host's `/etc/machine-id` | Identity used to recognise reinstalled machines. |
-| `HOMELAB_DASHBOARD_HOST` | empty | `true` marks this machine as the one running the dashboard (set in the Compose files for the stack's own collector; leave it unset elsewhere). |
-| `HOMELAB_SERVER_ID` / `HOMELAB_COLLECTOR_TOKEN` | empty | Explicit credentials (legacy; overrides everything else). |
+| `INFRADECK_API_URL` | `http://localhost:8060` | Dashboard API address, e.g. `https://dashboard.example.com/api`. |
+| `INFRADECK_JOIN_TOKEN` | empty | Single-use token from **Connect a server**; required over the VPN listener. |
+| `INFRADECK_ENROLL_KEY` | empty | Join immediately instead of waiting for approval. |
+| `INFRADECK_SERVER_NAME` | host's `/etc/hostname` | Name shown on the dashboard. |
+| `INFRADECK_CONNECTIVITY_TARGETS` | empty (check off) | Optional internet check: up to 5 comma-separated `host:port` targets (hostnames or IPv4), e.g. `1.1.1.1:443,9.9.9.9:443`. The collector opens a TCP connection and looks the name up; it sends nothing. Set on each collector; the dashboard cannot set it. |
+| `INFRADECK_STATE_DIR` | `/var/lib/infradeck-collector` | Where the token is saved (mount a volume here). |
+| `INFRADECK_MACHINE_ID` | host's `/etc/machine-id` | Identity used to recognise reinstalled machines. |
+| `INFRADECK_DASHBOARD_HOST` | empty | `true` marks this machine as the one running the dashboard (set in the Compose files for the stack's own collector; leave it unset elsewhere). |
+| `INFRADECK_SERVER_ID` / `INFRADECK_COLLECTOR_TOKEN` | empty | Explicit credentials (legacy; overrides everything else). |
 | `HOST_PROC` / `HOST_ROOT` | `/host/proc` and `/hostfs` if mounted, else `/proc` and `/` | Where the host's `/proc` and filesystem are. |
-| `HOMELAB_DOCKER_HOST` | empty | Socket of the read-only Docker proxy, e.g. `/run/docker-proxy/docker.sock`. Preferred over `DOCKER_SOCKET_PATH`. |
-| `DOCKER_SOCKET_PATH` | `/var/run/docker.sock` | Direct Docker socket, used only when `HOMELAB_DOCKER_HOST` is unset (not recommended). Without any Docker access only host metrics are sent. |
-| `HOMELAB_HELPER_FILE` | `/helper/system.json` | Where the optional system helper's summary is read from. |
+| `INFRADECK_DOCKER_HOST` | empty | Socket of the read-only Docker proxy, e.g. `/run/docker-proxy/docker.sock`. Preferred over `DOCKER_SOCKET_PATH`. |
+| `DOCKER_SOCKET_PATH` | `/var/run/docker.sock` | Direct Docker socket, used only when `INFRADECK_DOCKER_HOST` is unset (not recommended). Without any Docker access only host metrics are sent. |
+| `INFRADECK_HELPER_FILE` | `/helper/system.json` | Where the optional system helper's summary is read from. |
 
-The system helper has `HOMELAB_HELPER_INTERVAL_SECONDS` (default `30`, minimum
-`10`); the Docker proxy listens on `HOMELAB_DOCKER_PROXY_SOCKET` and forwards to
+The system helper has `INFRADECK_HELPER_INTERVAL_SECONDS` (default `30`, minimum
+`10`); the Docker proxy listens on `INFRADECK_DOCKER_PROXY_SOCKET` and forwards to
 `DOCKER_SOCKET_PATH`. Both are set in their images and rarely need changing.
 
 The check interval is set per server on the dashboard; collectors pick it up

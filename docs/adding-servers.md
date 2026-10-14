@@ -15,7 +15,7 @@ enrollment key are admin-only.
    compose plugin, and a route to the address above (the VPN).
 4. Within a few seconds the machine appears under **New servers detected** with a
    **JOIN TOKEN** badge and a pairing code (also printed in
-   `docker logs homelab-collector`). Click **Add**. It starts reporting on its
+   `docker logs infradeck-collector`). Click **Add**. It starts reporting on its
    next check, without a restart.
 
 <ui - The Connect a server panel: the address field, the Generate command button with its single-use / expires note, and the copyable compose command>
@@ -24,28 +24,28 @@ enrollment key are admin-only.
 
 The machine running the dashboard is added the same way (its collector starts
 with the stack, over the gate's internal listener). That collector has
-`HOMELAB_DASHBOARD_HOST=true` set in the Compose files, which makes it the machine
+`INFRADECK_DASHBOARD_HOST=true` set in the Compose files, which makes it the machine
 shown in the charts at the top of the dashboard and first in the server list.
 Collectors installed on other machines don't set it.
 
 ## What the command does
 
-It starts a small compose project named `homelab-collector` from the YAML on its
+It starts a small compose project named `infradeck-collector` from the YAML on its
 standard input (shortened here):
 
 ```bash
-docker compose -p homelab-collector -f - up -d <<'EOF'
+docker compose -p infradeck-collector -f - up -d <<'EOF'
 services:
   collector:
     image: ghcr.io/…/collector@sha256:…
     environment:
-      HOMELAB_API_URL: http://10.8.0.1:8081/api
-      HOMELAB_JOIN_TOKEN: hlj_…
-      HOMELAB_DOCKER_HOST: /run/docker-proxy/docker.sock
+      INFRADECK_API_URL: http://10.8.0.1:8081/api
+      INFRADECK_JOIN_TOKEN: hlj_…
+      INFRADECK_DOCKER_HOST: /run/docker-proxy/docker.sock
     volumes:
       - /proc:/host/proc:ro
       - /:/hostfs:ro
-      - collector_state:/var/lib/homelab-collector
+      - collector_state:/var/lib/infradeck-collector
       - docker_proxy_socket:/run/docker-proxy:ro
     cap_drop: [ALL]
     read_only: true
@@ -62,8 +62,8 @@ EOF
 
 | Part | Purpose |
 |---|---|
-| `HOMELAB_API_URL` | Where the collector gate is. |
-| `HOMELAB_JOIN_TOKEN` | Proves an admin asked this machine to join. Single use, expires. |
+| `INFRADECK_API_URL` | Where the collector gate is. |
+| `INFRADECK_JOIN_TOKEN` | Proves an admin asked this machine to join. Single use, expires. |
 | `image: …@sha256:…` | Signed images pinned by digest. No code is downloaded from the dashboard. |
 | `/proc:/host/proc:ro` | Host CPU, memory, load, network, uptime, boot ID, OOM counter and kernel flags. |
 | `/:/hostfs:ro` | Disk usage of every mounted filesystem, hostname, OS name and `/etc/machine-id`. |
@@ -74,8 +74,8 @@ EOF
 To remove a collector completely:
 
 ```bash
-docker rm -f homelab-collector homelab-docker-proxy
-docker volume rm homelab-collector_collector_state homelab-collector_docker_proxy_socket
+docker rm -f infradeck-collector infradeck-docker-proxy
+docker volume rm infradeck-collector_collector_state infradeck-collector_docker_proxy_socket
 ```
 
 ## How registration works
@@ -101,11 +101,11 @@ docker volume rm homelab-collector_collector_state homelab-collector_docker_prox
 Alternatives:
 
 - **Enrollment key (no approval step):** for scripted installs, generate a key
-  under **Connect a server → Advanced** and add `HOMELAB_ENROLL_KEY: <key>` to the
+  under **Connect a server → Advanced** and add `INFRADECK_ENROLL_KEY: <key>` to the
   collector's environment. Only a hash of the key is stored; rotating or revoking
   it does not affect servers that are already connected.
 - **Compose from the repository:** copy the repository to the machine, set
-  `HOMELAB_API_URL` (and `HOMELAB_JOIN_TOKEN`) in a `.env` next to
+  `INFRADECK_API_URL` (and `INFRADECK_JOIN_TOKEN`) in a `.env` next to
   `collector-compose.yml`, and run
   `docker compose -f collector-compose.yml up -d --build`. This builds the images
   locally instead of pulling them.

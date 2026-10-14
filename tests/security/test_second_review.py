@@ -326,7 +326,7 @@ def test_a_limited_session_expires_sooner_than_a_full_one(app):
     _, _ = auth.create_session(app.redis, user, stage=auth.STAGE_ENROLLMENT)
     _, _ = auth.create_session(app.redis, user, stage=auth.STAGE_FULL)
 
-    lifetimes = sorted(app.redis.ttls[key] for key in app.redis.store if key.startswith("homelab:session:"))
+    lifetimes = sorted(app.redis.ttls[key] for key in app.redis.store if key.startswith("infradeck:session:"))
     assert lifetimes == [auth.ENROLLMENT_SESSION_TTL_SECONDS, auth.SESSION_TTL_SECONDS] and auth.ENROLLMENT_SESSION_TTL_SECONDS <= 1800
 
 

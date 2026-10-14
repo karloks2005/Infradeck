@@ -52,7 +52,7 @@ def _events(db, *kinds):
 # --- collector: Docker status (#22) -----------------------------------------------------------------
 
 def _clear_docker_env(monkeypatch, tmp_path):
-    monkeypatch.delenv("HOMELAB_DOCKER_HOST", raising=False)
+    monkeypatch.delenv("INFRADECK_DOCKER_HOST", raising=False)
     monkeypatch.setenv("DOCKER_SOCKET_PATH", str(tmp_path / "no-such-docker.sock"))
 
 
@@ -63,7 +63,7 @@ def test_a_host_without_docker_is_not_configured_not_broken(monkeypatch, tmp_pat
 
 
 def test_a_configured_but_missing_proxy_socket_is_unreachable(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOMELAB_DOCKER_HOST", str(tmp_path / "proxy.sock"))
+    monkeypatch.setenv("INFRADECK_DOCKER_HOST", str(tmp_path / "proxy.sock"))
 
     _containers, status = collector.collect_docker()
 
@@ -75,7 +75,7 @@ def test_a_stale_socket_nobody_listens_on_is_reported_as_refused(monkeypatch, tm
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     listener.bind(path)
     listener.close()  # leaves the socket file behind, like a stopped proxy
-    monkeypatch.setenv("HOMELAB_DOCKER_HOST", path)
+    monkeypatch.setenv("INFRADECK_DOCKER_HOST", path)
 
     containers, status = collector.collect_docker()
 
@@ -96,7 +96,7 @@ def test_a_working_daemon_reports_ok_with_its_latency(monkeypatch, tmp_path):
     cid = "c" * 64
     answers = {"/containers/json?all=1": [{"Id": cid, "Names": ["/web"]}], f"/containers/{cid}/json": {"Name": "/web", "State": {"Status": "running"}, "Config": {"Image": "nginx"}}}
     monkeypatch.setattr(collector, "_docker_request", lambda path, endpoint: answers.get(endpoint, {}))
-    monkeypatch.setenv("HOMELAB_DOCKER_HOST", str(socket_path))
+    monkeypatch.setenv("INFRADECK_DOCKER_HOST", str(socket_path))
 
     containers, status = collector.collect_docker()
 
@@ -108,7 +108,7 @@ def test_a_daemon_error_during_listing_is_unreachable(monkeypatch, tmp_path):
     socket_path = tmp_path / "docker.sock"
     socket_path.touch()
     monkeypatch.setattr(collector, "_docker_request", lambda path, endpoint: (_ for _ in ()).throw(OSError("Docker API returned HTTP 502")))
-    monkeypatch.setenv("HOMELAB_DOCKER_HOST", str(socket_path))
+    monkeypatch.setenv("INFRADECK_DOCKER_HOST", str(socket_path))
 
     containers, status = collector.collect_docker()
 
@@ -128,7 +128,7 @@ def test_one_container_vanishing_mid_collection_does_not_fail_the_rest(monkeypat
         return {"Name": "/web", "State": {"Status": "exited"}}
 
     monkeypatch.setattr(collector, "_docker_request", request)
-    monkeypatch.setenv("HOMELAB_DOCKER_HOST", str(socket_path))
+    monkeypatch.setenv("INFRADECK_DOCKER_HOST", str(socket_path))
 
     containers, status = collector.collect_docker()
 
@@ -145,7 +145,7 @@ def test_when_nothing_can_be_inspected_the_daemon_is_failing_not_empty(monkeypat
         raise OSError("Docker API returned HTTP 502")
 
     monkeypatch.setattr(collector, "_docker_request", request)
-    monkeypatch.setenv("HOMELAB_DOCKER_HOST", str(socket_path))
+    monkeypatch.setenv("INFRADECK_DOCKER_HOST", str(socket_path))
 
     containers, status = collector.collect_docker()
 

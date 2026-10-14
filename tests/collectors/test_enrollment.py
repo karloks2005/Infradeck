@@ -103,10 +103,10 @@ def test_recently_seen_server_is_not_offline(db):
 
 
 def test_collector_prefers_saved_credentials_over_enrolling(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOMELAB_STATE_DIR", str(tmp_path))
-    monkeypatch.delenv("HOMELAB_SERVER_ID", raising=False)
-    monkeypatch.delenv("HOMELAB_COLLECTOR_TOKEN", raising=False)
-    monkeypatch.setenv("HOMELAB_ENROLL_KEY", "hlk_key")
+    monkeypatch.setenv("INFRADECK_STATE_DIR", str(tmp_path))
+    monkeypatch.delenv("INFRADECK_SERVER_ID", raising=False)
+    monkeypatch.delenv("INFRADECK_COLLECTOR_TOKEN", raising=False)
+    monkeypatch.setenv("INFRADECK_ENROLL_KEY", "hlk_key")
     collector.save_credentials(7, "saved-token")
     monkeypatch.setattr(collector, "enroll", lambda *args: pytest.fail("should not enroll"))
 
@@ -114,10 +114,10 @@ def test_collector_prefers_saved_credentials_over_enrolling(tmp_path, monkeypatc
 
 
 def test_collector_enrolls_and_saves_when_no_credentials(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOMELAB_STATE_DIR", str(tmp_path))
-    monkeypatch.delenv("HOMELAB_SERVER_ID", raising=False)
-    monkeypatch.delenv("HOMELAB_COLLECTOR_TOKEN", raising=False)
-    monkeypatch.setenv("HOMELAB_ENROLL_KEY", "hlk_key")
+    monkeypatch.setenv("INFRADECK_STATE_DIR", str(tmp_path))
+    monkeypatch.delenv("INFRADECK_SERVER_ID", raising=False)
+    monkeypatch.delenv("INFRADECK_COLLECTOR_TOKEN", raising=False)
+    monkeypatch.setenv("INFRADECK_ENROLL_KEY", "hlk_key")
     monkeypatch.setattr(collector, "enroll", lambda api_url, key: (9, "new-token"))
 
     assert collector.resolve_credentials("http://backend") == (9, "new-token")
@@ -128,7 +128,19 @@ def test_collector_enrolls_and_saves_when_no_credentials(tmp_path, monkeypatch):
 def test_machine_id_read_from_host_root(tmp_path, monkeypatch):
     (tmp_path / "etc").mkdir()
     (tmp_path / "etc/machine-id").write_text("abc123\n")
-    monkeypatch.delenv("HOMELAB_MACHINE_ID", raising=False)
+    monkeypatch.delenv("INFRADECK_MACHINE_ID", raising=False)
     monkeypatch.setattr(collector, "HOST_ROOT", tmp_path)
 
     assert collector._machine_id() == "abc123"
+
+
+def test_a_collector_from_before_the_rename_keeps_its_credentials_and_settings(tmp_path, monkeypatch):
+    from src.agent import collector
+    legacy = tmp_path / "homelab-collector"
+    legacy.mkdir()
+    (legacy / "credentials.json").write_text('{"server_id": 4, "token": "t"}')
+    monkeypatch.delenv("INFRADECK_STATE_DIR", raising=False)
+    monkeypatch.setattr(collector, "LEGACY_STATE_DIR", legacy)
+    assert collector._credentials_path() == legacy / "credentials.json"
+    monkeypatch.setenv("INFRADECK_STATE_DIR", str(tmp_path / "new"))
+    assert collector._credentials_path() == tmp_path / "new" / "credentials.json"

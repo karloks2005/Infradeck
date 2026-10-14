@@ -911,7 +911,7 @@ def test_the_sessions_index_keeps_digests_not_session_ids(app):
 
 def test_a_session_stored_under_the_raw_cookie_value_is_not_accepted(app):
     """What an old-format key (or a guess at one) looks like: the cookie value itself in the key."""
-    app.redis.set("homelab:session:planted-cookie-value", json.dumps({"user_id": 1, "email": "a@b.c", "name": "A", "role": "admin", "stage": "full", "public_id": "0" * 16}))
+    app.redis.set("infradeck:session:planted-cookie-value", json.dumps({"user_id": 1, "email": "a@b.c", "name": "A", "role": "admin", "stage": "full", "public_id": "0" * 16}))
     client = TestClient(main.app, cookies={COOKIE: "planted-cookie-value"})
 
     assert client.get("/monitoring/overview").status_code == 401
@@ -930,19 +930,19 @@ def test_listing_and_ending_sessions_still_work_with_digests(app):
 
 def test_old_format_session_data_is_removed_at_start_and_new_data_is_kept(app):
     client = _signed_in("member@example.com")
-    old_session, old_pending, old_attempts = "homelab:session:" + "a" * 43, "homelab:2fa-pending:" + "b" * 43, "homelab:2fa-attempts:" + "c" * 43
+    old_session, old_pending, old_attempts = "infradeck:session:" + "a" * 43, "infradeck:2fa-pending:" + "b" * 43, "infradeck:2fa-attempts:" + "c" * 43
     for key in (old_session, old_pending, old_attempts):
         app.redis.set(key, "x")
-    app.redis.hset("homelab:user-sessions:9", "0123456789abcdef", "raw-session-id-not-a-digest")
-    before = len(app.redis.keys("homelab:session:*"))
+    app.redis.hset("infradeck:user-sessions:9", "0123456789abcdef", "raw-session-id-not-a-digest")
+    before = len(app.redis.keys("infradeck:session:*"))
 
     removed = auth.purge_legacy_session_keys(app.redis)
 
     assert removed == 4
     for key in (old_session, old_pending, old_attempts):
         assert app.redis.get(key) is None
-    assert app.redis.hgetall("homelab:user-sessions:9") == {}
-    assert len(app.redis.keys("homelab:session:*")) == before - 1 and client.get("/auth/me").status_code == 200   # the live session survived
+    assert app.redis.hgetall("infradeck:user-sessions:9") == {}
+    assert len(app.redis.keys("infradeck:session:*")) == before - 1 and client.get("/auth/me").status_code == 200   # the live session survived
 
 
 def test_the_cleanup_of_old_session_data_never_stops_the_backend_from_starting(app):
@@ -956,7 +956,7 @@ def test_the_cleanup_of_old_session_data_never_stops_the_backend_from_starting(a
 # --- staying signed in, and what the sign-in page may know ----------------------------------------------
 
 def _session_ttls(app):
-    return sorted(ttl for key, ttl in app.redis.ttls.items() if key.startswith("homelab:session:"))
+    return sorted(ttl for key, ttl in app.redis.ttls.items() if key.startswith("infradeck:session:"))
 
 
 def _cookie_max_age(response):
@@ -1024,3 +1024,21 @@ def test_a_new_install_has_no_name_yet(app):
 
     config = TestClient(main.app).get("/auth/config").json()
     assert config["bootstrap_required"] is True and config["instance_name"] is None
+
+
+def test_redis_keys_from_before_the_rename_move_to_the_new_prefix_once(app):
+    """An upgrade from the homelab: prefix keeps everyone signed in and remembers which alerts went out."""
+    client = _signed_in("member@example.com")
+    session_key = next(key for key in app.redis.keys("infradeck:session:*"))
+    index_key = "infradeck:user-sessions:2"
+    app.redis.rename(session_key, "homelab:" + session_key[len("infradeck:"):])
+    app.redis.rename(index_key, "homelab:user-sessions:2")
+    app.redis.set("homelab:notified:7:1:critical", "1", ex=100)
+    app.redis.set("infradeck:notified:8:1:critical", "new")
+    app.redis.set("homelab:notified:8:1:critical", "old")
+    assert client.get("/auth/me").status_code == 401   # not found under the new name yet
+
+    assert auth.migrate_key_prefix(app.redis) == 3
+    assert client.get("/auth/me").status_code == 200 and app.redis.hgetall(index_key)
+    assert app.redis.ttl("infradeck:notified:7:1:critical") == 100 and app.redis.get("infradeck:notified:8:1:critical") == "new"
+    assert auth.migrate_key_prefix(app.redis) == 0

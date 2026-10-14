@@ -69,10 +69,10 @@ def test_history_of_unknown_server_is_404(db):
 
 
 def test_collector_sends_flag_only_when_configured(monkeypatch):
-    monkeypatch.setenv("HOMELAB_DASHBOARD_HOST", "true")
+    monkeypatch.setenv("INFRADECK_DASHBOARD_HOST", "true")
     assert collector.collect_host()[0]["dashboard_host"] is True
 
-    monkeypatch.delenv("HOMELAB_DASHBOARD_HOST")
+    monkeypatch.delenv("INFRADECK_DASHBOARD_HOST")
     assert "dashboard_host" not in collector.collect_host()[0]
 
 

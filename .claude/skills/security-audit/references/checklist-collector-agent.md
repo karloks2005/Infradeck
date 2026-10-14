@@ -51,7 +51,7 @@ helper drže privilegije: najveća pažnja ide njima.
       rezultat koji bi ports "zatvorio"; ogromne datoteke ne troše memoriju.
 - [ ] **Ono što stiže s dashboarda** (odgovor na register/poll) tretira se nepouzdano: nema
       izvršavanja, nema putanja, nema ciljeva za sondiranje iz odgovora. Mete provjere
-      interneta samo iz okoline kolektora (`HOMELAB_CONNECTIVITY_TARGETS`, ≤5, hostname ili
+      interneta samo iz okoline kolektora (`INFRADECK_CONNECTIVITY_TARGETS`, ≤5, hostname ili
       IPv4), s tvrdim rokom.
 - [ ] Sondiranje: ne šalje podatke, samo TCP connect + DNS; ne može se usmjeriti na
       proizvoljnu metu; ograničenje trajanja kako check-in ne bi visio.

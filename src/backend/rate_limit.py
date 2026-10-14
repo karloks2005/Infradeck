@@ -7,7 +7,7 @@ from fastapi import HTTPException
 
 def _key(scope: str, value: str) -> str:
     digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
-    return f"homelab:rate-limit:{scope}:{digest}"
+    return f"infradeck:rate-limit:{scope}:{digest}"
 
 
 def _record_attempt(redis_client, key: str, limit: int, window_seconds: int) -> None:

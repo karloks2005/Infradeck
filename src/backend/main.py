@@ -371,6 +371,8 @@ def startup_event():
         if require_admin_two_factor(db) and not secrets_box.available():
             print("SECURITY WARNING: two-factor is required for administrators, but SECRETS_KEY is missing or invalid, so it is NOT being enforced. "
                   "Generate a key with `python -m src.backend.secrets_box` and set SECRETS_KEY in .env.", flush=True)
+        if moved := auth.migrate_key_prefix(redis_client):
+            print(f"Moved {moved} Redis keys from the old homelab: prefix to infradeck:.", flush=True)
         if removed := auth.purge_legacy_session_keys(redis_client):
             print(f"Removed {removed} session records written in the old format (sign-ins before this version ended).", flush=True)
         if warning := registration_warning(db):
@@ -1341,7 +1343,7 @@ def fleet_statistics(range_name: Annotated[RangeName, Query(alias="range")] = "2
     """Incidents over time and per-server availability for the Statistics page's all-servers view."""
     _current_user(session_id, db)
     # Keyed only by the validated range, so a request can't create an unbounded number of cache entries.
-    cache_key = f"homelab:stats:fleet:{range_name}"
+    cache_key = f"infradeck:stats:fleet:{range_name}"
     try:
         cached = redis_client.get(cache_key)
         if cached:
@@ -1362,7 +1364,7 @@ def _cached_server_stats(db, server_id: int, name: str, range_name: str, build) 
     server = db.query(Server).filter(Server.id == server_id).first()
     if not server:
         raise HTTPException(status_code=404, detail="Server not found.")
-    cache_key = f"homelab:stats:{name}:{server.id}:{range_name}"
+    cache_key = f"infradeck:stats:{name}:{server.id}:{range_name}"
     try:
         cached = redis_client.get(cache_key)
         if cached:
@@ -1409,7 +1411,7 @@ def server_heatmap(
     if not server:
         raise HTTPException(status_code=404, detail="Server not found.")
     # Only existing servers, known metrics and a bounded offset get this far, so the cache can't grow without limit.
-    cache_key = f"homelab:stats:heatmap:{server.id}:{metric}:{offset}"
+    cache_key = f"infradeck:stats:heatmap:{server.id}:{metric}:{offset}"
     try:
         cached = redis_client.get(cache_key)
         if cached:
@@ -2209,7 +2211,7 @@ def _enforce_ingest_spacing(server: Server) -> None:
         return
     spacing = max(INGEST_MIN_SPACING_SECONDS, int(server.check_interval_seconds * INGEST_MIN_SPACING_RATIO))
     try:
-        allowed = redis_client.set(f"homelab:ingest:{server.id}", "1", nx=True, ex=spacing)
+        allowed = redis_client.set(f"infradeck:ingest:{server.id}", "1", nx=True, ex=spacing)
     except Exception:  # losing the limit during a Redis outage is better than losing the monitoring
         return
     if not allowed:
@@ -2596,7 +2598,7 @@ def _agent_note(db, alert: IncidentAlert, server: Server | None) -> str | None:
     Overview is polled every few seconds and working it out reads samples."""
     if server is None:
         return None
-    key = f"homelab:incident-note:{alert.id}"
+    key = f"infradeck:incident-note:{alert.id}"
     try:
         cached = redis_client.get(key)
         if cached is not None:
@@ -2942,7 +2944,7 @@ def dispatch_notifications(db, now: datetime | None = None) -> int:
             wanted = [channel for channel in channels if routing.get(str(channel.id), notify.DEFAULT_ROUTING[event])]
             if not wanted or (event != "critical" and notify.in_quiet_hours(preferences["quiet"], preferences["display"]["timezone"], now)):
                 continue
-            marker = f"homelab:notified:{alert.id}:{user_id}:{event}"
+            marker = f"infradeck:notified:{alert.id}:{user_id}:{event}"
             try:
                 if not redis_client.set(marker, "1", nx=True, ex=NOTIFY_MARK_SECONDS):
                     continue

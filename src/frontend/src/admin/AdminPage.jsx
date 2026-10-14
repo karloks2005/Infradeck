@@ -34,7 +34,46 @@ function Servers({ overview }) {
   }
   return (
     <div className="card overflow-hidden">
-      <div className="custom-scroll overflow-x-auto"><table className="w-full min-w-[820px] border-collapse text-left text-[13px]">
+      {/* Phones: one block per server instead of a table that scrolls sideways. */}
+      <ul className="m-0 list-none divide-y divide-line p-0 md:hidden">
+        {servers.map((server) => {
+          const version = server.system?.collector_version
+          const outdated = !version || version !== overview.version
+          const renaming = editing?.id === server.id
+          return (
+            <li key={server.id} className="px-4 py-3.5">
+              {renaming
+                ? <form className="flex items-center gap-2" onSubmit={(event) => { event.preventDefault(); save(server, { hostname: editing.name }).then(() => setEditing(null)) }}>
+                  <input className="field h-10 min-w-0 flex-1" autoFocus maxLength={253} aria-label={`New name for ${server.hostname}`} value={editing.name} onChange={(event) => setEditing({ id: server.id, name: event.target.value })} />
+                  <button type="submit" className="btn btn-primary h-10" disabled={state.busy}>Save</button>
+                  <button type="button" className="btn btn-ghost h-10" onClick={() => setEditing(null)}>Cancel</button>
+                </form>
+                : <div className="flex items-start gap-2.5">
+                  <span className={`dot mt-[7px] ${STATE_DOT[serverState(server)]}`} />
+                  <span className="min-w-0 flex-1"><span className="block break-all text-sm font-semibold leading-5 text-paper">{server.hostname}</span>{server.is_dashboard_host && <span className="chip mt-1.5">this machine</span>}</span>
+                  <button type="button" className="link shrink-0 text-xs" onClick={() => setEditing({ id: server.id, name: server.hostname })}>Edit</button>
+                </div>}
+              <dl className="m-0 mt-3 grid grid-cols-2 gap-x-4 gap-y-2.5 text-xs">
+                <div><dt className="text-muted">Address</dt><dd className="mono m-0 mt-0.5 break-all text-soft">{server.ip_address || '—'}</dd></div>
+                <div><dt className="text-muted">Collector</dt><dd className="m-0 mt-0.5"><span className="mono text-paper">{version || 'older'}</span>{outdated && <span className="ml-2 text-warn">update</span>}</dd></div>
+                <div><dt className="text-muted">Last check-in</dt><dd className="m-0 mt-0.5 text-soft">{ago(server.last_seen_at)}</dd></div>
+                <div><dt className="text-muted">System helper</dt><dd className="m-0 mt-1"><span className={`chip ${server.system?.helper_installed ? 'chip-ok' : ''}`}>{server.system?.helper_installed ? 'installed' : 'not installed'}</span></dd></div>
+              </dl>
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <label className="flex items-center gap-2.5 text-xs text-muted">Check every
+                  <select className="select h-10" aria-label={`Check interval of ${server.hostname}`} value={server.check_interval_seconds} onChange={(event) => save(server, { check_interval_seconds: Number(event.target.value) })}>
+                    {!INTERVALS.some(([value]) => value === server.check_interval_seconds) && <option value={server.check_interval_seconds}>{intervalLabel(server.check_interval_seconds)}</option>}
+                    {INTERVALS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                  </select>
+                </label>
+                <button type="button" className="btn btn-ghost h-10 text-signal" onClick={() => remove(server)}>Remove</button>
+              </div>
+            </li>
+          )
+        })}
+        {!servers.length && <li className="px-4 py-6 text-center text-xs text-muted">No servers yet. Connect one below.</li>}
+      </ul>
+      <div className="custom-scroll hidden overflow-x-auto md:block"><table className="w-full min-w-[820px] border-collapse text-left text-[13px]">
         <thead><tr className="grid-head h-10"><th className="pl-[18px] font-medium">Server</th><th className="font-medium">Address</th><th className="font-medium">Collector</th><th className="font-medium">Check every</th><th className="font-medium">Last check-in</th><th className="font-medium">System helper</th><th className="pr-[18px]" /></tr></thead>
         <tbody>
           {servers.map((server) => {

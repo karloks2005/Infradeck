@@ -16,7 +16,7 @@ import { Timeline } from './Timeline.jsx'
 import { RANGES, RANGE_BY_ID, deltaPoints, eventMarks, findGaps, findings, formatMoment, summarize, timelineCsv } from './logic.js'
 
 const DEFAULT_RANGE = '7d'
-const RANGE_KEY = 'homelab.statisticsRange'
+const RANGE_KEY = 'infradeck.statisticsRange'
 const COMPARE_KEY = 'infradeck.statistics.compare'
 // Only short ranges change from one minute to the next.
 const LIVE = new Set(['1h', '6h', '24h'])

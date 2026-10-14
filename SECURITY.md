@@ -342,7 +342,7 @@ The collector's network checks are passive or opt-in, and add no privileges:
   looked up, by their full ID.
 - **The internet check is off by default.** When enabled it only opens a TCP connection and looks the
   name up, sending nothing. Its targets come from the collector's own environment
-  (`HOMELAB_CONNECTIVITY_TARGETS`), never from the dashboard, so a compromised dashboard can't point
+  (`INFRADECK_CONNECTIVITY_TARGETS`), never from the dashboard, so a compromised dashboard can't point
   probes at anything. Targets are limited to five hostnames or IPv4 addresses, and a probe cannot delay
   a check-in beyond a fixed deadline.
 - **Unreadable never means closed.** If any network table can't be read, or is too large to read

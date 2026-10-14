@@ -1,5 +1,5 @@
 # Collector-only stack that builds the images locally, an alternative to the signed images the compose
-# command from the dashboard (Connect a server) installs. Set HOMELAB_API_URL (e.g. in a .env next to
+# command from the dashboard (Connect a server) installs. Set INFRADECK_API_URL (e.g. in a .env next to
 # this file) and run:
 #   docker compose -f collector-compose.yml up -d --build
 # The server then appears on the dashboard under "New servers detected"; click
@@ -10,21 +10,21 @@ services:
     build:
       context: .
       dockerfile: docker/collector.Dockerfile
-    image: ${HOMELAB_COLLECTOR_IMAGE:-homelab-collector:latest}
-    container_name: homelab-collector
+    image: ${INFRADECK_COLLECTOR_IMAGE:-infradeck-collector:latest}
+    container_name: infradeck-collector
     restart: unless-stopped
     environment:
-      HOMELAB_API_URL: ${HOMELAB_API_URL:?Set HOMELAB_API_URL to your backend address}
-      HOMELAB_ENROLL_KEY: ${HOMELAB_ENROLL_KEY:-}
-      HOMELAB_SERVER_NAME: ${HOMELAB_SERVER_NAME:-}
+      INFRADECK_API_URL: ${INFRADECK_API_URL:?Set INFRADECK_API_URL to your backend address}
+      INFRADECK_ENROLL_KEY: ${INFRADECK_ENROLL_KEY:-}
+      INFRADECK_SERVER_NAME: ${INFRADECK_SERVER_NAME:-}
       # Optional internet check, off when empty: comma-separated host:port targets this collector tries to reach.
-      HOMELAB_CONNECTIVITY_TARGETS: ${HOMELAB_CONNECTIVITY_TARGETS:-}
+      INFRADECK_CONNECTIVITY_TARGETS: ${INFRADECK_CONNECTIVITY_TARGETS:-}
       # Docker data comes through the read-only proxy; the collector has no Docker socket.
-      HOMELAB_DOCKER_HOST: /run/docker-proxy/docker.sock
+      INFRADECK_DOCKER_HOST: /run/docker-proxy/docker.sock
     volumes:
       - /proc:/host/proc:ro
       - /:/hostfs:ro
-      - collector_state:/var/lib/homelab-collector
+      - collector_state:/var/lib/infradeck-collector
       # Summary from the optional system helper (read-only; empty unless that profile runs).
       - system_events:/helper:ro
       - docker_proxy_socket:/run/docker-proxy:ro
@@ -36,14 +36,14 @@ services:
       - no-new-privileges:true
 
   # The only container that mounts the Docker socket (a mount flag can't make it read-only).
-  # It answers a handful of read requests and nothing else. It has no network at all: the collector
+  # It answers six kinds of read request and nothing else. It has no network at all: the collector
   # reaches it through a Unix socket in a volume only the two of them share. See SECURITY.md.
   docker-proxy:
     build:
       context: .
       dockerfile: docker/docker-proxy.Dockerfile
-    image: homelab-docker-proxy:latest
-    container_name: homelab-docker-proxy
+    image: infradeck-docker-proxy:latest
+    container_name: infradeck-docker-proxy
     restart: unless-stopped
     user: "0:0"
     cap_drop: [ALL]
@@ -64,8 +64,8 @@ services:
     build:
       context: .
       dockerfile: docker/system-helper.Dockerfile
-    image: homelab-system-helper:latest
-    container_name: homelab-system-helper
+    image: infradeck-system-helper:latest
+    container_name: infradeck-system-helper
     restart: unless-stopped
     user: "0:0"
     cap_drop: [ALL]
@@ -89,8 +89,8 @@ services:
     build:
       context: .
       dockerfile: docker/system-helper.Dockerfile
-    image: homelab-system-helper:latest
-    container_name: homelab-port-owners
+    image: infradeck-system-helper:latest
+    container_name: infradeck-port-owners
     restart: unless-stopped
     user: "0:0"
     cap_drop: [ALL]
@@ -101,7 +101,7 @@ services:
       - no-new-privileges:true
       - apparmor=unconfined
     environment:
-      HOMELAB_HELPER_MODE: port-owners
+      INFRADECK_HELPER_MODE: port-owners
     volumes:
       - /proc:/host/proc:ro
       - system_events:/out

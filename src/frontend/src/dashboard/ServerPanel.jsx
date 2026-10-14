@@ -43,7 +43,7 @@ function HealthChecks({ server }) {
           </li>
         ))}
       </ul>
-      {help && <p className="mb-0 mt-2 text-[11px] leading-[18px] text-muted">The internet check is off until this machine's collector is given targets: set <span className="mono text-soft">HOMELAB_CONNECTIVITY_TARGETS</span> (for example <span className="mono text-soft">1.1.1.1:443,dns.google:443</span>) in its environment and restart it.</p>}
+      {help && <p className="mb-0 mt-2 text-[11px] leading-[18px] text-muted">The internet check is off until this machine's collector is given targets: set <span className="mono text-soft">INFRADECK_CONNECTIVITY_TARGETS</span> (for example <span className="mono text-soft">1.1.1.1:443,dns.google:443</span>) in its environment and restart it.</p>}
     </div>
   )
 }

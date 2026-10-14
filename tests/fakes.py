@@ -39,6 +39,20 @@ class FakeRedis:
         self.ttls[key] = seconds
         return True
 
+    def exists(self, *keys):
+        return sum(int(key in self.store or key in self.hashes) for key in keys)
+
+    def rename(self, key, target):
+        if key in self.store:
+            self.store[target] = self.store.pop(key)
+        elif key in self.hashes:
+            self.hashes[target] = self.hashes.pop(key)
+        else:
+            raise KeyError(key)
+        if key in self.ttls:
+            self.ttls[target] = self.ttls.pop(key)
+        return True
+
     def ttl(self, key):
         return self.ttls.get(key, -1)
 
