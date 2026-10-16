@@ -1979,6 +1979,40 @@ def get_check(check_id: PathId, range: str = Query(default="24h"), session_id: A
     return availability.detail(db, _check_or_404(db, check_id), range)
 
 
+@app.post("/availability/test")
+def test_check(payload: dict, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    """Run a check once from its servers before saving it. Only servers whose collector can run checks are asked."""
+    user = _require_admin(session_id, db)
+    servers = {server.id: server for server in db.query(Server)}
+    try:
+        fields = availability.validate(payload, set(servers))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    able = [server_id for server_id in json.loads(fields["server_ids"]) if availability.can_run_checks(servers[server_id])]
+    if not able:
+        raise HTTPException(status_code=400, detail="None of the chosen servers can run checks yet: their collector is older than 0.10.0.")
+    try:
+        # The expiry is set when the counter is created, so a failure between two calls can't leave one that never ends.
+        redis_client.set(f"infradeck:checktest:user:{user['id']}", 0, ex=60, nx=True)
+        if redis_client.incr(f"infradeck:checktest:user:{user['id']}") > 20:
+            raise HTTPException(status_code=429, detail="At most 20 tests a minute. Try again shortly.")
+        test_id = availability.start_test(redis_client, fields, able)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Testing needs Redis, which isn't answering.") from exc
+    return availability.test_status(redis_client, test_id, {server_id: servers[server_id].hostname for server_id in servers})
+
+
+@app.get("/availability/test/{test_id}")
+def get_check_test(test_id: PathId, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    _require_admin(session_id, db)
+    status = availability.test_status(redis_client, test_id, dict(db.query(Server.id, Server.hostname).all()))
+    if status is None:
+        raise HTTPException(status_code=404, detail="This test is over. Run it again.")
+    return status
+
+
 @app.post("/availability/checks")
 def create_check(payload: dict, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     _require_admin(session_id, db)
@@ -2537,6 +2571,7 @@ def ingest_metrics(payload: MetricsIngestRequest, authorization: Annotated[str |
 class CheckResultsRequest(BaseModel):
     server_id: int = Field(ge=1, le=2**31 - 1)
     results: list = Field(default=[], max_length=availability.MAX_RESULTS_PER_REPORT)
+    tests: list = Field(default=[], max_length=availability.MAX_TESTS_QUEUED * 2)
 
 
 def _enforce_report_spacing(server: Server) -> None:
@@ -2565,7 +2600,12 @@ def report_check_results(payload: CheckResultsRequest, authorization: Annotated[
         check.last_result_at = now
         availability.evaluate(db, check, now, alerting)
     db.commit()
-    return {"checks": availability.for_collector(db, server), "report_every": 5}
+    try:   # tests from the form's Test button go through Redis; without it there are none, the checks still work
+        availability.store_tests(redis_client, server.id, payload.tests)
+        tests = availability.tests_for(redis_client, server.id)
+    except Exception:
+        tests = []
+    return {"checks": availability.for_collector(db, server), "tests": tests, "report_every": 5, "idle_every": availability.IDLE_EVERY}
 
 
 @app.get("/dashboard/summary")

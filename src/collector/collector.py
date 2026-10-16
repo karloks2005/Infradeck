@@ -1349,10 +1349,10 @@ def run_check(check: dict[str, Any]) -> dict[str, Any]:
     return {"check_id": check["id"], "time": datetime.now(timezone.utc).isoformat(), **{key: value for key, value in outcome.items() if value is not None or key == "ok"}}
 
 
-def send_check_results(api_url: str, server_id: int, token: str, results: list[dict[str, Any]]) -> dict[str, Any]:
+def send_check_results(api_url: str, server_id: int, token: str, results: list[dict[str, Any]], tests: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     request = urllib.request.Request(
         f"{api_url.rstrip('/')}/monitoring/metrics/checks",
-        data=json.dumps({"server_id": server_id, "results": results}).encode(),
+        data=json.dumps({"server_id": server_id, "results": results, "tests": tests or []}).encode(),
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
         method="POST",
     )
@@ -1360,10 +1360,14 @@ def send_check_results(api_url: str, server_id: int, token: str, results: list[d
         return json.loads(response.read(MAX_BODY_BYTES).decode())
 
 
+MAX_TESTS = 5
+
+
 class CheckRunner(threading.Thread):
     """Runs the checks the dashboard gave this collector, each on its interval (the retry interval after a
-    failure), and reports the results every few seconds; with nothing to report it asks for its checks once a
-    minute. Results that couldn't be sent wait, up to the newest 500."""
+    failure), and reports the results every few seconds; with nothing to report it asks for its checks every
+    10 s (as the dashboard says), so a test from the New check form is picked up quickly. A test runs once, at
+    once, and its result goes back with the next report. Results that couldn't be sent wait, up to the newest 500."""
 
     def __init__(self, api_url: str, credentials: tuple[int, str]) -> None:
         super().__init__(name="checks", daemon=True)
@@ -1376,6 +1380,18 @@ class CheckRunner(threading.Thread):
         self.lock = threading.Lock()
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=CHECK_WORKERS, thread_name_prefix="check")
         self.report_every = 5
+        self.idle_every = IDLE_REPORT_SECONDS
+        self.test_results: collections.deque = collections.deque(maxlen=MAX_TESTS * 2)
+
+    def run_tests(self, raw: Any) -> None:
+        """Run each test once, right away; its result is reported apart from the checks' results."""
+        for test in (validate_check(item) for item in (raw if isinstance(raw, list) else [])[:MAX_TESTS]):
+            if test:
+                self.pool.submit(run_check, test).add_done_callback(lambda future: self._tested(future))
+
+    def _tested(self, future: concurrent.futures.Future) -> None:
+        with self.lock:
+            self.test_results.append(future.result())
 
     def set_checks(self, raw: Any) -> None:
         valid = [check for check in (validate_check(item) for item in (raw if isinstance(raw, list) else [])[:MAX_CHECKS]) if check]
@@ -1407,24 +1423,32 @@ class CheckRunner(threading.Thread):
 
     def report(self) -> bool:
         with self.lock:
-            batch = list(self.pending)
+            batch, tested = list(self.pending), list(self.test_results)
             self.pending.clear()
+            self.test_results.clear()
         server_id, token = self.credentials
-        try:
-            response = send_check_results(self.api_url, server_id, token, batch)
-        except urllib.error.HTTPError as exc:
+
+        def put_back() -> None:
             with self.lock:
                 self.pending.extendleft(reversed(batch))
+                self.test_results.extendleft(reversed(tested))
+
+        try:
+            response = send_check_results(self.api_url, server_id, token, batch, tested)
+        except urllib.error.HTTPError as exc:
+            put_back()
             if exc.code == 404:
-                self.report_every = 300   # a dashboard without availability checks
+                self.report_every = self.idle_every = 300   # a dashboard without availability checks
             return False
         except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException):
-            with self.lock:
-                self.pending.extendleft(reversed(batch))
+            put_back()
             return False
-        self.set_checks(response.get("checks") if isinstance(response, dict) else None)
-        every = _whole(response.get("report_every"), 2, 300) if isinstance(response, dict) else None
-        self.report_every = every or 5
+        if not isinstance(response, dict):
+            response = {}
+        self.set_checks(response.get("checks"))
+        self.run_tests(response.get("tests"))
+        self.report_every = _whole(response.get("report_every"), 2, 300) or 5
+        self.idle_every = _whole(response.get("idle_every"), 5, 300) or IDLE_REPORT_SECONDS
         if batch:
             print(f"Reported {len(batch)} check results", flush=True)
         return True
@@ -1434,7 +1458,8 @@ class CheckRunner(threading.Thread):
         while True:
             self.run_due()
             since = time.monotonic() - last_report
-            if since >= IDLE_REPORT_SECONDS or (self.pending and since >= self.report_every):
+            # Test results go back at once (the dashboard allows a report every 2 s); check results every few seconds.
+            if since >= self.idle_every or (self.test_results and since >= 2) or (self.pending and since >= self.report_every):
                 self.report()
                 last_report = time.monotonic()
             time.sleep(1)

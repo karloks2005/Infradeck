@@ -141,6 +141,76 @@ def for_collector(db, server: Server) -> list[dict]:
     return result[:MAX_CHECKS_PER_SERVER]
 
 
+
+# ---------- testing a check before it is saved ----------
+# The form's Test button: the check goes once to the collectors of the chosen servers, through Redis, with the
+# answer to their next report (they ask every 10 s when idle), and their results come back the same way. Nothing
+# is stored in the database; a test is forgotten after two minutes.
+
+TEST_TTL = 120
+MAX_TESTS_QUEUED = 5
+IDLE_EVERY = 10
+
+
+def _spec(fields: dict, check_id: int) -> dict:
+    options = {key: value for key, value in json.loads(fields["options"]).items() if key != "upside_down"}
+    return {"id": check_id, "type": fields["type"], "target": fields["target"], "interval": fields["interval_seconds"], "retry_interval": fields["retry_interval_seconds"],
+            "timeout": fields["timeout_seconds"], **options}
+
+
+def start_test(redis, fields: dict, servers: list[int]) -> int:
+    """Queue one run of a check (validated ``fields``) for each server's collector. Returns the test's id."""
+    test_id = int(redis.incr("infradeck:checktest:seq"))
+    spec = json.dumps(_spec(fields, test_id))
+    upside_down = json.loads(fields["options"]).get("upside_down") is True
+    redis.set(f"infradeck:checktest:{test_id}", json.dumps({"servers": servers, "upside_down": upside_down}), ex=TEST_TTL)
+    for server_id in servers:
+        queue = f"infradeck:checktest:queue:{server_id}"
+        redis.rpush(queue, spec)
+        redis.ltrim(queue, -MAX_TESTS_QUEUED, -1)
+        redis.expire(queue, 60)
+    return test_id
+
+
+def tests_for(redis, server_id: int) -> list[dict]:
+    """The tests waiting for this server's collector; handing them over takes them off the queue."""
+    queue = f"infradeck:checktest:queue:{server_id}"
+    items = redis.lrange(queue, 0, -1)
+    if items:
+        redis.delete(queue)
+    return [json.loads(item) for item in items]
+
+
+def store_tests(redis, server_id: int, results: list) -> None:
+    """Keep this server's results for tests it was given. Untrusted like every result: anything else is dropped."""
+    for item in results[:MAX_TESTS_QUEUED * 2]:
+        if not isinstance(item, dict) or not isinstance(item.get("check_id"), int) or isinstance(item.get("check_id"), bool) or not isinstance(item.get("ok"), bool):
+            continue
+        raw = redis.get(f"infradeck:checktest:{item['check_id']}")
+        meta = json.loads(raw) if raw else None
+        if not meta or server_id not in meta["servers"]:
+            continue
+        number = lambda key, low, high: item.get(key) if isinstance(item.get(key), int) and not isinstance(item.get(key), bool) and low <= item[key] <= high else None  # noqa: E731
+        detail = item.get("detail")
+        detail = "".join(char for char in detail if char.isprintable())[:200] if isinstance(detail, str) else None
+        ok = item["ok"] != meta["upside_down"]
+        key = f"infradeck:checktest:{item['check_id']}:results"
+        redis.hset(key, str(server_id), json.dumps({"ok": ok, "response_ms": number("response_ms", 0, 600_000), "code": number("code", 100, 599),
+                                                    "detail": detail or None, "cert_days": number("cert_days", -10_000, 10_000)}))
+        redis.expire(key, TEST_TTL)
+
+
+def test_status(redis, test_id: int, names: dict[int, str]) -> dict | None:
+    """Where a test is: each server's result, or waiting. None when the test is unknown or forgotten."""
+    raw = redis.get(f"infradeck:checktest:{test_id}")
+    if not raw:
+        return None
+    meta = json.loads(raw)
+    results = {int(server): json.loads(value) for server, value in (redis.hgetall(f"infradeck:checktest:{test_id}:results") or {}).items()}
+    servers = [{"id": server, "hostname": names.get(server, f"server {server}"), **({"state": "done", **results[server]} if server in results else {"state": "waiting"})}
+               for server in meta["servers"]]
+    return {"id": test_id, "servers": servers, "done": all(server["state"] == "done" for server in servers)}
+
 # ---------- results ----------
 
 def store(db, server: Server, results: list, now: datetime | None = None) -> set[int]:

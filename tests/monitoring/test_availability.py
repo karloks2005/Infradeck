@@ -397,3 +397,60 @@ def test_the_detail_lists_when_a_check_went_down_and_came_back(app):
     assert [event["kind"] for event in detail["events"]] == ["up", "down"]
     assert detail["events"][1]["text"].startswith("Down · No answer from alpha")
     assert detail["last_down"]["ongoing"] is False
+
+
+
+# --- testing a check before saving it -----------------------------------------------------------------
+
+def test_a_test_goes_to_the_collectors_and_their_results_come_back(app):
+    with app.Session() as db:
+        db.get(Server, 2).system_info = json.dumps({"collector_version": "0.10.0"})
+        db.commit()
+    started = app.post("/availability/test", json={**NEW_CHECK, "upside_down": False}).json()
+    assert started["done"] is False and [server["state"] for server in started["servers"]] == ["waiting", "waiting"]
+
+    handed = report(app, 1, []).json()["tests"]
+    assert [test["id"] for test in handed] == [started["id"]] and handed[0]["target"] == "https://git.example.com/"
+    assert report(app, 1, []).json()["tests"] == []            # handed over once
+    assert report(app, 1, []).json()["idle_every"] == 10
+
+    app.post("/monitoring/metrics/checks", json={"server_id": 1, "results": [], "tests": [{"check_id": started["id"], "ok": True, "response_ms": 142, "code": 200}]},
+             headers={"Authorization": f"Bearer {TOKENS[1]}"})
+    app.post("/monitoring/metrics/checks", json={"server_id": 2, "results": [], "tests": [{"check_id": started["id"], "ok": False, "detail": "Connection refused"}]},
+             headers={"Authorization": f"Bearer {TOKENS[2]}"})
+    status = app.get(f"/availability/test/{started['id']}").json()
+
+    assert status["done"] is True
+    assert [(server["hostname"], server["ok"], server.get("code"), server.get("detail")) for server in status["servers"]] == [("alpha", True, 200, None), ("bravo", False, None, "Connection refused")]
+    with app.Session() as db:
+        assert db.query(Check).count() == 0 and db.query(CheckResult).count() == 0   # a test saves nothing
+
+
+def test_a_collector_cant_answer_a_test_it_wasnt_given(app):
+    started = app.post("/availability/test", json={**NEW_CHECK, "server_ids": [1]}).json()
+
+    app.post("/monitoring/metrics/checks", json={"server_id": 2, "results": [], "tests": [{"check_id": started["id"], "ok": True}]}, headers={"Authorization": f"Bearer {TOKENS[2]}"})
+
+    assert app.get(f"/availability/test/{started['id']}").json()["servers"][0]["state"] == "waiting"
+
+
+def test_only_servers_that_can_run_checks_are_asked(app):
+    assert app.post("/availability/test", json={**NEW_CHECK, "server_ids": [2]}).status_code == 400   # bravo's collector is 0.9.2
+    started = app.post("/availability/test", json={**NEW_CHECK, "server_ids": [1, 2]}).json()
+    assert [server["hostname"] for server in started["servers"]] == ["alpha"]
+    assert report(app, 2, []).json()["tests"] == []
+
+
+def test_a_test_is_checked_like_a_check_and_only_admins_run_it(app):
+    assert app.post("/availability/test", json={**NEW_CHECK, "target": "file:///etc/passwd"}).status_code == 400
+    app.user.update(id=2, role="member")
+    assert app.post("/availability/test", json=NEW_CHECK).status_code == 403
+    assert app.get("/availability/test/1").status_code == 403
+
+
+def test_an_upside_down_test_passes_when_the_service_is_unreachable(app):
+    started = app.post("/availability/test", json={**NEW_CHECK, "server_ids": [1], "upside_down": True}).json()
+    app.post("/monitoring/metrics/checks", json={"server_id": 1, "results": [], "tests": [{"check_id": started["id"], "ok": False, "detail": "Connection refused"}]},
+             headers={"Authorization": f"Bearer {TOKENS[1]}"})
+
+    assert app.get(f"/availability/test/{started['id']}").json()["servers"][0]["ok"] is True

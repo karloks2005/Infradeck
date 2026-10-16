@@ -179,7 +179,7 @@ Prvi dio milestonea: provjere HTTP(s), Keyword i TCP port, pokreću ih collector
 | Down now: „alert sent to ntfy" i sažetak agenta | Razlog pada, s kojih servera i koliko puta zaredom; za novu provjeru „no alert yet" | Ne bilježi se slanje po kanalu; agent za provjere još ne postoji | #137, #145 |
 | Down now: „Pause alerts" | „Pause" pauzira cijelu provjeru | Odvojeno pauziranje obavijesti nije napravljeno | #137 |
 | New check: obavijesti po kanalu, „While down, remind every", „Alert on certificate expiry" | Pad otvara incident koji ide na iste kanale kao svi incidenti; bira se samo Critical/Warning | Obavijesti idu kroz postojeće incidente | #137 |
-| New check: „Test passed · 200 OK" i „Test again" prije spremanja | Nema testa; nova provjera prvih 10 minuta ne šalje obavijesti | Prvi dio | #141 |
+| New check: „Test passed · 200 OK · 142 ms from both servers" odmah | Test traje 5–15 s: collectori pitaju za posao svakih 10 s kad nemaju što javiti; nova provjera i dalje prvih 10 minuta ne šalje obavijesti | Collector ne prima veze izvana, nego sam pita dashboard | #141 |
 | New check: timeout fiksno 48 s | Timeout se sam smanji na 80 % intervala kad je interval kraći; greške se pokazuju uz polje i u podnožju | Zadani timeout inače blokira interval ispod 49 s | #141 |
 | New check: tagovi kao čipovi | Tekstno polje, tagovi odvojeni zarezom | Jednostavnije | #141 |
 | Mobitel: Availability kao zaseban tab | Availability je u More (s brojem palih provjera na tabu More); popis provjera je kompaktan, s trakom zadnjih 30 provjera | Tab bar ima mjesta za četiri stavke | #146 |

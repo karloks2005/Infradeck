@@ -111,7 +111,7 @@ def test_an_open_tcp_port_is_up(site):
 def test_the_runner_runs_due_checks_and_reports_them(monkeypatch, site):
     sent = []
 
-    def fake_send(api_url, server_id, token, results):
+    def fake_send(api_url, server_id, token, results, tests=None):
         sent.append(list(results))
         return {"checks": [{**GOOD, "target": f"{site}/ok"}], "report_every": 5}
 
@@ -151,3 +151,34 @@ def test_checks_from_the_dashboard_are_validated_and_capped():
     assert len(runner.checks) == collector.MAX_CHECKS and 999 not in runner.checks
     runner.set_checks(None)
     assert runner.checks == {} and runner.next_run == {}
+
+
+def test_a_test_from_the_form_runs_once_at_once_and_goes_back_on_its_own(monkeypatch, site):
+    sent = []
+    answers = iter([{"checks": [], "tests": [{**GOOD, "id": 41, "target": f"{site}/broken"}], "idle_every": 10}, {"checks": [], "tests": [], "idle_every": 10}])
+
+    def fake_send(api_url, server_id, token, results, tests=None):
+        sent.append((list(results), list(tests or [])))
+        return next(answers)
+
+    monkeypatch.setattr(collector, "send_check_results", fake_send)
+    runner = collector.CheckRunner("http://dashboard/api", (3, "token"))
+
+    runner.report()
+    deadline = time.monotonic() + 5
+    while not runner.test_results and time.monotonic() < deadline:
+        time.sleep(0.05)
+    runner.report()
+
+    assert runner.idle_every == 10 and runner.checks == {}     # a test is not a check: it isn't kept or repeated
+    assert sent[1][0] == [] and [(item["check_id"], item["ok"], item["detail"]) for item in sent[1][1]] == [(41, False, "HTTP 503")]
+
+
+def test_a_test_that_isnt_well_formed_is_not_run(monkeypatch):
+    runner = collector.CheckRunner("http://dashboard/api", (3, "token"))
+    submitted = []
+    monkeypatch.setattr(runner.pool, "submit", lambda *args: submitted.append(args) or type("Future", (), {"add_done_callback": lambda self, done: None})())
+
+    runner.run_tests([{**GOOD, "target": "file:///etc/shadow"}, "junk", None] + [{**GOOD, "id": index} for index in range(1, 10)])
+
+    assert len(submitted) == 2   # only the first five are looked at, and three of those aren't checks

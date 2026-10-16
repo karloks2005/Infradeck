@@ -1,6 +1,6 @@
 // The New check / Edit form in the drawer: the type, what to check, from which servers, the timing in numbers
 // with one sentence saying what they mean together, what counts as up, and how bad it is when it's down.
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { apiRequest } from '../api.js'
 import { Check, Field, Switch, useAction } from '../ui.jsx'
@@ -46,6 +46,22 @@ function problems(form, web) {
 
 const duration = (seconds) => (seconds < 90 ? `${Math.round(seconds)} seconds` : seconds < 5400 ? `${Math.round(seconds / 60)} ${Math.round(seconds / 60) === 1 ? 'minute' : 'minutes'}` : `${Math.round(seconds / 3600)} hours`)
 
+// How long the form waits for a test: the collectors ask every 10 s when idle, then the check may take its timeout.
+const TEST_WAIT_MS = 75_000
+
+// "Test passed · 200 OK · 142 ms from both servers", or what went wrong and where.
+function describeTest(test) {
+  const done = test.servers.filter((server) => server.state === 'done')
+  const waiting = test.servers.filter((server) => server.state === 'waiting')
+  const names = (servers) => (servers.length === test.servers.length && servers.length > 1 ? (servers.length === 2 ? 'both servers' : 'all servers') : servers.map((server) => server.hostname).join(', '))
+  const failed = done.filter((server) => !server.ok)
+  if (failed.length) return { tone: 'warn', text: `Test failed · ${failed.map((server) => `${server.detail || (server.code ? `HTTP ${server.code}` : 'no answer')} from ${server.hostname}`).join(', ')}` }
+  if (waiting.length) return { tone: 'muted', text: test.expired ? `No answer from ${names(waiting)}: is its collector running?` : `Testing from ${names(test.servers)}…` }
+  const times = done.map((server) => server.response_ms).filter((value) => value != null)
+  const code = done.find((server) => server.code)?.code
+  return { tone: 'ok', text: `Test passed${code ? ` · ${code} OK` : ''}${times.length ? ` · ${Math.round(times.reduce((a, b) => a + b, 0) / times.length)} ms` : ''} from ${names(done)}` }
+}
+
 // "Marked down after 3 failed checks in a row, so about 1 minute after it breaks."
 function TimingSentence({ form }) {
   const interval = Number(form.interval_seconds), retries = Number(form.retries), retry = Number(form.retry_interval_seconds)
@@ -77,7 +93,10 @@ export function CheckForm({ check, servers, onSaved, onCancel }) {
   const [form, setForm] = useState(() => initial(check, servers))
   const [state, run] = useAction()
   const [tried, setTried] = useState(false)
-  const set = (changes) => setForm((current) => {
+  const [test, setTest] = useState(null)   // null, { running: true }, a test from the backend, or { error }
+  // A finished test says nothing about a changed form, so it goes once anything changes.
+  const set = (changes) => { setTest((current) => (current && (current.done || current.expired || current.error) ? null : current)); setFormFields(changes) }
+  const setFormFields = (changes) => setForm((current) => {
     const next = { ...current, ...changes }
     // A shorter interval takes the timeout down with it, so the default 48 s doesn't block a 30 s interval.
     if ('interval_seconds' in changes && /^\d+$/.test(changes.interval_seconds) && Number(next.timeout_seconds) >= Number(changes.interval_seconds)) {
@@ -91,18 +110,48 @@ export function CheckForm({ check, servers, onSaved, onCancel }) {
   const hint = (key) => shown(key) && <span className="mt-1.5 block text-[11px] leading-4 text-warn">{issues[key]}</span>
   const toggleServer = (id, on) => set({ server_ids: on ? [...form.server_ids, id] : form.server_ids.filter((item) => item !== id) })
 
-  const save = (event) => {
-    event.preventDefault()
-    setTried(true)
-    if (Object.keys(issues).length) return
+  const bodyOf = () => {
     const whole = (value) => (/^\d+$/.test(String(value).trim()) ? Number(value) : value)
-    const body = {
+    return {
       type: form.type, name: form.name.trim(), target: form.target.trim(), tags: form.tags.split(',').map((tag) => tag.trim()).filter(Boolean),
       server_ids: form.server_ids, rule: form.rule, severity: form.severity, upside_down: form.upside_down,
       interval_seconds: whole(form.interval_seconds), retries: whole(form.retries), retry_interval_seconds: whole(form.retry_interval_seconds), timeout_seconds: whole(form.timeout_seconds),
       ...(web ? { accepted_codes: form.accepted_codes.split(',').map((code) => code.trim()).filter(Boolean), follow_redirects: form.follow_redirects, ignore_tls: form.ignore_tls } : {}),
       ...(form.type === 'keyword' ? { keyword: form.keyword, case_sensitive: form.case_sensitive } : {}),
     }
+  }
+
+  // Test: the check runs once from its servers; the answer is asked for every 1.5 s until all servers replied.
+  const polling = useRef(null)
+  useEffect(() => () => clearTimeout(polling.current), [])
+  const runTest = async () => {
+    setTried(true)
+    if (Object.keys(issues).length) return
+    clearTimeout(polling.current)
+    setTest({ running: true })
+    try {
+      const started = Date.now()
+      let current = await apiRequest('/availability/test', { method: 'POST', body: JSON.stringify(bodyOf()) })
+      setTest(current)
+      const poll = async () => {
+        if (current.done) return
+        if (Date.now() - started > TEST_WAIT_MS) { setTest({ ...current, expired: true }); return }
+        try { current = await apiRequest(`/availability/test/${current.id}`, { method: 'GET' }); setTest(current) } catch (error) { setTest({ error: error.message }); return }
+        polling.current = setTimeout(poll, 1500)
+      }
+      polling.current = setTimeout(poll, 1500)
+    } catch (error) {
+      setTest({ error: error.message || 'The test could not start.' })
+    }
+  }
+  const testLine = test && (test.running ? { tone: 'muted', text: 'Starting the test…' } : test.error ? { tone: 'warn', text: test.error } : describeTest(test))
+  const testing = Boolean(test && (test.running || (test.servers && !test.done && !test.expired)))
+
+  const save = (event) => {
+    event.preventDefault()
+    setTried(true)
+    if (Object.keys(issues).length) return
+    const body = bodyOf()
     run(async () => {
       const result = await apiRequest(check ? `/availability/checks/${check.id}` : '/availability/checks', { method: check ? 'PATCH' : 'POST', body: JSON.stringify(body) })
       onSaved(result)
@@ -187,8 +236,12 @@ export function CheckForm({ check, servers, onSaved, onCancel }) {
       </Field>
 
       <div className="sticky -bottom-5 -mx-6 -mb-5 flex items-center justify-end gap-2 border-t border-line bg-bg px-6 py-3">
-        <p role="alert" className="m-0 mr-auto min-w-0 text-xs leading-4 text-warn">{state.error || (tried && Object.keys(issues).length ? `Fix ${Object.keys(issues).length === 1 ? 'the field' : `${Object.keys(issues).length} fields`} marked above.` : '')}</p>
+        {state.error || (tried && Object.keys(issues).length) || !testLine
+          ? <p role="alert" className="m-0 mr-auto min-w-0 text-xs leading-4 text-warn">{state.error || (tried && Object.keys(issues).length ? `Fix ${Object.keys(issues).length === 1 ? 'the field' : `${Object.keys(issues).length} fields`} marked above.` : '')}</p>
+          : <p role="status" className={`m-0 mr-auto flex min-w-0 items-center gap-2 text-xs leading-4 ${testLine.tone === 'ok' ? 'text-ok' : testLine.tone === 'warn' ? 'text-warn' : 'text-soft'}`}>
+              <span className={`dot shrink-0 ${testLine.tone === 'ok' ? 'dot-ok' : testLine.tone === 'warn' ? 'dot-warn' : ''}`} /><span className="min-w-0">{testLine.text}</span></p>}
         <button type="button" className="btn" onClick={onCancel}>Cancel</button>
+        <button type="button" className="btn" onClick={runTest} disabled={testing}>{testing ? 'Testing…' : test ? 'Test again' : 'Test'}</button>
         <button type="submit" className="btn btn-primary" disabled={state.busy}>{state.busy ? 'Saving…' : 'Save check'}</button>
       </div>
     </form>
