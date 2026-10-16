@@ -200,7 +200,7 @@ def test_profile_and_preferences_keep_only_what_is_valid(app):
 def outbox(monkeypatch):
     sent = []
     monkeypatch.setattr(notify, "resolve", lambda host, port: ["8.8.8.8"] if host == "ntfy.example" else ["10.0.0.5"] if host == "ntfy.lan" else ["127.0.0.1"])
-    monkeypatch.setattr(notify, "_post", lambda url, data, headers: (sent.append((url, data, headers)) or (True, "200")))
+    monkeypatch.setattr(notify, "_post", lambda url, data, headers, address: (sent.append((url, data, headers)) or (True, "200")))
     return sent
 
 

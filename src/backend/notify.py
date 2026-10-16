@@ -3,11 +3,13 @@
 The address of a channel is something a signed-in user typed, and the backend then connects to it, so it is treated
 as hostile: only http and https, no credentials in the address, no redirects, a short timeout, a small answer that
 is never shown to the user (only its status), and every address the name resolves to must be one a channel may
-reach. Loopback, link-local (which includes cloud metadata) and other special ranges are always refused; private
+reach. The connection then goes to the address that was checked, not to the name, so a DNS answer that changes
+between the check and the connection (DNS rebinding) can't lead it anywhere else. Loopback, link-local (which includes cloud metadata) and other special ranges are always refused; private
 LAN ranges are allowed only for admins, because a homelab's ntfy usually lives there.
 """
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import os
@@ -51,6 +53,12 @@ def resolve(host: str, port: int) -> list[str]:
 
 def check_url(url: str, allow_private: bool) -> tuple[str, str]:
     """The cleaned address and a short form safe to display, or ChannelError."""
+    url, display, _address = _checked(url, allow_private)
+    return url, display
+
+
+def _checked(url: str, allow_private: bool) -> tuple[str, str, str]:
+    """check_url, plus the checked IP address that a send must connect to."""
     url = (url or "").strip()
     if not url or len(url) > MAX_URL or not url.isprintable():
         raise ChannelError("Enter the channel's address.")
@@ -67,7 +75,7 @@ def check_url(url: str, allow_private: bool) -> tuple[str, str]:
     if not addresses or not all(_allowed(address, allow_private) for address in addresses):
         raise ChannelError("That address points at this machine or a private network." + ("" if allow_private else " Only an admin can add a channel on the local network."))
     tail = parts.path.rstrip("/").rsplit("/", 1)[-1]
-    return url, f"{parts.hostname}{'/…' + tail[-6:] if tail else ''}"[:120]
+    return url, f"{parts.hostname}{'/…' + tail[-6:] if tail else ''}"[:120], addresses[0]
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -75,13 +83,40 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_opener = urllib.request.build_opener(_NoRedirect)
+def _pinned(connection_class, address: str):
+    """A connection class that connects to ``address`` whatever the URL's host name resolves to now. The name is
+    still what goes in the Host header and, for https, in SNI and the certificate check."""
+    class Pinned(connection_class):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._create_connection = lambda target, *rest, **options: socket.create_connection((address, target[1]), *rest, **options)
+    return Pinned
 
 
-def _post(url: str, data: bytes, headers: dict[str, str]) -> tuple[bool, str]:
+class _PinnedHTTP(urllib.request.HTTPHandler):
+    def __init__(self, address: str):
+        super().__init__()
+        self.connection = _pinned(http.client.HTTPConnection, address)
+
+    def http_open(self, req):
+        return self.do_open(self.connection, req)
+
+
+class _PinnedHTTPS(urllib.request.HTTPSHandler):
+    def __init__(self, address: str):
+        super().__init__()
+        self.connection = _pinned(http.client.HTTPSConnection, address)
+
+    def https_open(self, req):
+        return self.do_open(self.connection, req, context=self._context)
+
+
+def _post(url: str, data: bytes, headers: dict[str, str], address: str) -> tuple[bool, str]:
+    """POST to ``url``, connecting to the already checked ``address``. No proxy: one would resolve the name itself."""
     request = urllib.request.Request(url, data=data, headers={"User-Agent": "Infradeck", **headers}, method="POST")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect, _PinnedHTTP(address), _PinnedHTTPS(address))
     try:
-        with _opener.open(request, timeout=TIMEOUT_SECONDS) as response:
+        with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
             response.read(1024)
             return True, f"{response.status}"
     except urllib.error.HTTPError as error:
@@ -118,16 +153,16 @@ def send(kind: str, target: str, title: str, body: str, severity: str = "INFO", 
     if kind == "email":
         return _send_email(target, title, body)
     try:
-        url, _display = check_url(target, allow_private)
+        url, _display, address = _checked(target, allow_private)
     except ChannelError:
         return False, "address refused"
     if kind == "ntfy":
         # Header values must be Latin-1; anything else in a title goes into the body instead.
         safe = title.encode("latin-1", "ignore").decode("latin-1")[:200]
-        return _post(url, body.encode(), {"Title": safe, "Priority": "5" if severity == "CRITICAL" else "3", "Tags": "rotating_light" if severity == "CRITICAL" else "warning" if severity == "WARNING" else "white_check_mark"})
+        return _post(url, body.encode(), {"Title": safe, "Priority": "5" if severity == "CRITICAL" else "3", "Tags": "rotating_light" if severity == "CRITICAL" else "warning" if severity == "WARNING" else "white_check_mark"}, address)
     if kind == "discord":
-        return _post(url, json.dumps({"content": f"**{title}**\n{body}"[:1900], "allowed_mentions": {"parse": []}}).encode(), {"Content-Type": "application/json"})
-    return _post(url, json.dumps({"title": title, "body": body, "severity": severity}).encode(), {"Content-Type": "application/json"})
+        return _post(url, json.dumps({"content": f"**{title}**\n{body}"[:1900], "allowed_mentions": {"parse": []}}).encode(), {"Content-Type": "application/json"}, address)
+    return _post(url, json.dumps({"title": title, "body": body, "severity": severity}).encode(), {"Content-Type": "application/json"}, address)
 
 
 def in_quiet_hours(quiet: dict | None, timezone_name: str | None, now: datetime) -> bool:
