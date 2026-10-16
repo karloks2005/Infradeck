@@ -11,7 +11,7 @@ for _name, _value in dotenv_values(BASE_DIR / ".env").items():
         os.environ.setdefault(_name, _value)
 
 # Shown in the sidebar and compared with what each collector reports.
-APP_VERSION = "0.9.2"
+APP_VERSION = "0.10.0"
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",

@@ -161,3 +161,25 @@ su anotacije dizajna i namjerno nisu ugrađeni.
 | Admin: „You'll get a push when it connects" | Nema | Nema push obavijesti | #50 |
 | Alert rules: „+" za novo pravilo | Nema | Vlastita pravila ne postoje | – |
 | Tablet: Agent skriva chat iza gumba | Na tabletu su popis, incident i chat jedan ispod drugoga | Tri stupca ostaju od 1200 px; ispod toga slažu se okomito | – |
+
+## Availability (`10-availability.pdf`, `mobile/07-availability.pdf`)
+
+Prvi dio milestonea: provjere HTTP(s), Keyword i TCP port, pokreću ih collectori od verzije 0.10.0.
+
+| Dizajn | Implementacija | Razlog | Issue |
+| --- | --- | --- | --- |
+| Gumbi „Status page" i „Maintenance" | Prikazani, ali onemogućeni | Još nisu napravljeni | #143, #144 |
+| Devet vrsta provjera | Rade HTTP(s), Keyword i TCP port; ostale su u mreži prikazane kao „later" i ne mogu se odabrati | Prvi dio | #133, #135, #136 |
+| Tab „Find on this machine" u drawer-u New check | Samo ručno dodavanje | Prvi dio | #142 |
+| Grupe po tagu redom kako ih je korisnik složio (Public prvi) | Abecedno, provjere bez taga na kraju | Nema spremljenog redoslijeda grupa | – |
+| Detalj: izdavatelj certifikata („Let's Encrypt R11") | Samo broj dana do isteka | Collector šalje samo datum isteka | #140 |
+| Detalj: graf za 30 d po serveru | 30 d je jedna linija za sve servere zajedno | Satni sažeci nisu po serveru; sirovi rezultati čuvaju se 7 dana | #140 |
+| Detalj: događaj „Paused 20 min for maintenance" | Događaji su samo padovi i oporavci (iz incidenata) | Pauze i održavanje se još ne bilježe | #143 |
+| Detalj: gumb „Clone" | Pause, Edit i Delete | Prvi dio | #140 |
+| Down now: „alert sent to ntfy" i sažetak agenta | Razlog pada, s kojih servera i koliko puta zaredom; za novu provjeru „no alert yet" | Ne bilježi se slanje po kanalu; agent za provjere još ne postoji | #137, #145 |
+| Down now: „Pause alerts" | „Pause" pauzira cijelu provjeru | Odvojeno pauziranje obavijesti nije napravljeno | #137 |
+| New check: obavijesti po kanalu, „While down, remind every", „Alert on certificate expiry" | Pad otvara incident koji ide na iste kanale kao svi incidenti; bira se samo Critical/Warning | Obavijesti idu kroz postojeće incidente | #137 |
+| New check: „Test passed · 200 OK" i „Test again" prije spremanja | Nema testa; nova provjera prvih 10 minuta ne šalje obavijesti | Prvi dio | #141 |
+| New check: timeout fiksno 48 s | Timeout se sam smanji na 80 % intervala kad je interval kraći; greške se pokazuju uz polje i u podnožju | Zadani timeout inače blokira interval ispod 49 s | #141 |
+| New check: tagovi kao čipovi | Tekstno polje, tagovi odvojeni zarezom | Jednostavnije | #141 |
+| Mobitel: Availability kao zaseban tab | Availability je u More (s brojem palih provjera na tabu More); popis provjera je kompaktan, s trakom zadnjih 30 provjera | Tab bar ima mjesta za četiri stavke | #146 |

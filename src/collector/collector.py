@@ -12,6 +12,8 @@ the socket is unavailable, host metrics continue to be sent.
 """
 from __future__ import annotations
 
+import collections
+import concurrent.futures
 import ctypes
 import ctypes.util
 import hashlib
@@ -22,11 +24,13 @@ import os
 import platform
 import re
 import socket
+import ssl
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -507,7 +511,7 @@ def collect_system() -> dict[str, Any]:
     }
 
 
-COLLECTOR_VERSION = "0.9.2"
+COLLECTOR_VERSION = "0.10.0"
 MAX_INTERFACES = 16
 MAX_TEMPERATURES = 8
 _KERNEL_IMAGE = re.compile(r"vmlinuz-(\d[\w.+~-]*)")
@@ -1177,6 +1181,265 @@ def _container_usage(socket_path: str, container_id: str) -> dict[str, Any]:
     return usage
 
 
+# ---------- availability checks ----------
+# The dashboard asks this collector to try services every so often (an HTTP(s) URL, a keyword in a page, a TCP port)
+# and reports each run. Only what the dashboard sends is run, after checking it here as well: http/https URLs and
+# host:port pairs, GET or HEAD without custom headers or body, at most 1 MiB of a response read and none of it sent
+# back. No shell is involved.
+
+CHECK_TYPES = ("http", "keyword", "tcp")
+MAX_CHECKS = 50
+MIN_CHECK_INTERVAL, MAX_CHECK_INTERVAL = 20, 86400
+MAX_CHECK_TIMEOUT = 48
+MAX_BODY_BYTES = 1024 * 1024
+MAX_REDIRECTS = 10
+MAX_PENDING_RESULTS = 500
+CHECK_WORKERS = 8
+IDLE_REPORT_SECONDS = 60
+_CHECK_HOST = re.compile(r"[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\]")
+_CHECK_CODES = re.compile(r"[1-5]\d\d(-[1-5]\d\d)?")
+
+
+def _whole(value: Any, low: int, high: int) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and low <= value <= high else None
+
+
+def validate_check(raw: Any) -> dict[str, Any] | None:
+    """One check as the dashboard sent it, reduced to known fields of the right type and range; None if unusable."""
+    if not isinstance(raw, dict) or raw.get("type") not in CHECK_TYPES or not isinstance(raw.get("target"), str):
+        return None
+    check_id = _whole(raw.get("id"), 1, 2**31 - 1)
+    interval = _whole(raw.get("interval"), MIN_CHECK_INTERVAL, MAX_CHECK_INTERVAL)
+    retry_interval = _whole(raw.get("retry_interval"), MIN_CHECK_INTERVAL, MAX_CHECK_INTERVAL)
+    timeout = _whole(raw.get("timeout"), 1, MAX_CHECK_TIMEOUT)
+    if None in (check_id, interval, retry_interval, timeout):
+        return None
+    check: dict[str, Any] = {"id": check_id, "type": raw["type"], "target": raw["target"], "interval": interval, "retry_interval": retry_interval, "timeout": timeout}
+    target = raw["target"]
+    if raw["type"] == "tcp":
+        host, _, port = target.rpartition(":")
+        if not _CHECK_HOST.fullmatch(host) or not port.isdigit() or not 1 <= int(port) <= 65535:
+            return None
+        check.update(host=host.strip("[]"), port=int(port))
+        return check
+    parts = urllib.parse.urlsplit(target)
+    if parts.scheme not in ("http", "https") or not parts.hostname or len(target) > 2048 or any(char.isspace() or not char.isprintable() for char in target):
+        return None
+    codes = raw.get("accepted_codes")
+    if not isinstance(codes, list) or not 1 <= len(codes) <= 10 or not all(isinstance(code, str) and _CHECK_CODES.fullmatch(code) for code in codes):
+        return None
+    check.update(accepted_codes=codes, follow_redirects=raw.get("follow_redirects") is True, ignore_tls=raw.get("ignore_tls") is True,
+                 method="HEAD" if raw.get("method") == "HEAD" and raw["type"] == "http" else "GET")
+    if raw["type"] == "keyword":
+        keyword = raw.get("keyword")
+        if not isinstance(keyword, str) or not 1 <= len(keyword) <= 200:
+            return None
+        check.update(keyword=keyword, case_sensitive=raw.get("case_sensitive") is True)
+    return check
+
+
+def _code_accepted(code: int, accepted: list[str]) -> bool:
+    for item in accepted:
+        low, _, high = item.partition("-")
+        if int(low) <= code <= int(high or low):
+            return True
+    return False
+
+
+class _Redirects(urllib.request.HTTPRedirectHandler):
+    """Follows at most MAX_REDIRECTS redirects, and only to http and https, or none at all."""
+    max_redirections = MAX_REDIRECTS
+
+    def __init__(self, follow: bool) -> None:
+        self.follow = follow
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        if not self.follow or urllib.parse.urlsplit(newurl).scheme not in ("http", "https"):
+            return None   # urllib then raises HTTPError with the 3xx code, which the accepted codes decide on
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _cert_days(response: Any) -> int | None:
+    """Days until the server's TLS certificate expires, when it was verified."""
+    try:
+        cert = response.fp.raw._sock.getpeercert()
+        expires = ssl.cert_time_to_seconds(cert["notAfter"])
+    except (AttributeError, KeyError, TypeError, ValueError, OSError):
+        return None
+    return int((expires - time.time()) // 86400)
+
+
+def _failure(exc: BaseException, timeout: int) -> str:
+    reason = getattr(exc, "reason", exc)
+    if isinstance(reason, (TimeoutError, socket.timeout)) or isinstance(exc, (TimeoutError, socket.timeout)):
+        return f"Timed out after {timeout} s"
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return f"TLS certificate not valid: {reason.verify_message}"[:200]
+    if isinstance(reason, ssl.SSLError):
+        return "TLS handshake failed"
+    if isinstance(reason, socket.gaierror):
+        return "Host name not found"
+    if isinstance(reason, ConnectionRefusedError):
+        return "Connection refused"
+    if isinstance(reason, ConnectionResetError):
+        return "Connection reset"
+    if isinstance(reason, OSError) and reason.strerror:
+        return reason.strerror[:200]
+    return type(reason).__name__
+
+
+def run_http(check: dict[str, Any]) -> dict[str, Any]:
+    """One run of an HTTP(s) or keyword check: {ok, response_ms, code, detail, cert_days}."""
+    context = ssl.create_default_context()
+    if check["ignore_tls"]:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context), _Redirects(check["follow_redirects"]))
+    request = urllib.request.Request(check["target"], method=check["method"], headers={"User-Agent": f"Infradeck-Check/{COLLECTOR_VERSION}", "Accept": "*/*"})
+    started = time.monotonic()
+    result: dict[str, Any] = {"ok": False, "response_ms": None, "code": None, "detail": None, "cert_days": None}
+    body = b""
+    try:
+        with opener.open(request, timeout=check["timeout"]) as response:
+            result["code"] = response.status
+            if not check["ignore_tls"]:
+                result["cert_days"] = _cert_days(response)
+            if check["type"] == "keyword":
+                deadline = started + check["timeout"]
+                while len(body) < MAX_BODY_BYTES and time.monotonic() < deadline:
+                    chunk = response.read(min(65536, MAX_BODY_BYTES - len(body)))
+                    if not chunk:
+                        break
+                    body += chunk
+    except urllib.error.HTTPError as exc:
+        result["code"] = exc.code
+        exc.close()
+    except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError) as exc:
+        result["detail"] = _failure(exc, check["timeout"])
+        return result
+    result["response_ms"] = int((time.monotonic() - started) * 1000)
+    if not _code_accepted(result["code"], check["accepted_codes"]):
+        result["detail"] = f"HTTP {result['code']}"
+        return result
+    if check["type"] == "keyword":
+        text = body.decode("utf-8", errors="replace")
+        found = check["keyword"] in text if check["case_sensitive"] else check["keyword"].casefold() in text.casefold()
+        if not found:
+            result["detail"] = "Keyword not found"
+            return result
+    result["ok"] = True
+    return result
+
+
+def run_tcp(check: dict[str, Any]) -> dict[str, Any]:
+    started = time.monotonic()
+    try:
+        with socket.create_connection((check["host"], check["port"]), timeout=check["timeout"]):
+            pass
+    except OSError as exc:
+        return {"ok": False, "response_ms": None, "code": None, "detail": _failure(exc, check["timeout"]), "cert_days": None}
+    return {"ok": True, "response_ms": int((time.monotonic() - started) * 1000), "code": None, "detail": None, "cert_days": None}
+
+
+def run_check(check: dict[str, Any]) -> dict[str, Any]:
+    try:
+        outcome = run_tcp(check) if check["type"] == "tcp" else run_http(check)
+    except Exception as exc:  # one broken check must never stop the others
+        outcome = {"ok": False, "response_ms": None, "code": None, "detail": f"Check failed: {type(exc).__name__}", "cert_days": None}
+    return {"check_id": check["id"], "time": datetime.now(timezone.utc).isoformat(), **{key: value for key, value in outcome.items() if value is not None or key == "ok"}}
+
+
+def send_check_results(api_url: str, server_id: int, token: str, results: list[dict[str, Any]]) -> dict[str, Any]:
+    request = urllib.request.Request(
+        f"{api_url.rstrip('/')}/monitoring/metrics/checks",
+        data=json.dumps({"server_id": server_id, "results": results}).encode(),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        return json.loads(response.read(MAX_BODY_BYTES).decode())
+
+
+class CheckRunner(threading.Thread):
+    """Runs the checks the dashboard gave this collector, each on its interval (the retry interval after a
+    failure), and reports the results every few seconds; with nothing to report it asks for its checks once a
+    minute. Results that couldn't be sent wait, up to the newest 500."""
+
+    def __init__(self, api_url: str, credentials: tuple[int, str]) -> None:
+        super().__init__(name="checks", daemon=True)
+        self.api_url = api_url
+        self.credentials = credentials   # the main loop replaces this after joining again
+        self.checks: dict[int, dict[str, Any]] = {}
+        self.next_run: dict[int, float] = {}
+        self.running: set[int] = set()
+        self.pending: collections.deque = collections.deque(maxlen=MAX_PENDING_RESULTS)
+        self.lock = threading.Lock()
+        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=CHECK_WORKERS, thread_name_prefix="check")
+        self.report_every = 5
+
+    def set_checks(self, raw: Any) -> None:
+        valid = [check for check in (validate_check(item) for item in (raw if isinstance(raw, list) else [])[:MAX_CHECKS]) if check]
+        with self.lock:
+            new = {check["id"]: check for check in valid}
+            for check_id, check in new.items():
+                if self.checks.get(check_id) != check:
+                    self.next_run[check_id] = time.monotonic()   # new or changed: run it now
+            self.checks = new
+            for check_id in list(self.next_run):
+                if check_id not in new:
+                    del self.next_run[check_id]
+
+    def _done(self, check: dict[str, Any], future: concurrent.futures.Future) -> None:
+        result = future.result()
+        with self.lock:
+            self.running.discard(check["id"])
+            self.pending.append(result)
+            if check["id"] in self.checks:
+                self.next_run[check["id"]] = time.monotonic() + (check["interval"] if result["ok"] else check["retry_interval"])
+
+    def run_due(self) -> None:
+        now = time.monotonic()
+        with self.lock:
+            due = [check for check_id, check in self.checks.items() if self.next_run.get(check_id, 0) <= now and check_id not in self.running]
+            self.running.update(check["id"] for check in due)
+        for check in due:
+            self.pool.submit(run_check, check).add_done_callback(lambda future, check=check: self._done(check, future))
+
+    def report(self) -> bool:
+        with self.lock:
+            batch = list(self.pending)
+            self.pending.clear()
+        server_id, token = self.credentials
+        try:
+            response = send_check_results(self.api_url, server_id, token, batch)
+        except urllib.error.HTTPError as exc:
+            with self.lock:
+                self.pending.extendleft(reversed(batch))
+            if exc.code == 404:
+                self.report_every = 300   # a dashboard without availability checks
+            return False
+        except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException):
+            with self.lock:
+                self.pending.extendleft(reversed(batch))
+            return False
+        self.set_checks(response.get("checks") if isinstance(response, dict) else None)
+        every = _whole(response.get("report_every"), 2, 300) if isinstance(response, dict) else None
+        self.report_every = every or 5
+        if batch:
+            print(f"Reported {len(batch)} check results", flush=True)
+        return True
+
+    def run(self) -> None:
+        last_report = -IDLE_REPORT_SECONDS
+        while True:
+            self.run_due()
+            since = time.monotonic() - last_report
+            if since >= IDLE_REPORT_SECONDS or (self.pending and since >= self.report_every):
+                self.report()
+                last_report = time.monotonic()
+            time.sleep(1)
+
+
 def send_payload(api_url: str, server_id: int, token: str, payload: dict[str, Any]) -> dict[str, Any]:
     request = urllib.request.Request(
         f"{api_url.rstrip('/')}/monitoring/metrics/ingest",
@@ -1338,6 +1601,8 @@ def run_collector() -> None:
     server_id, token = resolve_credentials(api_url)
     interval = max(15, int(os.getenv("INFRADECK_CHECK_INTERVAL_SECONDS", "60")))
     print(f"Collector started for server {server_id}; API={api_url}", flush=True)
+    checks = CheckRunner(api_url, (server_id, token))
+    checks.start()
     while True:
         started = time.monotonic()
         try:
@@ -1357,6 +1622,7 @@ def run_collector() -> None:
                 print(f"Backend no longer accepts server {server_id} (HTTP {exc.code}); requesting approval again", flush=True)
                 _credentials_path().unlink(missing_ok=True)
                 server_id, token = request_approval(api_url)
+                checks.credentials = (server_id, token)
                 try:
                     save_credentials(server_id, token)
                 except OSError:

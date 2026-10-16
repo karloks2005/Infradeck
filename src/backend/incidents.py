@@ -38,6 +38,8 @@ def rule_kind(rule_key: str | None) -> str:
         return "trend:memory"
     if parts[0] in ("host", "system", "network") and len(parts) >= 2:
         return f"{parts[0]}:{parts[1]}"
+    if parts[0] == "check" and len(parts) >= 3:
+        return f"check:{parts[-1]}"
     return rule_key
 
 

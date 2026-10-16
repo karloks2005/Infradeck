@@ -69,6 +69,10 @@ export default function MorePage({ user, onLogout }) {
           <Icon name="chevron" size={14} className="shrink-0 text-muted" />
         </Link>}
 
+        <Group title="Monitoring">
+          <Item to="/availability" icon="availability" title="Availability" value={overview?.checks_down ? `${overview.checks_down} down` : null} tone="warn" />
+        </Group>
+
         {servers.length > 0 && <Group title="Fleet">
           {servers.map((server) => <Item key={server.id} to={serverLink(server.id)} dot={STATE_DOT[serverState(server)]} title={server.hostname} detail={detail(server)} />)}
         </Group>}

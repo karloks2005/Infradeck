@@ -27,14 +27,14 @@ from sqlalchemy import case, func, inspect, text
 from .alerts import CONTAINER_RULE_PREFIX, CRITICAL, SERVER_OFFLINE_RULE, SEVERITIES, active_rule_keys, raise_alert, resolve_alerts, sync_alerts
 import contextvars
 
-from . import auth, dashboard, history as history_service, incidents, notify, rollups, secrets_box, stats, totp
+from . import auth, availability, dashboard, history as history_service, incidents, notify, rollups, secrets_box, stats, totp
 from .auth import (
     STAGE_ENROLLMENT, STAGE_FULL, count_pending_attempt, create_pending_two_factor, create_session, delete_pending_two_factor, delete_session, get_recent_logs,
     get_session, get_user_from_session, hash_password, issue_recovery_codes, list_user_sessions, pending_two_factor_remember, read_pending_two_factor, session_lifetime, recovery_codes_left, record_audit_log,
     register_user, revoke_other_sessions, revoke_user_session, validate_password, verify_credentials, verify_password, verify_second_factor,
 )
 from .db import SessionLocal, check_database, get_db
-from .models import ApiToken, Invite, NotificationChannel, AppSetting, AuditLog, Base, ChatMessage, ContainerMetric, ContainerRollup, Conversation, EnrollmentKey, FirewallState, HostMetric, HostRollup, IncidentAlert, JoinToken, ListenerState, MountMetric, MountRollup, PendingCollector, RecoveryCode, Server, SystemEvent, User
+from .models import ApiToken, Invite, NotificationChannel, AppSetting, AuditLog, Base, ChatMessage, Check, ContainerMetric, ContainerRollup, Conversation, EnrollmentKey, FirewallState, HostMetric, HostRollup, IncidentAlert, JoinToken, ListenerState, MountMetric, MountRollup, PendingCollector, RecoveryCode, Server, SystemEvent, User
 
 from .db import engine
 from .config import (
@@ -1271,6 +1271,7 @@ def monitoring_overview(session_id: Annotated[str | None, Cookie(alias=SESSION_C
             totals[severity] = totals.get(severity, 0) + count
     return {
         "servers": result, "pending_collectors": pending, "alert_count": active_alerts.count(), "alerts_by_severity": totals,
+        "checks_down": db.query(Check).filter(Check.state == "down", Check.paused.is_(False)).count(),
         "version": APP_VERSION, "instance_name": get_instance_name(db), "server_time": datetime.now(timezone.utc).isoformat(),
         # Only worked out when nothing needs attention, which is the only time the page shows it.
         "quiet": dashboard.quiet_summary(db) if not (totals.get(CRITICAL) or totals.get("WARNING")) else None,
@@ -1854,6 +1855,7 @@ def metrics_maintenance(db, purge_due: bool) -> bool:
     """
     try:
         rollups.run_rollups(db)
+        availability.roll(db)
     except Exception as exc:
         db.rollback()
         print(f"Rollups failed: {type(exc).__name__}: {exc}", flush=True)
@@ -1861,6 +1863,7 @@ def metrics_maintenance(db, purge_due: bool) -> bool:
     if not purge_due:
         return False
     purge_old_metrics(db)
+    availability.purge(db)
     analyze_memory_trends(db)
     return True
 
@@ -1912,6 +1915,7 @@ def delete_monitored_server(server_id: PathId, session_id: Annotated[str | None,
     db.query(FirewallState).filter(FirewallState.server_id == server.id).delete(synchronize_session=False)
     db.query(IncidentAlert).filter(IncidentAlert.server_id == server.id).delete(synchronize_session=False)
     db.query(PendingCollector).filter(PendingCollector.approved_server_id == server.id).delete(synchronize_session=False)
+    availability.forget_server(db, server.id)
     db.delete(server)
     db.commit()
     return {"status": "deleted", "server_id": server_id}
@@ -1928,6 +1932,84 @@ def update_check_interval(server_id: PathId, payload: dict, session_id: Annotate
         raise HTTPException(status_code=400, detail="Interval must be between 15 and 86400 seconds.")
     server.check_interval_seconds = interval; db.commit()
     return {"id": server.id, "check_interval_seconds": server.check_interval_seconds}
+
+
+# ---------- Availability (Milestone 11) ----------
+
+def _check_or_404(db, check_id: int) -> Check:
+    check = db.get(Check, check_id)
+    if not check:
+        raise HTTPException(status_code=404, detail="Check not found.")
+    return check
+
+
+@app.get("/availability")
+def get_availability(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    user = _current_user(session_id, db)
+    return {**availability.overview(db), "can_edit": _is_admin(db, user["id"])}
+
+
+def _save_check(db, check: Check, payload: dict) -> dict:
+    try:
+        fields = availability.validate(payload, {server_id for (server_id,) in db.query(Server.id)})
+    except ValueError as exc:
+        print(f"Check not saved: {exc}", flush=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    servers = json.loads(fields["server_ids"])
+    for server_id in servers:
+        others = sum(server_id in availability.servers_of(other) for other in db.query(Check).filter(Check.id != (check.id or 0)))
+        if others >= availability.MAX_CHECKS_PER_SERVER:
+            raise HTTPException(status_code=400, detail=f"A server can run at most {availability.MAX_CHECKS_PER_SERVER} checks.")
+    old_servers = availability.servers_of(check) if check.id else []
+    for key, value in fields.items():
+        setattr(check, key, value)
+    if check.id is None:
+        db.add(check)
+    elif old_servers and old_servers[0] != servers[0]:
+        resolve_alerts(db, old_servers[0], [availability.rule_key(check)])
+    db.flush()
+    availability.evaluate(db, check)
+    db.commit()
+    return availability.summary(db, check, dict(db.query(Server.id, Server.hostname).all()))
+
+
+@app.get("/availability/checks/{check_id}")
+def get_check(check_id: PathId, range: str = Query(default="24h"), session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    _current_user(session_id, db)
+    return availability.detail(db, _check_or_404(db, check_id), range)
+
+
+@app.post("/availability/checks")
+def create_check(payload: dict, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    _require_admin(session_id, db)
+    return _save_check(db, Check(), payload)
+
+
+@app.patch("/availability/checks/{check_id}")
+def update_check(check_id: PathId, payload: dict, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    _require_admin(session_id, db)
+    return _save_check(db, _check_or_404(db, check_id), payload)
+
+
+@app.post("/availability/checks/{check_id}/pause")
+def pause_check(check_id: PathId, payload: dict, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    _require_admin(session_id, db)
+    check = _check_or_404(db, check_id)
+    check.paused = payload.get("paused") is True
+    if not check.paused:
+        check.state = "pending"
+    availability.evaluate(db, check)
+    db.commit()
+    return availability.summary(db, check, dict(db.query(Server.id, Server.hostname).all()))
+
+
+@app.delete("/availability/checks/{check_id}")
+def delete_check(check_id: PathId, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    _require_admin(session_id, db)
+    check = _check_or_404(db, check_id)
+    availability.forget_check(db, check)
+    db.commit()
+    return {"status": "deleted", "id": check_id}
 
 
 MAX_HELPER_EVENTS_PER_CHECKIN = 20
@@ -2451,6 +2533,40 @@ def ingest_metrics(payload: MetricsIngestRequest, authorization: Annotated[str |
     resolve_alerts(db, server.id, [SERVER_OFFLINE_RULE])
     db.commit()
     return {"status": "accepted", "interval_seconds": server.check_interval_seconds}
+
+class CheckResultsRequest(BaseModel):
+    server_id: int = Field(ge=1, le=2**31 - 1)
+    results: list = Field(default=[], max_length=availability.MAX_RESULTS_PER_REPORT)
+
+
+def _enforce_report_spacing(server: Server) -> None:
+    """At most one results report every couple of seconds per server (the collector sends one every 5 s at most)."""
+    try:
+        allowed = redis_client.set(f"infradeck:checks:{server.id}", "1", nx=True, ex=2)
+    except Exception:
+        return
+    if not allowed:
+        raise HTTPException(status_code=429, detail="Check results are arriving too often.", headers={"Retry-After": "2"})
+
+
+@app.post("/monitoring/metrics/checks", dependencies=[Depends(require_collector_listener)])
+def report_check_results(payload: CheckResultsRequest, authorization: Annotated[str | None, Header()] = None, db=Depends(get_db)):
+    """A collector reports the runs of its availability checks and gets back the checks it should run.
+    Only the server's own collector token is accepted here."""
+    server = db.query(Server).filter(Server.id == payload.server_id).first()
+    token = authorization.removeprefix("Bearer ").strip() if authorization and authorization.startswith("Bearer ") else None
+    if not server or not token or not server.collector_token_hash or not hmac.compare_digest(server.collector_token_hash, hashlib.sha256(token.encode()).hexdigest()):
+        raise HTTPException(status_code=401, detail="Unknown collector.")
+    _enforce_report_spacing(server)
+    now = datetime.now(timezone.utc)
+    alerting = "check:down" not in get_disabled_rules(db)
+    for check_id in sorted(availability.store(db, server, payload.results, now)):
+        check = db.get(Check, check_id)
+        check.last_result_at = now
+        availability.evaluate(db, check, now, alerting)
+    db.commit()
+    return {"checks": availability.for_collector(db, server), "report_every": 5}
+
 
 @app.get("/dashboard/summary")
 def dashboard_summary(
@@ -3261,6 +3377,7 @@ RULE_ROWS = [
     {"kind": "system:collect_slow", "when": "Collecting data takes > {collect_slow_pct}% of the check interval", "window": "{sustained_checks} check-ins", "severity": "WARNING", "edit": ["collect_slow_pct", "sustained_checks"]},
     {"kind": "system:ntp", "when": "The clock is not synchronized", "window": None, "severity": "WARNING", "edit": []},
     {"kind": "system:reboot_required", "when": "Reboot required for updates", "window": None, "severity": "INFO", "edit": []},
+    {"kind": "check:down", "when": "An availability check fails its retries in a row", "window": None, "severity": "CRITICAL", "edit": []},
 ]
 NOISY_FIRED = 20
 

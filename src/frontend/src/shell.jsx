@@ -17,13 +17,14 @@ const staleAfter = () => Math.max(30, liveRefreshSeconds(LIVE_REFRESH_SECONDS) *
 const primaryNav = [
   { label: 'Overview', to: '/', icon: 'overview', keys: 'O' },
   { label: 'Statistics', to: '/statistics', icon: 'statistics', keys: 'S' },
+  { label: 'Availability', to: '/availability', icon: 'availability', keys: 'U' },
   { label: 'Agent', to: '/agent', icon: 'agent', keys: 'A' },
 ]
 const secondaryNav = [
   { label: 'Account', to: '/account', icon: 'account' },
   { label: 'Admin', to: '/admin', icon: 'admin', adminOnly: true },
 ]
-const pageTitles = { '/': 'Overview', '/statistics': 'Statistics', '/agent': 'Agent', '/account': 'Account', '/admin': 'Admin' }
+const pageTitles = { '/': 'Overview', '/statistics': 'Statistics', '/availability': 'Availability', '/agent': 'Agent', '/account': 'Account', '/admin': 'Admin' }
 
 export const serverLink = (serverId, tab) => `/?server=${serverId}${tab && tab !== 'overview' ? `&tab=${tab}` : ''}`
 
@@ -64,7 +65,7 @@ function NavItem({ item, badge }) {
         {isActive && <span aria-hidden="true" className="absolute -left-3.5 top-0 h-full w-[3px] rounded-r-sm bg-signal" />}
         <Icon name={item.icon} className={isActive ? 'text-paper' : 'text-muted'} />
         <span className="flex-1">{item.label}</span>
-        {badge ? <span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-signal px-1 text-[11px] font-semibold text-bg" aria-label={`${badge} open incidents`}>{badge}</span>
+        {badge ? <span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-signal px-1 text-[11px] font-semibold text-bg" aria-label={item.to === '/availability' ? `${badge} checks down` : `${badge} open incidents`}>{badge}</span>
           : item.keys && <span aria-hidden="true" className="mono text-[10px] tracking-[0.25em] text-dim">G {item.keys}</span>}
       </>}
     </NavLink>
@@ -105,7 +106,7 @@ function Sidebar({ user, onLogout, overview, error }) {
       <div className="mt-2 truncate px-2 text-[11px] text-muted">{overview?.instance_name || instanceName(user)}{overview?.version ? ` · v${overview.version}` : ''}</div>
 
       <nav aria-label="Main" className="mt-6 space-y-0.5">
-        {primaryNav.map((item) => <NavItem key={item.to} item={item} badge={item.to === '/agent' ? open : 0} />)}
+        {primaryNav.map((item) => <NavItem key={item.to} item={item} badge={item.to === '/agent' ? open : item.to === '/availability' ? overview?.checks_down || 0 : 0} />)}
       </nav>
 
       <div className="mt-6 flex items-center justify-between px-2 text-[11px] text-muted"><span>Fleet</span><span>{servers.length}</span></div>
@@ -156,7 +157,7 @@ function Rail({ user, onLogout, overview }) {
             {({ isActive }) => <>
               {isActive && <span aria-hidden="true" className="absolute -left-3 top-1 h-8 w-[3px] rounded-r-sm bg-signal" />}
               <Icon name={item.icon} size={17} />
-              {item.to === '/agent' && open > 0 && <span className="absolute right-0.5 top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-signal px-0.5 text-[9px] font-semibold text-bg">{open}</span>}
+              {(() => { const badge = item.to === '/agent' ? open : item.to === '/availability' ? overview?.checks_down || 0 : 0; return badge > 0 && <span className="absolute right-0.5 top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-signal px-0.5 text-[9px] font-semibold text-bg">{badge}</span> })()}
             </>}
           </NavLink>
         ))}
@@ -185,7 +186,7 @@ function LiveStatus({ overview, loadedAt, error }) {
 
 function paletteItems(overview, isAdmin) {
   const items = [
-    { kind: 'Page', label: 'Overview', to: '/' }, { kind: 'Page', label: 'Statistics', to: '/statistics' }, { kind: 'Page', label: 'Agent', to: '/agent' }, { kind: 'Page', label: 'Account', to: '/account' },
+    { kind: 'Page', label: 'Overview', to: '/' }, { kind: 'Page', label: 'Statistics', to: '/statistics' }, { kind: 'Page', label: 'Availability', to: '/availability' }, { kind: 'Page', label: 'Agent', to: '/agent' }, { kind: 'Page', label: 'Account', to: '/account' },
     ...(isAdmin ? [{ kind: 'Page', label: 'Admin', to: '/admin' }] : []),
   ]
   for (const server of overview?.servers || []) {
@@ -308,10 +309,10 @@ export function PhoneHeader({ title, back, subtitle, action, live = !back, mark 
   )
 }
 
-function MobileTabBar({ open }) {
+function MobileTabBar({ open, checksDown = 0 }) {
   const location = useLocation()
-  // More holds Account and Admin, so it stays lit on their pages.
-  const inMore = ['/more', '/account', '/admin'].includes(location.pathname)
+  // More holds Availability, Account and Admin, so it stays lit on their pages.
+  const inMore = ['/more', '/account', '/admin', '/availability'].includes(location.pathname)
   const tab = (active, icon, label, badge) => <>
     <span className="relative"><Icon name={icon} size={20} />{badge > 0 && <span className="absolute -right-2.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-signal px-1 text-[10px] font-semibold text-bg">{badge}</span>}</span>
     <span className={active ? 'text-paper' : ''}>{label}</span>
@@ -319,12 +320,12 @@ function MobileTabBar({ open }) {
   return (
     <nav aria-label="Main" className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-bg pb-[env(safe-area-inset-bottom)] md:hidden">
       <div className="mx-auto grid max-w-md grid-cols-4">
-        {primaryNav.map((item) => (
+        {primaryNav.filter((item) => item.to !== '/availability').map((item) => (
           <NavLink key={item.to} to={item.to} end={item.to === '/'} className={({ isActive }) => `flex h-[60px] flex-col items-center justify-center gap-1 text-[11px] font-medium ${isActive ? 'text-paper' : 'text-muted'}`}>
             {({ isActive }) => tab(isActive, item.icon, item.label, item.to === '/agent' ? open : 0)}
           </NavLink>
         ))}
-        <Link to="/more" aria-current={inMore ? 'page' : undefined} className={`flex h-[60px] flex-col items-center justify-center gap-1 text-[11px] font-medium ${inMore ? 'text-paper' : 'text-muted'}`}>{tab(inMore, 'more', 'More', 0)}</Link>
+        <Link to="/more" aria-current={inMore ? 'page' : undefined} className={`flex h-[60px] flex-col items-center justify-center gap-1 text-[11px] font-medium ${inMore ? 'text-paper' : 'text-muted'}`}>{tab(inMore, 'more', 'More', checksDown)}</Link>
       </div>
     </nav>
   )
@@ -342,7 +343,7 @@ export function AppShell({ children, user, onLogout, fitViewport = false, crumbs
   const trail = crumbs || [{ label: pageTitles[location.pathname] || 'Infradeck' }]
   const open = (overview?.alerts_by_severity?.CRITICAL || 0) + (overview?.alerts_by_severity?.WARNING || 0)
 
-  // ⌘K / Ctrl+K opens the palette; G then O, S or A jumps between the main pages.
+  // ⌘K / Ctrl+K opens the palette; G then O, S, U or A jumps between the main pages.
   useEffect(() => {
     let armed = 0
     const onKeyDown = (event) => {
@@ -350,7 +351,7 @@ export function AppShell({ children, user, onLogout, fitViewport = false, crumbs
       if (event.metaKey || event.ctrlKey || event.altKey || isTyping(event.target)) return
       const key = event.key.toLowerCase()
       if (key === 'g') { armed = Date.now(); return }
-      const target = { o: '/', s: '/statistics', a: '/agent' }[key]
+      const target = { o: '/', s: '/statistics', u: '/availability', a: '/agent' }[key]
       if (target && Date.now() - armed < 1200) { event.preventDefault(); navigate(target) }
       armed = 0
     }
@@ -372,7 +373,7 @@ export function AppShell({ children, user, onLogout, fitViewport = false, crumbs
           {!phoneHeader && <PhoneHeader title={last?.label || 'Infradeck'} back={parent ? { label: parent.label, to: parent.to } : null} />}
           <main className={`${fitViewport ? 'xl:min-h-0 xl:flex-1' : ''} min-w-0 ${bare ? '' : 'px-4 pt-4 md:px-7 md:pt-6'} ${phoneTabs ? 'pb-[calc(5.5rem+env(safe-area-inset-bottom))]' : ''} md:pb-7`}>{children}</main>
         </div>
-        {phoneTabs && <MobileTabBar open={open} />}
+        {phoneTabs && <MobileTabBar open={open} checksDown={overview?.checks_down || 0} />}
         {paletteOpen && <CommandPalette overview={overview} isAdmin={user?.role === 'admin'} onClose={() => setPaletteOpen(false)} />}
       </div>
     </ShellContext.Provider>

@@ -4,6 +4,7 @@ import AccountPage from './account/AccountPage.jsx'
 import AdminPage from './admin/AdminPage.jsx'
 import MorePage from './more/MorePage.jsx'
 import AgentPage from './agent/AgentPage.jsx'
+import AvailabilityPage from './availability/AvailabilityPage.jsx'
 import { apiRequest } from './api.js'
 import { LoginPage, RegisterPage } from './auth/AuthPages.jsx'
 import DashboardPage from './dashboard/DashboardPage.jsx'
@@ -83,6 +84,7 @@ function App() {
         <Route path="/" element={page(<DashboardPage user={user} onLogout={handleLogout} />)} />
         <Route path="/dashboard" element={page(<Navigate to="/" replace />)} />
         <Route path="/statistics" element={page(<StatisticsPage user={user} onLogout={handleLogout} />)} />
+        <Route path="/availability" element={page(<AvailabilityPage user={user} onLogout={handleLogout} />)} />
         <Route path="/agent" element={page(<AgentPage user={user} onLogout={handleLogout} />)} />
         <Route path="/reports" element={page(<Navigate to="/agent" replace />)} />
         <Route path="/logs" element={page(<Navigate to="/agent" replace />)} />

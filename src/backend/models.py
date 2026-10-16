@@ -545,3 +545,65 @@ class AgentReport(Base):
     evidence: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     error: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class Check(Base):
+    """An availability check: a service that one or more servers' collectors try every so often (see availability.py).
+
+    ``options`` holds what depends on the type, as checked JSON: accepted status codes, keyword, redirects, TLS.
+    ``state`` is the combined verdict over the servers it runs from: pending, up, down or paused."""
+
+    __tablename__ = "checks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    type: Mapped[str] = mapped_column(String(16), nullable=False)  # http | keyword | tcp
+    target: Mapped[str] = mapped_column(String(2048), nullable=False)  # a URL, or host:port for tcp
+    options: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    tags: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    server_ids: Mapped[str] = mapped_column(Text, default="[]", nullable=False)  # JSON list
+    rule: Mapped[str] = mapped_column(String(8), default="all", nullable=False)  # all | any
+    interval_seconds: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
+    retries: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    retry_interval_seconds: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=48, nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), default="CRITICAL", nullable=False)
+    paused: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    state: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    state_since: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_result_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    rolled_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class CheckResult(Base):
+    """One run of a check by one server's collector."""
+
+    __tablename__ = "check_results"
+    __table_args__ = (Index("ix_check_results_check_time", "check_id", "time"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    check_id: Mapped[int] = mapped_column(ForeignKey("checks.id", ondelete="CASCADE"), nullable=False)
+    server_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ok: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    response_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    detail: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    cert_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+
+class CheckRollup(Base):
+    """One check's hour: how many check slots there were, how many were down, and its response times. The 30-day,
+    1-year and 90-day views are added up from these; the current hour comes from the raw results."""
+
+    __tablename__ = "check_rollups"
+    __table_args__ = (UniqueConstraint("check_id", "hour"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    check_id: Mapped[int] = mapped_column(ForeignKey("checks.id", ondelete="CASCADE"), index=True, nullable=False)
+    hour: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    slots: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    down_slots: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    avg_ms: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    max_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
