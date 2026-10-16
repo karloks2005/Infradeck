@@ -3,13 +3,16 @@
 // (Overview, Statistics, Agent, More), with Account, Admin and the fleet under More.
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
-import { apiRequest } from './api.js'
+import { LIVE_REFRESH_SECONDS, apiRequest } from './api.js'
+import { liveRefreshSeconds } from './prefs.js'
 import { isOnline } from './fleetLogic.js'
 import { Icon } from './icons.jsx'
 import { formatQuiet, listenerRows, serverState, serverStateLabel, sortServers } from './dashboard/logic.js'
 import { useOverview } from './overviewStore.js'
 
 const SIDEBAR_REFRESH_SECONDS = 15
+// "Stale" only once a few refreshes in a row were missed, however slow the chosen refresh is.
+const staleAfter = () => Math.max(30, liveRefreshSeconds(LIVE_REFRESH_SECONDS) * 2 + 5)
 
 const primaryNav = [
   { label: 'Overview', to: '/', icon: 'overview', keys: 'O' },
@@ -176,7 +179,7 @@ function LiveStatus({ overview, loadedAt, error }) {
   if (!overview) return <span className="flex items-center gap-2 text-xs text-muted"><span className="dot" />{error ? 'Not connected' : 'Connecting…'}</span>
   if (!overview.servers.length) return <span className="flex items-center gap-2 text-xs text-muted"><span className="dot" />No collectors reporting</span>
   const seconds = Math.max(0, Math.round((Date.now() - loadedAt) / 1000))
-  const stale = Boolean(error) || seconds > 30
+  const stale = Boolean(error) || seconds > staleAfter()
   return <span className="flex items-center gap-2 whitespace-nowrap text-xs text-soft" title={error || undefined}><span className={`dot ${stale ? 'dot-warn' : 'dot-ok'}`} />{stale ? 'Stale' : 'Live'} · checked {seconds}s ago</span>
 }
 
@@ -279,7 +282,7 @@ function ShortLive() {
   }, [])
   if (!overview?.servers?.length) return null
   const seconds = Math.max(0, Math.round((Date.now() - loadedAt) / 1000))
-  const stale = Boolean(error) || seconds > 30
+  const stale = Boolean(error) || seconds > staleAfter()
   return <span className="flex items-center gap-1.5 whitespace-nowrap text-xs text-soft" title={error || undefined}><span className={`dot ${stale ? 'dot-warn' : 'dot-ok'}`} style={{ width: 7, height: 7 }} />{stale ? 'stale' : `${seconds}s ago`}</span>
 }
 

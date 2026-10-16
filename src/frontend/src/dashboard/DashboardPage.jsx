@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { LIVE_REFRESH_SECONDS, apiRequest } from '../api.js'
+import { liveRefreshSeconds } from '../prefs.js'
 import { Icon } from '../icons.jsx'
 import { refreshOverview, useOverview } from '../overviewStore.js'
 import { AppShell } from '../shell.jsx'
@@ -36,7 +37,9 @@ const headline = (servers) => headlineParts(servers, ', ').join(' ')
 export default function DashboardPage({ user, onLogout }) {
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
-  const { data: overview, error } = useOverview(Boolean(user), LIVE_REFRESH_SECONDS, onLogout)
+  // Account › Display › Live refresh; read when the page opens.
+  const [refresh] = useState(() => liveRefreshSeconds(LIVE_REFRESH_SECONDS))
+  const { data: overview, error } = useOverview(Boolean(user), refresh, onLogout)
   // A phone shows the fleet and one server as separate screens; the desktop shows both, with one server picked.
   const phone = usePhone()
   const [minutes, setMinutes] = useState(rememberedRange)
@@ -65,7 +68,8 @@ export default function DashboardPage({ user, onLogout }) {
     try { window.localStorage.setItem(RANGE_KEY, String(minutes)) } catch { /* private windows: keep it for this visit only */ }
   }, [minutes])
 
-  const pace = Math.max(5, Math.min(selected?.check_interval_seconds || 15, 30))
+  // The live chart follows the server's check-ins (new points come no faster), but never refreshes more often than chosen.
+  const pace = Math.max(refresh, 5, Math.min(selected?.check_interval_seconds || 15, 30))
   const { data: fleetLines } = usePolled(servers.length ? `/monitoring/sparklines?minutes=${minutes}` : null, 15)
   const { data: live } = usePolled(selectedId ? `/monitoring/servers/${selectedId}/live?minutes=${minutes}` : null, pace)
   const showsContainers = selected?.containers?.length > 0 && (tab === 'overview' || tab === 'containers')

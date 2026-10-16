@@ -1,7 +1,7 @@
 // Your account: who you are, how you sign in, where alerts reach you and how Infradeck looks for you.
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { apiRequest } from '../api.js'
+import { LIVE_REFRESH_SECONDS, apiRequest } from '../api.js'
 import { MIN_PASSWORD_LENGTH } from '../auth/AuthPages.jsx'
 import { Icon } from '../icons.jsx'
 import { applyDisplay } from '../prefs.js'
@@ -374,6 +374,9 @@ function Display({ account, onPreferences }) {
     <div className="card divide-y divide-line">
       <Row title="Theme" detail="Dark is what Infradeck was designed in."><Choice label="Theme" value={display.theme} options={[['dark', 'Dark'], ['light', 'Light'], ['system', 'System']]} onChange={(value) => set('theme', value)} /></Row>
       <Row title="Density" detail="Compact fits more rows on a screen."><Choice label="Density" value={display.density} options={[['comfortable', 'Comfortable'], ['compact', 'Compact']]} onChange={(value) => set('density', value)} /></Row>
+      <Row title="Live refresh" detail={`How often the Overview asks for new data. Slower uses less of this device's battery and data; the charts never get new points faster than a server checks in. Default ${LIVE_REFRESH_SECONDS} s.`}>
+        <Choice label="Live refresh" value={display.live_refresh ?? LIVE_REFRESH_SECONDS} options={[[2, '2 s'], [3, '3 s'], [5, '5 s'], [10, '10 s'], [30, '30 s'], [60, '1 min']]} onChange={(value) => set('live_refresh', value)} />
+      </Row>
       <Row title="Open on" detail="The page you land on after signing in."><select className="select" aria-label="Open on" value={display.open_on} onChange={(event) => set('open_on', event.target.value)}><option value="overview">Overview</option><option value="statistics">Statistics</option><option value="agent">Agent</option></select></Row>
       <Row title="Time zone" detail={`Used for your quiet hours. Charts and incident times follow this browser (${browserZone}).`}><select className="select max-w-[240px]" aria-label="Time zone" value={display.timezone} onChange={(event) => set('timezone', event.target.value)}><option value="">This browser ({browserZone})</option>{zones.map((zone) => <option key={zone} value={zone}>{zone}</option>)}</select></Row>
       <Row title="Time format" detail="Saved with your account. Times are shown in 24 h everywhere for now."><Choice label="Time format" value={display.time_format} options={[['24h', '24 h'], ['12h', '12 h']]} onChange={(value) => set('time_format', value)} /></Row>

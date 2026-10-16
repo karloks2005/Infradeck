@@ -576,3 +576,12 @@ def test_chat_is_for_admins_unless_allowed_per_user(app, monkeypatch):
     owner.put("/admin/settings", json={"agent_chat_access": "admins_only"})
     assert ask().status_code == 403                                                                       # admins only wins over the per-user switch
     assert owner.put("/admin/settings", json={"agent_chat_access": "everyone"}).status_code == 422
+
+
+def test_live_refresh_is_a_display_choice_from_a_fixed_list(app):
+    viewer = signed_in(app, 3)
+    assert viewer.get("/account").json()["preferences"]["display"]["live_refresh"] is None     # the frontend's default
+
+    assert viewer.put("/account/preferences", json={"display": {"live_refresh": 10}}).json()["display"]["live_refresh"] == 10
+    for wrong in (7, 0, "10", True):
+        assert viewer.put("/account/preferences", json={"display": {"live_refresh": wrong}}).json()["display"]["live_refresh"] == 10   # ignored

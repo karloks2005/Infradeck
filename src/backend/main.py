@@ -2795,8 +2795,10 @@ def unmute_incident(incident_id: PathId, session_id: Annotated[str | None, Cooki
 _USERNAME = re.compile(r"[a-z0-9][a-z0-9._-]{1,31}")
 _COLOR = re.compile(r"#[0-9a-fA-F]{6}")
 _CLOCK = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
-DISPLAY_CHOICES = {"time_format": ("24h", "12h"), "sizes": ("GB", "GiB"), "theme": ("dark", "light", "system"), "density": ("comfortable", "compact"), "open_on": ("overview", "statistics", "agent")}
-DISPLAY_DEFAULTS = {"time_format": "24h", "sizes": "GB", "theme": "dark", "density": "comfortable", "open_on": "overview", "timezone": ""}
+# live_refresh: how often the Overview asks for new data, in seconds (null: the default built into the frontend).
+DISPLAY_CHOICES = {"time_format": ("24h", "12h"), "sizes": ("GB", "GiB"), "theme": ("dark", "light", "system"), "density": ("comfortable", "compact"), "open_on": ("overview", "statistics", "agent"),
+                   "live_refresh": (2, 3, 5, 10, 30, 60)}
+DISPLAY_DEFAULTS = {"time_format": "24h", "sizes": "GB", "theme": "dark", "density": "comfortable", "open_on": "overview", "timezone": "", "live_refresh": None}
 
 
 class ProfileRequest(BaseModel):
@@ -2891,7 +2893,8 @@ def update_preferences(payload: PreferencesRequest, session_id: Annotated[str | 
     current = _preferences(user)
     if payload.display is not None:
         for key, choices in DISPLAY_CHOICES.items():
-            if payload.display.get(key) in choices:
+            value = payload.display.get(key)
+            if value in choices and not isinstance(value, bool):
                 current["display"][key] = payload.display[key]
         zone = payload.display.get("timezone")
         if isinstance(zone, str) and len(zone) <= 64:

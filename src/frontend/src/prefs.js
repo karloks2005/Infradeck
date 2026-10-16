@@ -15,6 +15,12 @@ export function applyDisplay(display) {
   return choice
 }
 
+// How often the Overview refreshes for this person, in seconds: their choice, or the default built into the frontend.
+export function liveRefreshSeconds(fallback) {
+  const chosen = Number(storedDisplay().live_refresh)
+  return [2, 3, 5, 10, 30, 60].includes(chosen) ? chosen : fallback
+}
+
 // Where "/" should lead for this person: the page they chose to open on.
 export function landingPath() {
   return { statistics: '/statistics', agent: '/agent' }[storedDisplay().open_on] || '/'
