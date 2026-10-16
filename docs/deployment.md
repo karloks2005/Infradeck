@@ -30,6 +30,8 @@ Then set at least these:
 | `TRAEFIK_NETWORK` | `traefik_default` | The Docker network Traefik is attached to. |
 | `TRAEFIK_ROUTER` | `infradeck` | Name of this dashboard's Traefik router and service; change it only if it clashes with another one. |
 | `COMPOSE_FILE` | `docker-compose.server.yml` | Makes plain `docker compose ...` commands use the server file (see below). |
+| `SECRETS_KEY` | *(strongly recommended)* | Encrypts two-factor secrets and notification addresses. Two-factor is required for admins by default and can't be set up without it. Generate with `docker compose run --rm backend python -m src.backend.secrets_box`. |
+| `OPENAI_API_KEY`, `AGENT_MODEL` | empty, `gpt-5-mini` | Optional: the incident agent's diagnoses and chat. See [Incident agent](assistant.md#setting-it-up). |
 
 Find the network with `docker network ls` or
 `docker inspect <traefik-container> --format '{{json .NetworkSettings.Networks}}'`.
@@ -63,6 +65,10 @@ certificate configuration.
 The public address serves only the dashboard. Collectors don't use it; set up
 their route in the next step.
 
+The stack also starts **`agent-worker`**, which runs the incident agent's diagnoses. Without `OPENAI_API_KEY` it
+only notes that there is no key; with one, enter the model's price in **Admin → Incident agent** so its calls count
+towards the budget.
+
 ## 4. Let remote servers report over your VPN
 
 Collectors reach the **collector gate**, not the public domain. In `.env`:
@@ -92,14 +98,16 @@ pinned by digest, so no code is ever downloaded from the dashboard. The
 arm64), signs them with cosign and prints their digests:
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.9.2 && git push origin v0.9.2     # the version in src/backend/config.py
 ```
 
 1. Open the workflow run's summary and copy the `COLLECTOR_IMAGE=…` and
    `DOCKER_PROXY_IMAGE=…` lines into `.env`.
-2. If the repository is private, make the three packages **public** (GitHub →
-   Packages → *Package settings* → *Change visibility*); otherwise machines can't
-   pull them without credentials.
+2. Make the three packages **public** (GitHub → your profile → Packages → each of `infradeck/collector`,
+   `infradeck/docker-proxy`, `infradeck/system-helper` → *Package settings* → *Change visibility*). New
+   packages are private even when the repository is public, and machines can't pull private ones without
+   credentials. Check from any machine that isn't signed in to GHCR:
+   `docker manifest inspect ghcr.io/<owner>/infradeck/collector:<version>`.
 3. Rebuild the stack so the backend knows the images:
    `docker compose -f docker-compose.server.yml up -d --build`.
 
