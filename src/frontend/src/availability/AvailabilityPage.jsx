@@ -11,7 +11,7 @@ import { SectionHeading } from '../dashboard/NeedsAttention.jsx'
 import { CheckForm } from './CheckForm.jsx'
 
 const REFRESH_SECONDS = 15
-const TYPE_LABEL = { http: 'HTTP(s)', keyword: 'Keyword', tcp: 'TCP port' }
+const TYPE_LABEL = { http: 'HTTP(s)', keyword: 'Keyword', json: 'JSON query', tcp: 'TCP port', tls: 'TLS cert', dns: 'DNS', ping: 'Ping' }
 const SLOT_CLASS = { up: 'bg-ok/80', slow: 'bg-[#8a7a3e]', retrying: 'bg-warn', down: 'bg-signal', paused: 'bg-edge', empty: 'bg-line' }
 const LEGEND = [['up', 'up'], ['slow', 'slow'], ['retrying', 'retrying'], ['down', 'down'], ['paused', 'paused']]
 const FILTERS = [['all', 'All'], ['down', 'Down'], ['slow', 'Slow'], ['paused', 'Paused']]
@@ -19,7 +19,14 @@ const FILTERS = [['all', 'All'], ['down', 'Down'], ['slow', 'Slow'], ['paused', 
 const percent = (value) => (value == null ? '—' : `${value >= 99.995 ? 100 : value.toFixed(value >= 99 ? 2 : 1)}%`)
 const every = (seconds) => (seconds % 86400 === 0 ? `${seconds / 86400} d` : seconds % 3600 === 0 ? `${seconds / 3600} h` : seconds % 60 === 0 && seconds >= 300 ? `${seconds / 60} min` : `${seconds} s`)
 const isSlow = (check) => !check.paused && check.state !== 'down' && check.strip.slice(-3).some((slot) => slot.status === 'slow')
-const shortTarget = (check) => (check.type === 'keyword' ? `${check.target} · expects “${check.keyword}”` : check.target)
+const JSON_OP_LABEL = { equals: 'equals', contains: 'contains', gt: '>', lt: '<', exists: 'exists' }
+const shortTarget = (check) => {
+  const options = check.options || {}
+  if (check.type === 'keyword') return `${check.target} · expects “${check.keyword}”`
+  if (check.type === 'json') return `${check.target} · ${options.json_path} ${JSON_OP_LABEL[options.json_op] || ''} ${options.json_op === 'exists' ? '' : options.json_expect || ''}`.trim()
+  if (check.type === 'dns') return `${options.record_type || 'A'} ${check.target}${options.resolver ? ` @${options.resolver}` : ''}`
+  return check.target
+}
 
 function useAvailability() {
   const [state, setState] = useState({ data: null, error: '', loadedAt: 0 })
@@ -281,7 +288,11 @@ function Detail({ check, canEdit, onEdit, onPause, onDelete, refreshedAt }) {
     ['Checked from', `${check.servers.map((server) => server.hostname).join(', ')}${check.servers.length > 1 ? ` · down when ${check.rule === 'all' ? 'all fail' : 'any fails'}` : ''}`],
     ['Every', `${every(check.interval_seconds)} · ${check.retries} ${check.retries === 1 ? 'retry' : 'retries'}${check.retries ? `, ${every(check.retry_interval_seconds)} apart` : ''}`],
     ['Timeout', `${check.timeout_seconds} s`],
-    ...(check.type !== 'tcp' ? [['Accepts', (options.accepted_codes || []).join(', ')], ['Redirects', options.follow_redirects ? 'followed, up to 10' : 'not followed'], ['TLS', options.ignore_tls ? 'errors ignored' : 'must be valid']] : []),
+    ...(['http', 'keyword', 'json'].includes(check.type) ? [['Accepts', (options.accepted_codes || []).join(', ')], ['Redirects', options.follow_redirects ? 'followed, up to 10' : 'not followed'], ['TLS', options.ignore_tls ? 'errors ignored' : 'must be valid']] : []),
+    ...(check.type === 'keyword' ? [['Looks for', `“${check.keyword}”${options.case_sensitive ? ' (case-sensitive)' : ''}`]] : []),
+    ...(check.type === 'json' ? [['JSON path', options.json_path], ['Condition', options.json_op === 'exists' ? 'the value exists' : `${JSON_OP_LABEL[options.json_op] || options.json_op} ${options.json_expect}`]] : []),
+    ...(check.type === 'tls' ? [['Warn before', `${options.warn_days ?? 14} days`]] : []),
+    ...(check.type === 'dns' ? [['Record', options.record_type || 'A'], ['DNS server', options.resolver || 'system default'], ['Expected', options.expected || 'any answer']] : []),
     ...(options.upside_down ? [['Upside down', 'up means the service is unreachable']] : []),
     ['Severity', check.severity === 'CRITICAL' ? 'Critical' : 'Warning'],
     ['Tags', check.tags.join(', ') || '—'],

@@ -17,6 +17,7 @@ summarised into check_rollups, which the 30-day, 1-year and 90-day views add up.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
 import statistics
@@ -27,7 +28,14 @@ from urllib.parse import urlsplit
 from .alerts import raise_alert, resolve_alerts
 from .models import Check, CheckResult, CheckRollup, IncidentAlert, Server
 
-TYPES = ("http", "keyword", "tcp")
+TYPES = ("http", "keyword", "tcp", "tls", "dns", "json", "ping")
+URL_TYPES = ("http", "keyword", "json")       # check an http(s) URL
+HOSTPORT_TYPES = ("tcp", "tls")               # connect to host:port
+HOST_TYPES = ("ping", "dns")                  # a bare host or name, no port
+DNS_RECORDS = ("A", "AAAA", "CNAME", "MX", "TXT", "NS")
+JSON_OPS = ("equals", "contains", "gt", "lt", "exists")
+DEFAULT_TLS_PORT = 443
+MAX_WARN_DAYS = 365
 RULES = ("all", "any")
 SEVERITIES = ("CRITICAL", "WARNING")
 MIN_INTERVAL, MAX_INTERVAL = 20, 86400
@@ -67,6 +75,55 @@ def can_run_checks(server: Server) -> bool:
 
 # ---------- what a check is ----------
 
+def _host_port(target: str, default_port: int | None) -> tuple[str, int] | None:
+    """(host, port) from "host:port", "[ipv6]:port", or a bare host when ``default_port`` is given; None if unusable."""
+    target = target.strip()
+    if target.startswith("["):
+        inner, _, rest = target[1:].partition("]")
+        try:
+            ipaddress.IPv6Address(inner)
+        except ValueError:
+            return None
+        if rest == "":
+            port = default_port
+        elif rest.startswith(":") and rest[1:].isdigit():
+            port = int(rest[1:])
+        else:
+            return None
+        host = inner
+    else:
+        head, sep, tail = target.rpartition(":")
+        if sep and tail.isdigit() and head:
+            host, port = head, int(tail)
+        elif not sep:
+            host, port = target, default_port
+        else:
+            return None
+        if not _HOST.fullmatch(host):
+            return None
+    if port is None or not 1 <= int(port) <= 65535:
+        return None
+    return host, int(port)
+
+
+def _valid_host(target: str) -> bool:
+    if target.startswith("[") and target.endswith("]"):
+        try:
+            ipaddress.IPv6Address(target[1:-1])
+            return True
+        except ValueError:
+            return False
+    return bool(_HOST.fullmatch(target))
+
+
+def _is_ip(text: str) -> bool:
+    try:
+        ipaddress.ip_address(text)
+        return True
+    except ValueError:
+        return False
+
+
 def validate(raw: dict, server_ids: set[int]) -> dict:
     """The fields of a check from the form, checked. Raises ValueError with a message for the person."""
     kind = raw.get("type")
@@ -77,7 +134,7 @@ def validate(raw: dict, server_ids: set[int]) -> dict:
         raise ValueError("Give the check a name of up to 120 characters.")
     target = str(raw.get("target") or "").strip()
     options: dict = {}
-    if kind in ("http", "keyword"):
+    if kind in URL_TYPES:
         parts = urlsplit(target)
         if parts.scheme not in ("http", "https") or not parts.hostname or len(target) > 2048 or any(char.isspace() for char in target):
             raise ValueError("The URL must start with http:// or https:// and name a host.")
@@ -90,10 +147,40 @@ def validate(raw: dict, server_ids: set[int]) -> dict:
             if not 1 <= len(keyword) <= 200:
                 raise ValueError("Enter the text to look for, up to 200 characters.")
             options.update(keyword=keyword, case_sensitive=raw.get("case_sensitive") is True)
-    else:
-        host, _, port = target.rpartition(":")
-        if not _HOST.fullmatch(host or "") or not port.isdigit() or not 1 <= int(port) <= 65535:
-            raise ValueError("For a TCP port, enter host:port, like 10.0.0.12:3306.")
+        if kind == "json":
+            path = str(raw.get("json_path") or "").strip()
+            if not 1 <= len(path) <= 200:
+                raise ValueError("Enter the path to the value in the JSON, like data.status.")
+            operator = raw.get("json_op", "equals")
+            if operator not in JSON_OPS:
+                raise ValueError("Unknown comparison for the JSON value.")
+            expect = str(raw.get("json_expect") or "")
+            if operator != "exists" and not expect:
+                raise ValueError("Enter the value the JSON should have.")
+            if len(expect) > 200:
+                raise ValueError("The expected value is too long.")
+            options.update(json_path=path, json_op=operator, json_expect=expect)
+    elif kind in HOSTPORT_TYPES:
+        parsed = _host_port(target, DEFAULT_TLS_PORT if kind == "tls" else None)
+        if not parsed:
+            raise ValueError("For a TCP port, enter host:port, like 10.0.0.12:3306." if kind == "tcp" else "For a TLS certificate, enter host or host:port, like mail.example.com:993.")
+        if kind == "tls":
+            warn_days = raw.get("warn_days", 14)
+            if isinstance(warn_days, bool) or not isinstance(warn_days, int) or not 1 <= warn_days <= MAX_WARN_DAYS:
+                raise ValueError(f"Warn before expiry must be a whole number of days from 1 to {MAX_WARN_DAYS}.")
+            options.update(warn_days=warn_days)
+    elif kind in HOST_TYPES:
+        if not _valid_host(target) or len(target) > 253:
+            raise ValueError("Enter a host name or IP address." if kind == "ping" else "Enter the name to look up, like deck.home.lan.")
+        if kind == "dns":
+            record = raw.get("record_type", "A")
+            if record not in DNS_RECORDS:
+                raise ValueError("Pick a DNS record type.")
+            resolver = str(raw.get("resolver") or "").strip()
+            if resolver and not _is_ip(resolver):
+                raise ValueError("The DNS server must be an IP address, like 10.0.0.12.")
+            expected = str(raw.get("expected") or "")[:200]
+            options.update(record_type=record, resolver=resolver, expected=expected)
     options["upside_down"] = raw.get("upside_down") is True
     servers = raw.get("server_ids")
     if not isinstance(servers, list) or not servers or not all(isinstance(item, int) and not isinstance(item, bool) for item in servers) or not set(servers) <= server_ids:

@@ -182,3 +182,87 @@ def test_a_test_that_isnt_well_formed_is_not_run(monkeypatch):
     runner.run_tests([{**GOOD, "target": "file:///etc/shadow"}, "junk", None] + [{**GOOD, "id": index} for index in range(1, 10)])
 
     assert len(submitted) == 2   # only the first five are looked at, and three of those aren't checks
+
+
+# --- TLS, DNS, JSON and ping validation + parsing ----------------------------------------------------
+
+import struct  # noqa: E402
+
+
+@pytest.mark.parametrize("raw, expect", [
+    ({"type": "tls", "target": "mail.example.com:993", "warn_days": 30}, {"host": "mail.example.com", "port": 993, "warn_days": 30}),
+    ({"type": "tls", "target": "example.com", "warn_days": 14}, {"host": "example.com", "port": 443}),
+    ({"type": "ping", "target": "10.0.0.1"}, {"host": "10.0.0.1"}),
+    ({"type": "dns", "target": "deck.home.lan", "record_type": "A", "resolver": "10.0.0.12", "expected": "x"}, {"record_type": "A", "resolver": "10.0.0.12"}),
+    ({"type": "json", "target": "http://h/api", "accepted_codes": ["200-299"], "json_path": "a.b", "json_op": "equals", "json_expect": "ok"}, {"json_path": "a.b", "json_op": "equals", "method": "GET"}),
+])
+def test_validate_check_accepts_the_new_types(raw, expect):
+    result = collector.validate_check({"id": 1, "interval": 60, "retry_interval": 20, "timeout": 10, **raw})
+    assert result is not None
+    for key, value in expect.items():
+        assert result[key] == value
+
+
+@pytest.mark.parametrize("raw", [
+    {"type": "ping", "target": "10.0.0.1:22"}, {"type": "ping", "target": "a b"},
+    {"type": "tls", "target": "10.0.0.1:70000"}, {"type": "tls", "target": "example.com"},   # missing warn_days
+    {"type": "dns", "target": "deck.home.lan", "record_type": "SRV"}, {"type": "dns", "target": "deck.home.lan", "record_type": "A", "resolver": "nope"},
+    {"type": "json", "target": "http://h/api", "accepted_codes": ["200"], "json_path": "a", "json_op": "bad", "json_expect": "x"},
+])
+def test_validate_check_rejects_malformed_new_types(raw):
+    base = {"id": 1, "interval": 60, "retry_interval": 20, "timeout": 10}
+    if raw["type"] == "tls" and "warn_days" not in raw:
+        pass   # tls without warn_days should be rejected
+    assert collector.validate_check({**base, **raw}) is None
+
+
+def test_json_walk_reaches_nested_values_and_raises_when_missing():
+    data = {"data": {"status": "ok"}, "items": [{"ok": True}, {"ok": False}]}
+    assert collector._json_walk(data, "data.status") == "ok"
+    assert collector._json_walk(data, "items[1].ok") is False
+    assert collector._json_walk(data, "items.0.ok") is True
+    with pytest.raises((KeyError, IndexError, TypeError)):
+        collector._json_walk(data, "data.missing")
+
+
+@pytest.mark.parametrize("value, op, expect, result", [
+    ("ok", "equals", "OK", True), (True, "equals", "true", True), (5, "equals", "6", False),
+    ("hello world", "contains", "world", True), (5, "gt", "3", True), (5, "lt", "3", False),
+    ("not a number", "gt", "3", False), (None, "exists", "", True),
+])
+def test_json_match_compares_safely(value, op, expect, result):
+    assert collector._json_match(value, op, expect) is result
+
+
+def _dns_packet(ip="93.184.216.34", rcode=0, ancount=1):
+    header = struct.pack(">HHHHHH", 0x1234, 0x8180 | rcode, 1, ancount, 0, 0)
+    question = b"\x07example\x03com\x00" + struct.pack(">HH", 1, 1)
+    answer = b"\xc0\x0c" + struct.pack(">HHIH", 1, 1, 300, 4) + bytes(int(part) for part in ip.split("."))
+    return header + question + (answer if ancount else b"")
+
+
+def test_parse_dns_reads_an_a_record_and_flags_nxdomain():
+    assert collector._parse_dns(_dns_packet(), 1) == ["93.184.216.34"]
+    assert collector._parse_dns(_dns_packet(ancount=0), 1) == []
+    with pytest.raises(collector._DnsError):
+        collector._parse_dns(_dns_packet(rcode=3), 1)
+
+
+def test_system_resolver_reads_resolv_conf(tmp_path, monkeypatch):
+    conf = tmp_path / "resolv.conf"
+    conf.write_text("# comment\nnameserver 10.0.0.12\nnameserver 1.1.1.1\n")
+    monkeypatch.setattr(collector, "Path", lambda _p: conf)
+    assert collector._system_resolver() == "10.0.0.12"
+
+
+def test_ping_returns_a_clean_result_whether_or_not_icmp_is_permitted():
+    result = collector.run_ping({"host": "127.0.0.1", "timeout": 2})
+    assert isinstance(result["ok"], bool) and set(result) == {"ok", "response_ms", "code", "detail", "cert_days"}
+    if not result["ok"]:
+        assert result["detail"]
+
+
+def test_run_check_dispatches_by_type(monkeypatch):
+    monkeypatch.setattr(collector, "run_tls", lambda c: {"ok": True, "response_ms": 1, "code": None, "detail": None, "cert_days": 40})
+    out = collector.run_check({"id": 7, "type": "tls", "host": "h", "port": 443, "timeout": 5, "warn_days": 14})
+    assert out["check_id"] == 7 and out["ok"] is True and out["cert_days"] == 40

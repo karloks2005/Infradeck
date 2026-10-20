@@ -454,3 +454,43 @@ def test_an_upside_down_test_passes_when_the_service_is_unreachable(app):
              headers={"Authorization": f"Bearer {TOKENS[1]}"})
 
     assert app.get(f"/availability/test/{started['id']}").json()["servers"][0]["ok"] is True
+
+
+# --- the other check types: TLS, DNS, JSON, ping -----------------------------------------------------
+
+@pytest.mark.parametrize("raw, stored", [
+    ({"type": "tls", "target": "mail.example.com:993", "warn_days": 30}, {"warn_days": 30}),
+    ({"type": "tls", "target": "example.com"}, {"warn_days": 14}),                       # port defaults to 443
+    ({"type": "dns", "target": "deck.home.lan", "record_type": "A", "resolver": "10.0.0.12", "expected": "10.0.0.30"}, {"record_type": "A", "resolver": "10.0.0.12", "expected": "10.0.0.30"}),
+    ({"type": "json", "target": "https://s.home.lan/api", "json_path": "data.status", "json_op": "equals", "json_expect": "ok"}, {"json_path": "data.status", "json_op": "equals", "json_expect": "ok"}),
+    ({"type": "json", "target": "https://s.home.lan/api", "json_path": "items[0].ok", "json_op": "exists"}, {"json_op": "exists"}),
+    ({"type": "ping", "target": "10.0.0.1"}, {}),
+    ({"type": "ping", "target": "router.home.lan"}, {}),
+])
+def test_the_new_types_validate_and_store_their_options(app, raw, stored):
+    created = create(app, **{key: value for key, value in raw.items() if key != "type"}, type=raw["type"])
+
+    assert created["type"] == raw["type"]
+    for key, value in stored.items():
+        assert created["options"][key] == value
+
+
+@pytest.mark.parametrize("changes", [
+    {"type": "tls", "target": "no-port-ok-but-bad host"}, {"type": "tls", "target": "example.com", "warn_days": 0}, {"type": "tls", "target": "example.com", "warn_days": 9999},
+    {"type": "dns", "target": "deck.home.lan", "record_type": "SRV"}, {"type": "dns", "target": "deck.home.lan", "record_type": "A", "resolver": "not-an-ip"},
+    {"type": "dns", "target": "bad host name", "record_type": "A"},
+    {"type": "json", "target": "https://s/api", "json_path": "", "json_op": "equals", "json_expect": "x"},
+    {"type": "json", "target": "https://s/api", "json_path": "a", "json_op": "nope", "json_expect": "x"},
+    {"type": "json", "target": "https://s/api", "json_path": "a", "json_op": "equals", "json_expect": ""},
+    {"type": "ping", "target": "10.0.0.1:22"}, {"type": "ping", "target": "has a space"},
+])
+def test_a_malformed_check_of_the_new_types_is_refused(app, changes):
+    assert app.post("/availability/checks", json={**NEW_CHECK, **changes}).status_code == 400
+
+
+def test_a_tls_check_sends_its_warn_days_to_the_collector(app):
+    create(app, server_ids=[1], type="tls", target="mail.example.com:993", warn_days=21)
+
+    spec = next(c for c in report(app, 1, []).json()["checks"] if c["type"] == "tls")
+
+    assert spec["target"] == "mail.example.com:993" and spec["warn_days"] == 21 and "upside_down" not in spec

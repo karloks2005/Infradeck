@@ -34,6 +34,11 @@ services:
     read_only: true
     security_opt:
       - no-new-privileges:true
+    # Lets availability "Ping" checks send ICMP echo through an unprivileged datagram socket for the
+    # container's own group only. This grants no capability and no raw sockets; without it, ping checks
+    # simply report that ICMP is not permitted. Namespaced to this container.
+    sysctls:
+      - net.ipv4.ping_group_range=0 0
 
   # The only container that mounts the Docker socket (a mount flag can't make it read-only).
   # It answers six kinds of read request and nothing else. It has no network at all: the collector

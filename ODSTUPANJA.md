@@ -169,7 +169,11 @@ Prvi dio milestonea: provjere HTTP(s), Keyword i TCP port, pokreću ih collector
 | Dizajn | Implementacija | Razlog | Issue |
 | --- | --- | --- | --- |
 | Gumbi „Status page" i „Maintenance" | Prikazani, ali onemogućeni | Još nisu napravljeni | #143, #144 |
-| Devet vrsta provjera | Rade HTTP(s), Keyword i TCP port; ostale su u mreži prikazane kao „later" i ne mogu se odabrati | Prvi dio | #133, #135, #136 |
+| Devet vrsta provjera | Rade HTTP(s), Keyword, JSON query, TCP port, TLS certificate, DNS i Ping; Docker container i Push prikazani kao „later" i ne mogu se odabrati | Preostala dva dijela | #135, #136 |
+| JSON query: JSONata izrazi (kao Uptime Kuma) | Jednostavna staza (`data.status`, `items[0].ok`) + usporedba (equals / contains / > / < / exists) | JSONata traži vanjsku ovisnost i izvršavanje izraza nad odgovorom (DoS/sigurnost); staza je čisto navigiranje | #133 |
+| TLS certificate: čita istek i za samopotpisane certifikate | Lanac certifikata mora biti valjan; za samopotpisane ide TCP ili HTTP provjera uz „Ignore TLS errors" | Čitanje isteka bez validacije traži ručni ASN.1 parser; izbjegnuto | #133 |
+| DNS: usporedba odgovora po zapisu i prioritetu | Očekivani odgovor je točna podudarnost (TXT: sadrži) bilo kojeg zapisa; vlastiti UDP klijent (A, AAAA, CNAME, MX, TXT, NS) | Dovoljno za homelab; bez vanjske DNS biblioteke | #133 |
+| Ping | ICMP preko unprivileged datagram socketa; collector treba `net.ipv4.ping_group_range` (dodan u compose). Bez njega provjera javi da ICMP nije dopušten | Zatvoreni container (`cap_drop: ALL`) ne daje raw sockete; ovo je najmanja ovlast, bez `NET_RAW` | #133 |
 | Tab „Find on this machine" u drawer-u New check | Samo ručno dodavanje | Prvi dio | #142 |
 | Grupe po tagu redom kako ih je korisnik složio (Public prvi) | Abecedno, provjere bez taga na kraju | Nema spremljenog redoslijeda grupa | – |
 | Detalj: izdavatelj certifikata („Let's Encrypt R11") | Samo broj dana do isteka | Collector šalje samo datum isteka | #140 |

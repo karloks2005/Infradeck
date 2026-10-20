@@ -25,6 +25,7 @@ import platform
 import re
 import socket
 import ssl
+import struct
 import threading
 import time
 import urllib.error
@@ -1182,12 +1183,17 @@ def _container_usage(socket_path: str, container_id: str) -> dict[str, Any]:
 
 
 # ---------- availability checks ----------
-# The dashboard asks this collector to try services every so often (an HTTP(s) URL, a keyword in a page, a TCP port)
-# and reports each run. Only what the dashboard sends is run, after checking it here as well: http/https URLs and
-# host:port pairs, GET or HEAD without custom headers or body, at most 1 MiB of a response read and none of it sent
-# back. No shell is involved.
+# The dashboard asks this collector to try services every so often and reports each run: an HTTP(s) URL, a keyword in
+# a page, a value in a JSON reply, a TCP port, a TLS certificate's expiry, a DNS record, or an ICMP ping. Only what
+# the dashboard sends is run, after checking it here too: http/https URLs and host/port pairs, GET or HEAD without
+# custom headers or body, at most 1 MiB of a response read and none of it sent back. No shell is ever involved; ping
+# uses an unprivileged ICMP datagram socket (no raw sockets, no CAP_NET_RAW), DNS a plain UDP query built by hand.
 
-CHECK_TYPES = ("http", "keyword", "tcp")
+CHECK_TYPES = ("http", "keyword", "tcp", "tls", "dns", "json", "ping")
+URL_CHECK_TYPES = ("http", "keyword", "json")
+DNS_RECORD_NUMS = {"A": 1, "NS": 2, "CNAME": 5, "MX": 15, "TXT": 16, "AAAA": 28}
+JSON_OPS = ("equals", "contains", "gt", "lt", "exists")
+DEFAULT_TLS_PORT = 443
 MAX_CHECKS = 50
 MIN_CHECK_INTERVAL, MAX_CHECK_INTERVAL = 20, 86400
 MAX_CHECK_TIMEOUT = 48
@@ -1204,6 +1210,47 @@ def _whole(value: Any, low: int, high: int) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and low <= value <= high else None
 
 
+def _check_host_port(target: str, default_port: int | None) -> tuple[str, int] | None:
+    """(host, port) from "host:port", "[ipv6]:port", or a bare host with ``default_port``; None if unusable."""
+    if target.startswith("["):
+        inner, _, rest = target[1:].partition("]")
+        if not _is_ip_literal(inner):
+            return None
+        if rest == "":
+            port = default_port
+        elif rest.startswith(":") and rest[1:].isdigit():
+            port = int(rest[1:])
+        else:
+            return None
+        host = inner
+    else:
+        head, sep, tail = target.rpartition(":")
+        if sep and tail.isdigit() and head:
+            host, port = head, int(tail)
+        elif not sep:
+            host, port = target, default_port
+        else:
+            return None
+        if not _CHECK_HOST.fullmatch(host):
+            return None
+    if port is None or not 1 <= int(port) <= 65535:
+        return None
+    return host, int(port)
+
+
+def _is_ip_literal(text: str) -> bool:
+    try:
+        socket.inet_pton(socket.AF_INET, text)
+        return True
+    except OSError:
+        pass
+    try:
+        socket.inet_pton(socket.AF_INET6, text)
+        return True
+    except OSError:
+        return False
+
+
 def validate_check(raw: Any) -> dict[str, Any] | None:
     """One check as the dashboard sent it, reduced to known fields of the right type and range; None if unusable."""
     if not isinstance(raw, dict) or raw.get("type") not in CHECK_TYPES or not isinstance(raw.get("target"), str):
@@ -1214,14 +1261,34 @@ def validate_check(raw: Any) -> dict[str, Any] | None:
     timeout = _whole(raw.get("timeout"), 1, MAX_CHECK_TIMEOUT)
     if None in (check_id, interval, retry_interval, timeout):
         return None
-    check: dict[str, Any] = {"id": check_id, "type": raw["type"], "target": raw["target"], "interval": interval, "retry_interval": retry_interval, "timeout": timeout}
-    target = raw["target"]
-    if raw["type"] == "tcp":
-        host, _, port = target.rpartition(":")
-        if not _CHECK_HOST.fullmatch(host) or not port.isdigit() or not 1 <= int(port) <= 65535:
+    kind, target = raw["type"], raw["target"].strip()
+    check: dict[str, Any] = {"id": check_id, "type": kind, "target": target, "interval": interval, "retry_interval": retry_interval, "timeout": timeout}
+    if kind in ("tcp", "tls"):
+        parsed = _check_host_port(target, DEFAULT_TLS_PORT if kind == "tls" else None)
+        if not parsed:
             return None
-        check.update(host=host.strip("[]"), port=int(port))
+        check.update(host=parsed[0], port=parsed[1])
+        if kind == "tls":
+            warn_days = _whole(raw.get("warn_days"), 1, 3650)
+            if warn_days is None:
+                return None
+            check["warn_days"] = warn_days
         return check
+    if kind == "ping":
+        if not (_is_ip_literal(target.strip("[]")) or _CHECK_HOST.fullmatch(target)):
+            return None
+        check["host"] = target.strip("[]")
+        return check
+    if kind == "dns":
+        if not _CHECK_HOST.fullmatch(target) or raw.get("record_type") not in DNS_RECORD_NUMS:
+            return None
+        resolver = str(raw.get("resolver") or "").strip()
+        if resolver and not _is_ip_literal(resolver):
+            return None
+        expected = raw.get("expected")
+        check.update(record_type=raw["record_type"], resolver=resolver, expected=expected if isinstance(expected, str) else "")
+        return check
+    # url types: http, keyword, json
     parts = urllib.parse.urlsplit(target)
     if parts.scheme not in ("http", "https") or not parts.hostname or len(target) > 2048 or any(char.isspace() or not char.isprintable() for char in target):
         return None
@@ -1229,12 +1296,19 @@ def validate_check(raw: Any) -> dict[str, Any] | None:
     if not isinstance(codes, list) or not 1 <= len(codes) <= 10 or not all(isinstance(code, str) and _CHECK_CODES.fullmatch(code) for code in codes):
         return None
     check.update(accepted_codes=codes, follow_redirects=raw.get("follow_redirects") is True, ignore_tls=raw.get("ignore_tls") is True,
-                 method="HEAD" if raw.get("method") == "HEAD" and raw["type"] == "http" else "GET")
-    if raw["type"] == "keyword":
+                 method="HEAD" if raw.get("method") == "HEAD" and kind == "http" else "GET")
+    if kind == "keyword":
         keyword = raw.get("keyword")
         if not isinstance(keyword, str) or not 1 <= len(keyword) <= 200:
             return None
         check.update(keyword=keyword, case_sensitive=raw.get("case_sensitive") is True)
+    if kind == "json":
+        path, operator, expect = raw.get("json_path"), raw.get("json_op"), raw.get("json_expect")
+        if not isinstance(path, str) or not 1 <= len(path) <= 200 or operator not in JSON_OPS:
+            return None
+        if operator != "exists" and not (isinstance(expect, str) and expect):
+            return None
+        check.update(json_path=path, json_op=operator, json_expect=expect if isinstance(expect, str) else "", method="GET")
     return check
 
 
@@ -1304,7 +1378,7 @@ def run_http(check: dict[str, Any]) -> dict[str, Any]:
             result["code"] = response.status
             if not check["ignore_tls"]:
                 result["cert_days"] = _cert_days(response)
-            if check["type"] == "keyword":
+            if check["type"] in ("keyword", "json"):
                 deadline = started + check["timeout"]
                 while len(body) < MAX_BODY_BYTES and time.monotonic() < deadline:
                     chunk = response.read(min(65536, MAX_BODY_BYTES - len(body)))
@@ -1327,8 +1401,249 @@ def run_http(check: dict[str, Any]) -> dict[str, Any]:
         if not found:
             result["detail"] = "Keyword not found"
             return result
+    if check["type"] == "json":
+        try:
+            data = json.loads(body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            result["detail"] = "The reply is not JSON"
+            return result
+        try:
+            value = _json_walk(data, check["json_path"])
+        except (KeyError, IndexError, TypeError):
+            result["detail"] = f"No value at {check['json_path']}"[:200]
+            return result
+        if not _json_match(value, check["json_op"], check.get("json_expect", "")):
+            result["detail"] = f"{check['json_path']} is {json.dumps(value)[:80]}"[:200]
+            return result
     result["ok"] = True
     return result
+
+
+def _json_walk(data: Any, path: str) -> Any:
+    """The value at a dotted/indexed path like ``data.status`` or ``items[0].ok``; raises if it isn't there."""
+    current = data
+    for part in re.findall(r"[^.\[\]]+|\[\d+\]", path):
+        if part.startswith("["):
+            current = current[int(part[1:-1])]
+        elif isinstance(current, list) and part.lstrip("-").isdigit():
+            current = current[int(part)]
+        elif isinstance(current, dict):
+            current = current[part]
+        else:
+            raise KeyError(part)
+    return current
+
+
+def _json_match(value: Any, operator: str, expect: str) -> bool:
+    if operator == "exists":
+        return True
+    if isinstance(value, bool):
+        shown = "true" if value else "false"
+    elif value is None:
+        shown = "null"
+    elif isinstance(value, (dict, list)):
+        shown = json.dumps(value, separators=(",", ":"))
+    else:
+        shown = str(value)
+    if operator == "equals":
+        return shown.strip().casefold() == expect.strip().casefold()
+    if operator == "contains":
+        return expect in shown
+    try:
+        return (float(shown) > float(expect)) if operator == "gt" else (float(shown) < float(expect))
+    except ValueError:
+        return False
+
+
+def run_tls(check: dict[str, Any]) -> dict[str, Any]:
+    """Connect, read the server's certificate, and be down when it is invalid, expired, or close to expiring."""
+    context = ssl.create_default_context()
+    started = time.monotonic()
+    try:
+        with socket.create_connection((check["host"], check["port"]), timeout=check["timeout"]) as sock:
+            with context.wrap_socket(sock, server_hostname=check["host"]) as tls:
+                cert = tls.getpeercert()
+    except ssl.SSLCertVerificationError as exc:
+        return {"ok": False, "response_ms": None, "code": None, "detail": f"Certificate not valid: {getattr(exc, 'verify_message', None) or exc}"[:200], "cert_days": None}
+    except (ssl.SSLError, OSError, http.client.HTTPException) as exc:
+        return {"ok": False, "response_ms": None, "code": None, "detail": _failure(exc, check["timeout"]), "cert_days": None}
+    response_ms = int((time.monotonic() - started) * 1000)
+    try:
+        days = int((ssl.cert_time_to_seconds(cert["notAfter"]) - time.time()) // 86400)
+    except (KeyError, ValueError, TypeError):
+        return {"ok": False, "response_ms": response_ms, "code": None, "detail": "The certificate has no expiry date", "cert_days": None}
+    ok = days >= check.get("warn_days", 14)
+    detail = None if ok else (f"Certificate expired {abs(days)} d ago" if days < 0 else f"Certificate expires in {days} d")
+    return {"ok": ok, "response_ms": response_ms, "code": None, "detail": detail, "cert_days": days}
+
+
+def _system_resolver() -> str:
+    try:
+        for line in Path("/etc/resolv.conf").read_text().splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[0] == "nameserver" and _is_ip_literal(parts[1]):
+                return parts[1]
+    except OSError:
+        pass
+    return ""
+
+
+def _skip_name(data: bytes, off: int) -> int:
+    while off < len(data):
+        length = data[off]
+        if length == 0:
+            return off + 1
+        if length & 0xC0 == 0xC0:   # a compression pointer ends the name
+            return off + 2
+        off += 1 + length
+    return off
+
+
+def _read_name(data: bytes, off: int) -> str:
+    labels, hops = [], 0
+    while off < len(data) and hops < 64:
+        length = data[off]
+        if length == 0:
+            break
+        if length & 0xC0 == 0xC0:
+            off = ((length & 0x3F) << 8) | data[off + 1]
+            hops += 1
+            continue
+        labels.append(data[off + 1:off + 1 + length].decode("ascii", "replace"))
+        off += 1 + length
+    return ".".join(labels)
+
+
+def _render_rdata(want_type: int, data: bytes, off: int, rdlen: int) -> str:
+    rdata = data[off:off + rdlen]
+    if want_type == 1 and rdlen == 4:
+        return socket.inet_ntop(socket.AF_INET, rdata)
+    if want_type == 28 and rdlen == 16:
+        return socket.inet_ntop(socket.AF_INET6, rdata)
+    if want_type in (2, 5):   # NS, CNAME
+        return _read_name(data, off)
+    if want_type == 15 and rdlen >= 3:   # MX: preference + exchange
+        return f"{struct.unpack('>H', rdata[:2])[0]} {_read_name(data, off + 2)}"
+    if want_type == 16:   # TXT: one or more length-prefixed strings
+        parts, index = [], 0
+        while index < rdlen:
+            piece = rdata[index + 1:index + 1 + rdata[index]]
+            parts.append(piece.decode("utf-8", "replace"))
+            index += 1 + rdata[index]
+        return "".join(parts)
+    return ""
+
+
+class _DnsError(Exception):
+    """A DNS reply that says the lookup failed, with a message safe to show."""
+
+
+def _dns_query(name: str, want_type: int, resolver: str, timeout: int) -> list[str]:
+    tid = os.urandom(2)
+    header = tid + struct.pack(">HHHHH", 0x0100, 1, 0, 0, 0)   # one question, recursion desired
+    question = b"".join(bytes([len(label)]) + label for label in (part.encode("idna") for part in name.split(".") if part)) + b"\x00"
+    packet = header + question + struct.pack(">HH", want_type, 1)
+    family = socket.AF_INET6 if ":" in resolver else socket.AF_INET
+    with socket.socket(family, socket.SOCK_DGRAM) as sock:
+        sock.settimeout(timeout)
+        sock.sendto(packet, (resolver, 53))
+        deadline = time.monotonic() + timeout
+        data = b""
+        while time.monotonic() < deadline:
+            sock.settimeout(max(0.05, deadline - time.monotonic()))
+            data, _ = sock.recvfrom(4096)
+            if len(data) >= 12 and data[:2] == tid:
+                break
+    if len(data) < 12 or data[:2] != tid:
+        raise _DnsError("No answer from the DNS server")
+    return _parse_dns(data, want_type)
+
+
+def _parse_dns(data: bytes, want_type: int) -> list[str]:
+    flags, qd, an = struct.unpack(">HHH", data[2:8])
+    rcode = flags & 0x0F
+    if rcode == 3:
+        raise _DnsError("The name does not exist (NXDOMAIN)")
+    if rcode != 0:
+        raise _DnsError(f"The DNS server returned an error (rcode {rcode})")
+    off = 12
+    for _ in range(qd):
+        off = _skip_name(data, off) + 4
+    answers = []
+    for _ in range(an):
+        off = _skip_name(data, off)
+        rtype, _rclass, _ttl, rdlen = struct.unpack(">HHIH", data[off:off + 10])
+        off += 10
+        if rtype == want_type:
+            rendered = _render_rdata(want_type, data, off, rdlen)
+            if rendered:
+                answers.append(rendered)
+        off += rdlen
+    return answers
+
+
+def run_dns(check: dict[str, Any]) -> dict[str, Any]:
+    """Ask a DNS server for a record and be down when it doesn't resolve or doesn't match the expected value."""
+    resolver = check.get("resolver") or _system_resolver()
+    if not resolver:
+        return {"ok": False, "response_ms": None, "code": None, "detail": "No DNS server to ask", "cert_days": None}
+    want_type = DNS_RECORD_NUMS[check["record_type"]]
+    started = time.monotonic()
+    try:
+        answers = _dns_query(check["target"].rstrip("."), want_type, resolver, check["timeout"])
+    except _DnsError as exc:
+        return {"ok": False, "response_ms": None, "code": None, "detail": str(exc)[:200], "cert_days": None}
+    except (OSError, UnicodeError, struct.error) as exc:
+        return {"ok": False, "response_ms": None, "code": None, "detail": _failure(exc, check["timeout"]), "cert_days": None}
+    response_ms = int((time.monotonic() - started) * 1000)
+    if not answers:
+        return {"ok": False, "response_ms": response_ms, "code": None, "detail": f"No {check['record_type']} record", "cert_days": None}
+    expected = (check.get("expected") or "").strip()
+    if expected and not any(expected.casefold() == answer.casefold() or (check["record_type"] == "TXT" and expected in answer) for answer in answers):
+        return {"ok": False, "response_ms": response_ms, "code": None, "detail": f"Resolved to {', '.join(answers)}"[:200], "cert_days": None}
+    return {"ok": True, "response_ms": response_ms, "code": None, "detail": None, "cert_days": None}
+
+
+def _icmp_checksum(data: bytes) -> int:
+    if len(data) % 2:
+        data += b"\x00"
+    total = sum(struct.unpack(">%dH" % (len(data) // 2), data))
+    total = (total >> 16) + (total & 0xFFFF)
+    total += total >> 16
+    return ~total & 0xFFFF
+
+
+def run_ping(check: dict[str, Any]) -> dict[str, Any]:
+    """One ICMP echo over an unprivileged datagram socket (no raw socket, no shell). The container allows this only
+    for its own group via net.ipv4.ping_group_range; without that the result says ICMP isn't permitted."""
+    try:
+        family, _, _, _, sockaddr = socket.getaddrinfo(check["host"], None)[0]
+    except (socket.gaierror, IndexError):
+        return {"ok": False, "response_ms": None, "code": None, "detail": "Host name not found", "cert_days": None}
+    address = sockaddr[0]
+    if family == socket.AF_INET6:
+        proto, echo_type, reply_type = socket.IPPROTO_ICMPV6, 128, 129
+    else:
+        proto, echo_type, reply_type = socket.IPPROTO_ICMP, 8, 0
+    identifier = os.getpid() & 0xFFFF
+    body = struct.pack(">BBHHH", echo_type, 0, 0, identifier, 1) + b"infradeck"
+    packet = struct.pack(">BBHHH", echo_type, 0, _icmp_checksum(body), identifier, 1) + b"infradeck"
+    started = time.monotonic()
+    try:
+        with socket.socket(family, socket.SOCK_DGRAM, proto) as sock:
+            sock.settimeout(check["timeout"])
+            sock.sendto(packet, (address, 0))
+            deadline = time.monotonic() + check["timeout"]
+            while time.monotonic() < deadline:
+                sock.settimeout(max(0.05, deadline - time.monotonic()))
+                reply, _ = sock.recvfrom(1024)
+                if reply and reply[0] == reply_type:
+                    return {"ok": True, "response_ms": int((time.monotonic() - started) * 1000), "code": None, "detail": None, "cert_days": None}
+    except PermissionError:
+        return {"ok": False, "response_ms": None, "code": None, "detail": "ICMP is not permitted on this collector (ping_group_range)", "cert_days": None}
+    except (OSError, struct.error) as exc:
+        return {"ok": False, "response_ms": None, "code": None, "detail": _failure(exc, check["timeout"]), "cert_days": None}
+    return {"ok": False, "response_ms": None, "code": None, "detail": "No reply", "cert_days": None}
 
 
 def run_tcp(check: dict[str, Any]) -> dict[str, Any]:
@@ -1341,9 +1656,12 @@ def run_tcp(check: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "response_ms": int((time.monotonic() - started) * 1000), "code": None, "detail": None, "cert_days": None}
 
 
+_RUNNERS = {"tcp": lambda c: run_tcp(c), "tls": lambda c: run_tls(c), "dns": lambda c: run_dns(c), "ping": lambda c: run_ping(c)}
+
+
 def run_check(check: dict[str, Any]) -> dict[str, Any]:
     try:
-        outcome = run_tcp(check) if check["type"] == "tcp" else run_http(check)
+        outcome = _RUNNERS.get(check["type"], run_http)(check)
     except Exception as exc:  # one broken check must never stop the others
         outcome = {"ok": False, "response_ms": None, "code": None, "detail": f"Check failed: {type(exc).__name__}", "cert_days": None}
     return {"check_id": check["id"], "time": datetime.now(timezone.utc).isoformat(), **{key: value for key, value in outcome.items() if value is not None or key == "ok"}}

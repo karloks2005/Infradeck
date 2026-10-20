@@ -166,6 +166,11 @@ services:
     read_only: true
     security_opt:
       - no-new-privileges:true
+    # Lets availability "Ping" checks send ICMP echo through an unprivileged datagram socket for the
+    # container's own group only. This grants no capability and no raw sockets; without it, ping checks
+    # simply report that ICMP is not permitted. Namespaced to this container.
+    sysctls:
+      - net.ipv4.ping_group_range=0 0
     depends_on:
       backend:
         condition: service_healthy
