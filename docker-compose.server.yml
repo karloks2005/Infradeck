@@ -294,7 +294,7 @@ services:
     # over HTTPS on your domain. The plain-HTTP port is bound to localhost only
     # (set FRONTEND_BIND=0.0.0.0 to also allow direct LAN/VPN access).
     ports:
-      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-5173}:80"
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-8080}:80"
     volumes:
       # Public listener only: collector endpoints are refused here (see the collector-gate service).
       - ./docker/nginx.strict.conf:/etc/nginx/conf.d/default.conf:ro

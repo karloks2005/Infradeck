@@ -4,19 +4,22 @@
 
 A self-hosted dashboard for monitoring all your homelab machines in one place.
 One machine runs the dashboard; every other machine runs a small collector that
-reports host and Docker container metrics back to it. It works the same whether
-the machines share a LAN or are spread across sites and VPSes.
+reports host and Docker container metrics back to it, and runs the uptime checks
+you define (HTTP, TCP, TLS, DNS, ping and more). It works the same whether the
+machines share a LAN or are spread across sites and VPSes.
 
 It also includes an optional incident agent (OpenAI API, set `OPENAI_API_KEY`): it diagnoses each
 incident from the data Infradeck already has, proposes fixes, watches whether the fix holds and adds its
 diagnosis to your notifications. It reads; it never runs commands on your servers.
+
+[slika - An incident on the Agent page: the agent's diagnosis with its confidence, the signals each citing the data they rest on, and the proposed fix steps]
 
 Security comes first: the collectors never get the Docker socket, remote machines
 report over a VPN to a listener the public internet can't reach, and nothing
 the dashboard serves is ever executed on your hosts. See [SECURITY.md](SECURITY.md)
 for what every component can touch and the limits of each protection.
 
-<ui - Full dashboard on desktop: the "This machine" CPU/memory/disk charts at the top, the three stat tiles, and the Fleet section with two or three servers (one expanded, the rest collapsed), plus an open incident in Active incidents>
+[slika - Full dashboard on desktop: the "This machine" CPU/memory/disk charts at the top, the three stat tiles, and the Fleet section with two or three servers (one expanded, the rest collapsed), plus an open incident in Active incidents]
 
 ## Features
 
@@ -51,6 +54,16 @@ for what every component can touch and the limits of each protection.
   that stop reporting. One incident per problem, opened only after a sustained
   breach where that makes sense and resolved automatically when it clears.
   Thresholds are editable by admins.
+- **Availability checks (like Uptime Kuma, but from your own machines)**: track the
+  services you run — **HTTP(s)** status, a **keyword** on a page, a **value in a JSON
+  reply**, a **TCP port**, a **TLS certificate's** expiry, a **DNS** record, or an
+  **ICMP ping**. Each check runs from the servers you pick (so "down when all fail" or
+  "down when any fails" tells a broken service apart from a broken network path), on its
+  own interval with retries, and opens an ordinary incident when it fails. The collector
+  runs the checks itself — no shell, nothing more than it already has — and a **Test**
+  button tries a check from its servers before you save it. One page shows every check
+  grouped by tag, with a heartbeat strip, 24 h / 30 d / 1 y uptime, response time and the
+  machine each check ran from.
 - **Add servers with one command and one click**: click **Connect a server**, run
   the generated command on the new machine, then click **Add**. The command carries
   a single-use token, so only an admin can add machines.
@@ -71,7 +84,9 @@ for what every component can touch and the limits of each protection.
   its fix holds; adds the diagnosis to notifications; chat about any incident. Monthly budget, per-model prices and
   who-sees-what in Admin. See [Incident agent](docs/assistant.md).
 
-<ui - Three phone screenshots side by side (about 390 px wide): the dashboard top with the bottom tab bar, a server card with the Containers list open, and Admin → Alerts thresholds>
+[slika - The Availability page: the summary strip, a "Down now" drawer, and the checks table grouped by tag with the heartbeat strips, uptime columns and the New check drawer open on the side]
+
+[slika - Three phone screenshots side by side (about 390 px wide): the dashboard top with the bottom tab bar, a server card with the Containers list open, and Admin → Alerts thresholds]
 
 ## Architecture
 
@@ -84,7 +99,7 @@ flowchart LR
         backend --> pg[(PostgreSQL)]
         backend --> redis[(Redis)]
         localc["collector"] --> gate
-        localc -->|"unix socket"| dproxy["docker-proxy<br/>4 read-only requests"]
+        localc -->|"unix socket"| dproxy["docker-proxy<br/>6 read-only requests"]
         helper["system-helper (optional)<br/>CAP_SYSLOG, no network"] -.->|"summary file"| localc
     end
     browser["Browser"] -->|"https://your-domain"| traefik["Traefik"]
@@ -97,8 +112,8 @@ flowchart LR
   the backend. On a server install this is the only thing Traefik publishes, and
   it refuses every collector endpoint.
 - The **collector gate** (nginx) is the only way to reach the collector endpoints
-  (register, poll, enroll, ingest). It publishes one port on your **VPN address**
-  and is not attached to Traefik's network.
+  (register, poll, enroll, ingest metrics and report check results). It publishes one
+  port on your **VPN address** and is not attached to Traefik's network.
 - The **backend** (FastAPI) stores metrics in PostgreSQL and sessions and rate
   limits in Redis. Its own port is published on `127.0.0.1:8060` only in the
   development stack (change it with `BACKEND_PORT`).
@@ -106,7 +121,8 @@ flowchart LR
   ports, only a route to the collector gate.
 - The **Docker proxy** is the only container that mounts `/var/run/docker.sock`.
   It has no network; the collector reaches it through a Unix socket in a shared
-  volume and it answers only container list, inspect and stats.
+  volume and it answers only six read-only requests: container list, inspect and
+  stats (plus the one-shot stats form), the Docker version and disk usage.
 - The optional **system helper** reads the kernel log and `wtmp`, and writes a
   sanitised summary file the collector picks up (profile `system-events`).
 - PostgreSQL and Redis have no host ports and sit on a separate network with no route out, reachable only
@@ -197,7 +213,7 @@ Backend (Python 3.12) and frontend (Node 20) can run without Docker; see [Develo
 
 ```bash
 source venv/bin/activate && pip install -r requirements-dev.txt && pytest     # backend, about two minutes
-cd src/frontend && node --test                                                # chart helpers, nothing to install
+cd src/frontend && node --test                                                # chart and logic helpers, nothing to install
 ```
 
 [TESTS.md](TESTS.md) explains how the tests work, what they don't cover and what each one is for.
