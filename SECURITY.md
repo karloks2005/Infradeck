@@ -7,8 +7,8 @@ This page says what each component can reach, so you can decide what to run.
 
 | Component | Runs as | Reaches | Notes |
 |---|---|---|---|
-| Collector | container | host `/proc`, the host filesystem (read-only), the Docker proxy, the backend over HTTP | No Docker socket in the compose installs. |
-| Docker proxy | container, uid 0, no capabilities | the Docker socket; a Unix socket shared only with the collector; no network | Allows four read-only requests. See below. |
+| Collector | container | host `/proc`, the host filesystem (read-only), the Docker proxy, the backend over HTTP, and the targets of availability checks an admin defines | No Docker socket in the compose installs. All capabilities dropped; one namespaced `net.ipv4.ping_group_range` sysctl lets ping checks use an unprivileged ICMP socket (not a capability, no raw sockets). |
+| Docker proxy | container, uid 0, no capabilities | the Docker socket; a Unix socket shared only with the collector; no network | Allows six read-only requests. See below. |
 | System helper (optional) | container, uid 0 with **one** capability | kernel log, `/var/log/wtmp` (read-only), one output volume | Off by default. Details below. |
 | Agent worker | container, no capabilities, read-only filesystem | PostgreSQL, Redis, the model provider on the internet | Runs the agent's jobs from a queue in Redis; no published port. |
 | Collector gate (server stack) | nginx container, no capabilities | the backend; publishes one port on your VPN address | The only way to reach collector endpoints. See below. |
@@ -47,7 +47,9 @@ typed, so that address is treated as hostile:
   timeout, and the answer is never shown to the user, only its status code.
 - Every address the name resolves to is checked, when the channel is saved and again each time
   something is sent. Loopback, link-local (which includes cloud metadata addresses), multicast and
-  reserved ranges are always refused.
+  reserved ranges are always refused. The connection then goes to the exact address that was checked,
+  not to the name again, so a DNS answer that changes between the check and the connection (DNS
+  rebinding) can't send it somewhere else; no proxy from the environment is used either.
 - Private LAN ranges are allowed **only for admins**, because a homelab's ntfy usually lives there.
   That means an admin can make the backend send a small POST to any host on the networks the backend
   container can reach, including the stack's own services. Admins can already do far more; other
@@ -260,8 +262,8 @@ configuration on purpose; the browser will otherwise refuse it.
 ## Connecting remote servers
 
 Internet-facing dashboards shouldn't accept unauthenticated collector traffic, so with
-`docker-compose.server.yml` the collector endpoints (register, poll, enroll, ingest) don't exist on
-the public side at all.
+`docker-compose.server.yml` the collector endpoints (register, poll, enroll, ingest metrics and report
+check results) don't exist on the public side at all.
 
 - **Two doors.** The public listener (behind Traefik or another reverse proxy) serves only the
   dashboard and its API and answers 404 for every collector endpoint. Collectors use the
@@ -368,6 +370,41 @@ The collector's network checks are passive or opt-in, and add no privileges:
 - **Visibility.** Like all monitoring data, the list of listening ports and firewall state is visible to
   every signed-in account. Keep registration closed on a public dashboard.
 
+## Availability checks
+
+Availability checks (the Availability page) are services the collectors try on a schedule — an HTTP(s)
+URL, a keyword or a value in a JSON reply, a TCP port, a TLS certificate, a DNS record, or an ICMP ping.
+
+- **Only admins define checks.** Creating, editing, pausing, deleting and the **Test** button all need
+  an admin session; an API token of any scope is refused. A read-only user or a leaked token cannot make
+  a collector connect anywhere.
+- **An admin's check is an outbound request from the collector's host**, to any address the admin types.
+  Like a private-LAN notification channel, it is a way for an admin to have a collector reach hosts on
+  its own networks — the same reach an admin already has. Members and tokens can't.
+- **The collector runs the check itself, with no shell and only the standard library.** It validates
+  again what the dashboard sent (scheme, host, port, ranges) and refuses the rest (no `file://`, no
+  non-HTTP schemes). HTTP checks are **GET or HEAD only**, with no custom headers, body or credentials,
+  follow at most 10 redirects (only to http/https) and read at most **1 MiB** of a response. The body
+  never leaves the collector: a result is only up/down, the status code, the response time, the days
+  until a TLS certificate expires, and a short reason (≤200 characters; for a JSON check that reason can
+  include up to ~80 characters of the value that failed the comparison).
+- **Ping uses an unprivileged ICMP datagram socket**, allowed for the container's own group by a
+  namespaced `net.ipv4.ping_group_range` sysctl. It grants no capability and no raw socket (no packet
+  crafting or sniffing); without the sysctl a ping check simply reports that ICMP isn't permitted. DNS
+  checks send a UDP query to the resolver IP the admin chose (or the system resolver), nothing more.
+- **Results come in on their own endpoint.** `POST /monitoring/metrics/checks` accepts only a server's
+  collector token, exists only on the gate (404 on the public listener), is rate limited, and its
+  results are range-checked and bounded like every other collector report. A collector is given, and
+  answers for, only the checks assigned to its server.
+- **Test is ephemeral and bounded.** A test is queued in Redis for the chosen servers, runs once, and is
+  forgotten after two minutes; an admin may run at most 20 a minute.
+- **Visibility.** Every signed-in account can read the checks, so a check's address is handled with its
+  secret-bearing parts removed for anyone who can't edit it: credentials in a URL are **refused** when a
+  check is saved, and for non-admins (and in the text of the incident a failing check opens) the query
+  string and any userinfo are stripped, leaving the scheme, host, port and path. Admins, who can edit the
+  check, see the full target. The expected values a check compares against (a keyword, a JSON value) are
+  shown as typed, so don't put a secret there either.
+
 ## Client addresses and collector installs
 
 - **Client IPs.** nginx accepts `X-Forwarded-For` only from private or Docker network addresses (for
@@ -413,8 +450,11 @@ The collector's network checks are passive or opt-in, and add no privileges:
   whitelist of metric names, cap the number of points and rows they read, and cache fleet answers for a
   minute under keys made only from validated values, so a request cannot make them do unbounded work or
   fill the cache. Text from the server (container names, mount paths) is shown as text, never as HTML.
-- **Limits.** The summaries are not purged yet, so history grows slowly (about 2.5 MB per server with
-  8 containers at the planned retention); a retention setting for each level is planned.
+- **Retention.** Raw check-in samples (host, container, mount and system-event rows) are deleted once
+  they are older than the retention period, an admin setting under *Admin → Data & retention* (7, 30, 90
+  or 365 days); samples not yet summarised are never deleted, whatever the setting says. The small
+  hourly/daily/weekly/monthly summaries are kept, so long-range history stays available while the bulky
+  raw rows don't grow without bound.
 
 ## Other exposure to be aware of
 
@@ -423,6 +463,8 @@ The collector's network checks are passive or opt-in, and add no privileges:
 - The collector runs with all capabilities dropped, a read-only filesystem and `no-new-privileges`.
   Without `CAP_DAC_OVERRIDE`, even as root it can't read other users' private files (SSH keys,
   `.env`) through the `/hostfs` mount; only files readable by "other" or owned by root are visible.
+  Its one kernel-level allowance is a namespaced `net.ipv4.ping_group_range` sysctl, so availability
+  ping checks can use an unprivileged ICMP socket; it is not a capability and grants no raw-socket access.
 - The Docker proxy is reached through a Unix socket in a volume shared only with the collector. It
   has no network at all, so there is no port to attack and nothing to authenticate. Don't mount that
   volume into other containers.
