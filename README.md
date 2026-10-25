@@ -12,14 +12,14 @@ It also includes an optional incident agent (OpenAI API, set `OPENAI_API_KEY`): 
 incident from the data Infradeck already has, proposes fixes, watches whether the fix holds and adds its
 diagnosis to your notifications. It reads; it never runs commands on your servers.
 
-[slika - An incident on the Agent page: the agent's diagnosis with its confidence, the signals each citing the data they rest on, and the proposed fix steps]
+<img width="2879" height="1499" alt="image" src="https://github.com/user-attachments/assets/4331b563-9537-4393-882d-f0dbe5a1aedd" />
 
 Security comes first: the collectors never get the Docker socket, remote machines
 report over a VPN to a listener the public internet can't reach, and nothing
 the dashboard serves is ever executed on your hosts. See [SECURITY.md](SECURITY.md)
 for what every component can touch and the limits of each protection.
 
-[slika - Full dashboard on desktop: the "This machine" CPU/memory/disk charts at the top, the three stat tiles, and the Fleet section with two or three servers (one expanded, the rest collapsed), plus an open incident in Active incidents]
+<img width="2879" height="1499" alt="image" src="https://github.com/user-attachments/assets/a1541d08-5cb5-4926-b553-d1512159c265" />
 
 ## Features
 
@@ -84,9 +84,7 @@ for what every component can touch and the limits of each protection.
   its fix holds; adds the diagnosis to notifications; chat about any incident. Monthly budget, per-model prices and
   who-sees-what in Admin. See [Incident agent](docs/assistant.md).
 
-[slika - The Availability page: the summary strip, a "Down now" drawer, and the checks table grouped by tag with the heartbeat strips, uptime columns and the New check drawer open on the side]
-
-[slika - Three phone screenshots side by side (about 390 px wide): the dashboard top with the bottom tab bar, a server card with the Containers list open, and Admin → Alerts thresholds]
+<img width="2879" height="1499" alt="image" src="https://github.com/user-attachments/assets/ed90a777-6b28-404c-94d6-34c2b465cc0e" />
 
 ## Architecture
 
