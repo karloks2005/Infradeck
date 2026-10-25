@@ -1292,6 +1292,8 @@ def validate_check(raw: Any) -> dict[str, Any] | None:
     parts = urllib.parse.urlsplit(target)
     if parts.scheme not in ("http", "https") or not parts.hostname or len(target) > 2048 or any(char.isspace() or not char.isprintable() for char in target):
         return None
+    if parts.username or parts.password:
+        return None
     codes = raw.get("accepted_codes")
     if not isinstance(codes, list) or not 1 <= len(codes) <= 10 or not all(isinstance(code, str) and _CHECK_CODES.fullmatch(code) for code in codes):
         return None

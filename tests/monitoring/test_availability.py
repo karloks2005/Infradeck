@@ -494,3 +494,31 @@ def test_a_tls_check_sends_its_warn_days_to_the_collector(app):
     spec = next(c for c in report(app, 1, []).json()["checks"] if c["type"] == "tls")
 
     assert spec["target"] == "mail.example.com:993" and spec["warn_days"] == 21 and "upside_down" not in spec
+
+
+# --- a check's address may hold a secret; non-admins and incidents don't see it --------------------
+
+def test_credentials_in_a_check_url_are_refused(app):
+    assert app.post("/availability/checks", json={**NEW_CHECK, "target": "https://user:pass@git.example.com/"}).status_code == 400
+
+
+def test_a_non_admin_sees_the_target_without_its_query_or_credentials(app):
+    create(app, name="Stock", target="https://stock.home.lan/api/?token=secret")
+
+    full = app.get("/availability").json()["checks"]
+    app.user.update(id=2, role="member")
+    redacted = app.get("/availability").json()["checks"]
+
+    assert next(c for c in full if c["name"] == "Stock")["target"] == "https://stock.home.lan/api/?token=secret"
+    shown = next(c for c in redacted if c["name"] == "Stock")["target"]
+    assert shown == "https://stock.home.lan/api/?…" and "secret" not in shown
+
+
+def test_the_incident_description_does_not_leak_the_query_string(app):
+    check = create(app, server_ids=[1], target="https://stock.home.lan/api/?token=secret")
+    age(app, check["id"])
+
+    report(app, 1, runs(check["id"], [False, False, False]))
+
+    alert = incident(app, check["id"])
+    assert alert is not None and "secret" not in alert.description and "stock.home.lan/api/" in alert.description

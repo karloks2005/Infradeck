@@ -1946,7 +1946,9 @@ def _check_or_404(db, check_id: int) -> Check:
 @app.get("/availability")
 def get_availability(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     user = _current_user(session_id, db)
-    return {**availability.overview(db), "can_edit": _is_admin(db, user["id"])}
+    is_admin = _is_admin(db, user["id"])
+    # Non-admins can't edit checks, so they get targets with credentials and query strings (possible secrets) removed.
+    return {**availability.overview(db, redact=not is_admin), "can_edit": is_admin}
 
 
 def _save_check(db, check: Check, payload: dict) -> dict:

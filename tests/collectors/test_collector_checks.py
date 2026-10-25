@@ -266,3 +266,9 @@ def test_run_check_dispatches_by_type(monkeypatch):
     monkeypatch.setattr(collector, "run_tls", lambda c: {"ok": True, "response_ms": 1, "code": None, "detail": None, "cert_days": 40})
     out = collector.run_check({"id": 7, "type": "tls", "host": "h", "port": 443, "timeout": 5, "warn_days": 14})
     assert out["check_id"] == 7 and out["ok"] is True and out["cert_days"] == 40
+
+
+def test_validate_check_rejects_credentials_in_a_url():
+    base = {"id": 1, "interval": 60, "retry_interval": 20, "timeout": 10, "accepted_codes": ["200-299"]}
+    assert collector.validate_check({**base, "type": "http", "target": "https://user:pass@host/"}) is None
+    assert collector.validate_check({**base, "type": "http", "target": "https://host/?token=x"}) is not None

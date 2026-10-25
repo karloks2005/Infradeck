@@ -23,7 +23,7 @@ import re
 import statistics
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from .alerts import raise_alert, resolve_alerts
 from .models import Check, CheckResult, CheckRollup, IncidentAlert, Server
@@ -138,6 +138,8 @@ def validate(raw: dict, server_ids: set[int]) -> dict:
         parts = urlsplit(target)
         if parts.scheme not in ("http", "https") or not parts.hostname or len(target) > 2048 or any(char.isspace() for char in target):
             raise ValueError("The URL must start with http:// or https:// and name a host.")
+        if parts.username or parts.password:
+            raise ValueError("Put no user name or password in the URL; everyone who can sign in can read a check's address.")
         codes = raw.get("accepted_codes") or ["200-299"]
         if not isinstance(codes, list) or not 1 <= len(codes) <= 10 or not all(isinstance(code, str) and _CODES.fullmatch(code) for code in codes):
             raise ValueError("Accepted status codes are like 200-299 or 301, at most 10.")
@@ -426,7 +428,7 @@ def evaluate(db, check: Check, now: datetime | None = None, alerting: bool = Tru
         failing = [names.get(server, f"server {server}") for server, state in server_states(db, check, now).items() if state == "down"]
         why = (latest.detail if latest and latest.detail else "No answer") + f" from {', '.join(failing) or 'its servers'}"
         raise_alert(db, servers[0], rule_key(check), check.severity, f"{check.name} is down"[:255],
-                    f"{why}. Failed {check.retries + 1} checks in a row. {check.target}"[:1000])
+                    f"{why}. Failed {check.retries + 1} checks in a row. {redacted_target(check.target)}"[:1000])
     elif servers:
         resolve_alerts(db, servers[0], [rule_key(check)], now)
     return new
@@ -471,14 +473,28 @@ def _uptime(db, check: Check, since: datetime, now: datetime) -> float | None:
     return round(100 * (total - down) / total, 2) if total else None
 
 
-def summary(db, check: Check, names: dict[int, str], now: datetime | None = None) -> dict:
+def redacted_target(target: str) -> str:
+    """A check's address with the secret-bearing parts removed, for anyone who can't edit it: credentials in the
+    URL and the query string (which can carry tokens) go; scheme, host, port and path stay. The collector still
+    gets the full target. Non-URL targets (host:port, a name) have no secret part and pass through unchanged."""
+    parts = urlsplit(target)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return target
+    host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
+    if parts.port:
+        host = f"{host}:{parts.port}"
+    cleaned = urlunsplit((parts.scheme, host, parts.path, "", ""))
+    return f"{cleaned}?\u2026" if parts.query else cleaned
+
+
+def summary(db, check: Check, names: dict[int, str], now: datetime | None = None, redact: bool = False) -> dict:
     now = now or datetime.now(timezone.utc)
     recent = slots(check, _results(db, check, now - timedelta(seconds=check.interval_seconds * (STRIP + 2) + 3600)))[-STRIP:]
     latest = db.query(CheckResult).filter(CheckResult.check_id == check.id).order_by(CheckResult.time.desc()).first()
     cert = db.query(CheckResult.cert_days).filter(CheckResult.check_id == check.id, CheckResult.cert_days.isnot(None)).order_by(CheckResult.time.desc()).limit(1).scalar()
     options = options_of(check)
     return {
-        "id": check.id, "name": check.name, "type": check.type, "target": check.target, "tags": [tag for tag in check.tags.split(",") if tag],
+        "id": check.id, "name": check.name, "type": check.type, "target": redacted_target(check.target) if redact else check.target, "tags": [tag for tag in check.tags.split(",") if tag],
         "keyword": options.get("keyword"), "options": options, "rule": check.rule, "severity": check.severity, "paused": check.paused, "state": check.state,
         "state_since": _utc(check.state_since).isoformat() if check.state_since else None, "interval_seconds": check.interval_seconds, "retries": check.retries,
         "retry_interval_seconds": check.retry_interval_seconds, "timeout_seconds": check.timeout_seconds,
@@ -492,10 +508,10 @@ def summary(db, check: Check, names: dict[int, str], now: datetime | None = None
     }
 
 
-def overview(db, now: datetime | None = None) -> dict:
+def overview(db, now: datetime | None = None, redact: bool = False) -> dict:
     now = now or datetime.now(timezone.utc)
     names = dict(db.query(Server.id, Server.hostname).all())
-    checks = [summary(db, check, names, now) for check in db.query(Check).order_by(Check.name)]
+    checks = [summary(db, check, names, now, redact=redact) for check in db.query(Check).order_by(Check.name)]
     month = [check["uptime_30d"] for check in checks if check["uptime_30d"] is not None and not check["paused"]]
     return {
         "checks": checks,
