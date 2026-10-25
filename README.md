@@ -89,6 +89,33 @@ for what every component can touch and the limits of each protection.
 ## Architecture
 
 ```mermaid
+---
+config:
+  theme: base
+  look: classic
+  themeVariables:
+    darkMode: true
+    background: "#111110"
+    fontFamily: "Geist, Helvetica Neue, Helvetica, sans-serif"
+    fontSize: "16px"
+    primaryColor: "#1A1A18"
+    primaryTextColor: "#EDEBE6"
+    primaryBorderColor: "#3A3935"
+    secondaryColor: "#1A1A18"
+    tertiaryColor: "#111110"
+    lineColor: "#A09D95"
+    textColor: "#EDEBE6"
+    clusterBkg: "#0A0A09"
+    clusterBorder: "#2C2B28"
+    titleColor: "#A09D95"
+    edgeLabelBackground: "#111110"
+  flowchart:
+    curve: basis
+    padding: 16
+    useMaxWidth: true
+    wrappingWidth: 200
+    minNodeWidth: 0
+---
 flowchart LR
     subgraph main["Dashboard machine (docker compose)"]
         direction TB
@@ -100,44 +127,16 @@ flowchart LR
         localc -->|"unix socket"| dproxy["docker-proxy<br/>6 read-only requests"]
         helper["system-helper (optional)<br/>CAP_SYSLOG, no network"] -.->|"summary file"| localc
     end
-    browser["Browser"] -->|"https://your-domain"| traefik["Traefik"]
-    traefik --> proxy
+    browser["Browser"] -->|"https://your-domain"| rproxy["Reverse proxy<br/>(handles HTTPS)"]
+    rproxy --> proxy
     c1["collector on server A"] -->|"VPN"| gate
     c2["collector on server B"] -->|"VPN"| gate
-```
 
-- The **frontend** container (nginx) serves the dashboard and proxies `/api` to
-  the backend. On a server install this is the only thing Traefik publishes, and
-  it refuses every collector endpoint.
-- The **collector gate** (nginx) is the only way to reach the collector endpoints
-  (register, poll, enroll, ingest metrics and report check results). It publishes one
-  port on your **VPN address** and is not attached to Traefik's network.
-- The **backend** (FastAPI) stores metrics in PostgreSQL and sessions and rate
-  limits in Redis. Its own port is published on `127.0.0.1:8060` only in the
-  development stack (change it with `BACKEND_PORT`).
-- **Collectors** only make outgoing requests. Monitored machines need no open
-  ports, only a route to the collector gate.
-- The **Docker proxy** is the only container that mounts `/var/run/docker.sock`.
-  It has no network; the collector reaches it through a Unix socket in a shared
-  volume and it answers only six read-only requests: container list, inspect and
-  stats (plus the one-shot stats form), the Docker version and disk usage.
-- The optional **system helper** reads the kernel log and `wtmp`, and writes a
-  sanitised summary file the collector picks up (profile `system-events`).
-- PostgreSQL and Redis have no host ports and sit on a separate network with no route out, reachable only
-  by the backend; Redis needs a password. The collector can reach the gate (or, in development, the backend)
-  and nothing else.
-
-The development stack (`compose.yml`) keeps a single listener: everything,
-including the collector endpoints, is reachable through the frontend. The server
-stack splits them as described above.
-
-## Quick start (laptop / development)
-
-Requirements: Docker with Compose v2.
-
-```bash
-cp example.env .env               # then set POSTGRES_PASSWORD and REDIS_PASSWORD (openssl rand -hex 24)
-docker compose up -d --build
+    classDef default fill:#1A1A18,stroke:#3A3935,stroke-width:1px,color:#EDEBE6
+    classDef accent fill:#1A1A18,stroke:#FF6A33,stroke-width:2px,color:#EDEBE6
+    class gate accent
+    style main fill:#0A0A09,stroke:#2C2B28,color:#A09D95
+    linkStyle default stroke:#A09D95,stroke-width:1px
 ```
 
 1. Find the one-time **setup token** in the backend log:
