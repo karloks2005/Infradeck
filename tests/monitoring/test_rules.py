@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from src.backend.routes import monitoring as monitoring_routes
 from src.backend import main, rules
 from src.backend.alerts import CRITICAL, WARNING
 from src.backend.models import AuditLog, Base, IncidentAlert, MountMetric, Server, User
@@ -29,7 +30,7 @@ def db(monkeypatch):
 
 
 def _ingest(db, **host):
-    main.ingest_metrics(main.MetricsIngestRequest(server_id=5, host=host), authorization=f"Bearer {TOKEN}", session_id=None, db=db)
+    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=5, host=host), authorization=f"Bearer {TOKEN}", session_id=None, db=db)
 
 
 def _active(db):
@@ -222,7 +223,7 @@ def test_overview_shows_latest_mounts_and_disk_thresholds(db, monkeypatch):
     _ingest(db, mounts=[_mount("/", 10)])
     _ingest(db, mounts=[_mount("/", 20), _mount("/mnt/data", 30)])
 
-    overview = main.monitoring_overview(session_id="s", db=db)
+    overview = monitoring_routes.monitoring_overview(session_id="s", db=db)
 
     assert [(m["mount"], m["used_pct"]) for m in overview["servers"][0]["mounts"]] == [("/", 20), ("/mnt/data", 30)]
     assert overview["disk_thresholds"]["disk_critical_pct"] == rules.DEFAULT_THRESHOLDS["disk_critical_pct"]

@@ -11,6 +11,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.collector import collector
+from src.backend.routes import monitoring as monitoring_routes
 from src.backend import alerts, main, rules
 from src.backend.models import Base, ContainerMetric, HostMetric, IncidentAlert, Server, SystemEvent, User
 
@@ -30,7 +31,7 @@ def db():
 
 
 def _ingest(db, containers=(), **host):
-    main.ingest_metrics(main.MetricsIngestRequest(server_id=5, host=host, containers=list(containers)), authorization=f"Bearer {TOKEN}", session_id=None, db=db)
+    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=5, host=host, containers=list(containers)), authorization=f"Bearer {TOKEN}", session_id=None, db=db)
 
 
 def _c(name, status="running", **extra):
@@ -467,7 +468,7 @@ def test_container_changes_have_their_own_list_and_do_not_crowd_the_system_row(d
     _ingest(db, [_c("web")])
     _ingest(db, [_c("web")] + [_c(f"ci-{number}") for number in range(8)])
 
-    server = main.monitoring_overview(session_id="s", db=db)["servers"][0]
+    server = monitoring_routes.monitoring_overview(session_id="s", db=db)["servers"][0]
 
     assert [event["kind"] for event in server["system_events"]] == ["reboot"]
     assert len(server["container_events"]) == 8 and {event["kind"] for event in server["container_events"]} == {"container_added"}
@@ -479,7 +480,7 @@ def test_the_container_change_list_is_bounded(db, monkeypatch):
         db.add(SystemEvent(server_id=5, time=datetime.now(timezone.utc) - timedelta(minutes=number), kind="container_added", detail=f"Container c{number} appeared", event_key=f"c{number}"))
     db.commit()
 
-    assert len(main.monitoring_overview(session_id="s", db=db)["servers"][0]["container_events"]) == main.CONTAINER_EVENTS_SHOWN
+    assert len(monitoring_routes.monitoring_overview(session_id="s", db=db)["servers"][0]["container_events"]) == main.CONTAINER_EVENTS_SHOWN
 
 
 def test_container_events_follow_the_normal_retention(db):

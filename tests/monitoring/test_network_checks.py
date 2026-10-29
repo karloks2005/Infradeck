@@ -12,6 +12,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.collector import collector
+from src.backend.routes import monitoring as monitoring_routes
 from src.backend import alerts, main, rules
 from src.backend.models import Base, FirewallState, HostMetric, IncidentAlert, ListenerState, Server, SystemEvent, User
 
@@ -335,7 +336,7 @@ def db():
 
 
 def _ingest(db, **host):
-    main.ingest_metrics(main.MetricsIngestRequest(server_id=5, host=host), authorization=f"Bearer {TOKEN}", session_id=None, db=db)
+    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=5, host=host), authorization=f"Bearer {TOKEN}", session_id=None, db=db)
 
 
 def _l(proto, port, scope="any"):
@@ -460,7 +461,7 @@ def test_listener_state_is_removed_with_the_server(db, monkeypatch):
     monkeypatch.setattr(main, "_require_admin", lambda session_id, db: {"id": 1})
     _ingest(db, listeners=BASE_PORTS, firewall={"files": [{"name": "ufw", "sha": "0123456789abcdef", "rules": 1}], "ufw_enabled": None})
 
-    main.delete_monitored_server(5, session_id="s", db=db)
+    monitoring_routes.delete_monitored_server(5, session_id="s", db=db)
 
     assert db.query(ListenerState).count() == 0 and db.query(FirewallState).count() == 0
 
@@ -583,7 +584,7 @@ def test_the_overview_shows_listeners_firewall_and_network_events(db, monkeypatc
     _ingest(db, listeners=BASE_PORTS, firewall=_fw(("ufw-conf", SHA_A, 0), enabled=False), internet_status="ok", internet_latency_ms=12)
     _ingest(db, listeners=BASE_PORTS + [_l("tcp", 8080)], firewall=_fw(("ufw-conf", SHA_A, 0), enabled=False), internet_status="ok", internet_latency_ms=12)
 
-    server = main.monitoring_overview(session_id="s", db=db)["servers"][0]
+    server = monitoring_routes.monitoring_overview(session_id="s", db=db)["servers"][0]
 
     assert [(item["proto"], item["port"], item["scope"]) for item in server["network"]["listeners"]] == [("tcp", 22, "any"), ("tcp", 5432, "loopback"), ("tcp", 8080, "any")]
     assert server["network"]["firewall"][0]["label"] == "ufw settings" and server["network"]["firewall"][0]["enabled"] is False
@@ -598,7 +599,7 @@ def test_network_events_have_their_own_list_and_do_not_crowd_the_other_rows(db, 
     _ingest(db, listeners=BASE_PORTS)
     _ingest(db, listeners=BASE_PORTS + [_l("tcp", port) for port in range(9000, 9008)])
 
-    server = main.monitoring_overview(session_id="s", db=db)["servers"][0]
+    server = monitoring_routes.monitoring_overview(session_id="s", db=db)["servers"][0]
 
     assert [event["kind"] for event in server["system_events"]] == ["reboot"] and server["container_events"] == []
     assert len(server["network"]["events"]) == 8
@@ -613,7 +614,7 @@ def test_the_network_lists_are_bounded(db, monkeypatch):
         db.add(SystemEvent(server_id=5, time=now - timedelta(minutes=number), kind="port_opened", detail=f"New listener: tcp/{number}", event_key=f"tcp/{number}/any"))
     db.commit()
 
-    network = main.monitoring_overview(session_id="s", db=db)["servers"][0]["network"]
+    network = monitoring_routes.monitoring_overview(session_id="s", db=db)["servers"][0]["network"]
 
     assert len(network["listeners"]) == main.LISTENERS_SHOWN and len(network["events"]) == main.NETWORK_EVENTS_SHOWN
 

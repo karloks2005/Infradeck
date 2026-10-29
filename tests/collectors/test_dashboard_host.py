@@ -10,6 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.collector import collector
+from src.backend.routes import monitoring as monitoring_routes
 from src.backend import main
 from src.backend.models import Base, HostMetric, Server, User
 
@@ -29,14 +30,14 @@ def db(monkeypatch):
 
 
 def _ingest(db, server_id, **server):
-    main.ingest_metrics(main.MetricsIngestRequest(server_id=server_id, server=server, host={"cpu_utilization_pct": 10, "ram_pct": 20, "disk_usage_pct": 30}), authorization=f"Bearer token-{server_id}", session_id=None, db=db)
+    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=server_id, server=server, host={"cpu_utilization_pct": 10, "ram_pct": 20, "disk_usage_pct": 30}), authorization=f"Bearer token-{server_id}", session_id=None, db=db)
 
 
 def test_dashboard_host_is_listed_first_and_flagged(db):
     _ingest(db, 1, dashboard_host=True)
     _ingest(db, 2)
 
-    servers = main.monitoring_overview(session_id="s", db=db)["servers"]
+    servers = monitoring_routes.monitoring_overview(session_id="s", db=db)["servers"]
 
     assert [(s["hostname"], s["is_dashboard_host"]) for s in servers] == [("local", True), ("pi", False), ("nas", False)]
 
@@ -57,14 +58,14 @@ def test_history_returns_recent_samples_oldest_first(db):
     db.add(HostMetric(server_id=2, time=now, cpu_utilization_pct=99))
     db.commit()
 
-    samples = main.server_history(1, minutes=30, session_id="s", db=db)["samples"]
+    samples = monitoring_routes.server_history(1, minutes=30, session_id="s", db=db)["samples"]
 
     assert [(s["cpu"], s["ram"], s["disk"]) for s in samples] == [(2, 50, 60), (3, 50, 60)]
 
 
 def test_history_of_unknown_server_is_404(db):
     with pytest.raises(HTTPException) as exc:
-        main.server_history(99, session_id="s", db=db)
+        monitoring_routes.server_history(99, session_id="s", db=db)
     assert exc.value.status_code == 404
 
 
@@ -78,11 +79,11 @@ def test_collector_sends_flag_only_when_configured(monkeypatch):
 
 def _ingest_containers(db, server_id, names):
     containers = [{"container_id": f"id-{name}", "name": name, "status": "running"} for name in names]
-    main.ingest_metrics(main.MetricsIngestRequest(server_id=server_id, host={"cpu_utilization_pct": 1}, containers=containers), authorization=f"Bearer token-{server_id}", session_id=None, db=db)
+    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=server_id, host={"cpu_utilization_pct": 1}, containers=containers), authorization=f"Bearer token-{server_id}", session_id=None, db=db)
 
 
 def _overview_server(db, server_id):
-    return next(s for s in main.monitoring_overview(session_id="s", db=db)["servers"] if s["id"] == server_id)
+    return next(s for s in monitoring_routes.monitoring_overview(session_id="s", db=db)["servers"] if s["id"] == server_id)
 
 
 def test_overview_lists_only_containers_from_latest_check_in(db):

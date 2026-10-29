@@ -9,6 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.collector import collector
+from src.backend.routes import monitoring as monitoring_routes
 from src.backend import main
 from src.backend.models import Base, IncidentAlert, Server, SystemEvent, User
 
@@ -29,7 +30,7 @@ def db():
 
 def _ingest(db, **system):
     host = {"boot_id": BOOT_A, "oom_kill_total": 0, "kernel_tainted": 0, "ntp_synced": True, "reboot_required": False, **system}
-    main.ingest_metrics(main.MetricsIngestRequest(server_id=5, host=host), authorization=f"Bearer {TOKEN}", session_id=None, db=db)
+    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=5, host=host), authorization=f"Bearer {TOKEN}", session_id=None, db=db)
 
 
 def _active(db):
@@ -160,7 +161,7 @@ def _event(db, kind, detail, minutes_ago):
 
 def _shown(db, monkeypatch):
     monkeypatch.setattr(main, "_current_user", lambda session_id, db: {"id": 1})
-    return main.monitoring_overview(session_id="s", db=db)["servers"][0]["system_events"]
+    return monitoring_routes.monitoring_overview(session_id="s", db=db)["servers"][0]["system_events"]
 
 
 def test_repeated_kernel_errors_collapse_into_one_row_with_a_count(db, monkeypatch):

@@ -10,6 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.collector import collector
+from src.backend.routes import monitoring as monitoring_routes
 from src.backend import main
 from src.backend.models import Base, EnrollmentKey, IncidentAlert, Server, User
 
@@ -26,20 +27,20 @@ def db(monkeypatch):
 
 
 def _enroll(db, key, machine_id="machine-a", hostname="nas"):
-    return main.enroll_collector(main.EnrollRequest(enroll_key=key, hostname=hostname, machine_id=machine_id), db=db)
+    return monitoring_routes.enroll_collector(main.EnrollRequest(enroll_key=key, hostname=hostname, machine_id=machine_id), db=db)
 
 
 def test_enrollment_key_is_shown_once_and_stored_hashed(db):
-    created = main.rotate_enrollment_key(session_id="s", db=db)
+    created = monitoring_routes.rotate_enrollment_key(session_id="s", db=db)
 
     stored = db.query(EnrollmentKey).one()
     assert created["enroll_key"].startswith("hlk_")
     assert stored.key_hash != created["enroll_key"]
-    assert main.get_enrollment_key(session_id="s", db=db)["exists"] is True
+    assert monitoring_routes.get_enrollment_key(session_id="s", db=db)["exists"] is True
 
 
 def test_enroll_creates_server_owned_by_key_owner(db):
-    key = main.rotate_enrollment_key(session_id="s", db=db)["enroll_key"]
+    key = monitoring_routes.rotate_enrollment_key(session_id="s", db=db)["enroll_key"]
 
     result = _enroll(db, key)
 
@@ -51,7 +52,7 @@ def test_enroll_creates_server_owned_by_key_owner(db):
 
 
 def test_reenroll_same_machine_reuses_server_and_replaces_token(db):
-    key = main.rotate_enrollment_key(session_id="s", db=db)["enroll_key"]
+    key = monitoring_routes.rotate_enrollment_key(session_id="s", db=db)["enroll_key"]
     first = _enroll(db, key)
     second = _enroll(db, key)
 
@@ -61,7 +62,7 @@ def test_reenroll_same_machine_reuses_server_and_replaces_token(db):
 
 
 def test_different_machines_get_separate_servers(db):
-    key = main.rotate_enrollment_key(session_id="s", db=db)["enroll_key"]
+    key = monitoring_routes.rotate_enrollment_key(session_id="s", db=db)["enroll_key"]
     _enroll(db, key, machine_id="machine-a")
     _enroll(db, key, machine_id="machine-b", hostname="pi")
 
@@ -69,14 +70,14 @@ def test_different_machines_get_separate_servers(db):
 
 
 def test_rotated_or_revoked_key_is_rejected(db):
-    old_key = main.rotate_enrollment_key(session_id="s", db=db)["enroll_key"]
-    main.rotate_enrollment_key(session_id="s", db=db)
+    old_key = monitoring_routes.rotate_enrollment_key(session_id="s", db=db)["enroll_key"]
+    monitoring_routes.rotate_enrollment_key(session_id="s", db=db)
     with pytest.raises(HTTPException) as exc:
         _enroll(db, old_key)
     assert exc.value.status_code == 401
 
-    main.revoke_enrollment_key(session_id="s", db=db)
-    assert main.get_enrollment_key(session_id="s", db=db)["exists"] is False
+    monitoring_routes.revoke_enrollment_key(session_id="s", db=db)
+    assert monitoring_routes.get_enrollment_key(session_id="s", db=db)["exists"] is False
 
 
 def test_offline_alert_raised_once_and_resolved_on_ingest(db):
@@ -89,7 +90,7 @@ def test_offline_alert_raised_once_and_resolved_on_ingest(db):
     assert main.mark_offline_servers(db, now) == 0
     assert db.query(IncidentAlert).filter_by(status="active").count() == 1
 
-    main.ingest_metrics(main.MetricsIngestRequest(server_id=5), authorization=f"Bearer {token}", session_id=None, db=db)
+    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=5), authorization=f"Bearer {token}", session_id=None, db=db)
 
     assert db.query(IncidentAlert).filter_by(status="active").count() == 0
 

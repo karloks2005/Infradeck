@@ -10,6 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.backend.routes import chat as chat_routes
+from src.backend.routes import monitoring as monitoring_routes
 from src.backend import main, rules
 from src.backend.auth import register_user
 from tests.fakes import FakeRedis
@@ -111,9 +112,9 @@ def test_regular_user_sees_servers_but_not_pending_collectors(fleet, monkeypatch
     fleet.commit()
 
     _login_as(monkeypatch, 2)
-    viewer = main.monitoring_overview(session_id="s", db=fleet)
+    viewer = monitoring_routes.monitoring_overview(session_id="s", db=fleet)
     _login_as(monkeypatch, 1)
-    admin = main.monitoring_overview(session_id="s", db=fleet)
+    admin = monitoring_routes.monitoring_overview(session_id="s", db=fleet)
 
     assert [server["hostname"] for server in viewer["servers"]] == ["nas"]
     assert viewer["pending_collectors"] == []
@@ -121,14 +122,14 @@ def test_regular_user_sees_servers_but_not_pending_collectors(fleet, monkeypatch
 
 
 @pytest.mark.parametrize("call", [
-    lambda db: main.get_enrollment_key(session_id="s", db=db),
-    lambda db: main.rotate_enrollment_key(session_id="s", db=db),
-    lambda db: main.revoke_enrollment_key(session_id="s", db=db),
-    lambda db: main.approve_pending_collector(1, session_id="s", db=db),
-    lambda db: main.dismiss_pending_collector(1, session_id="s", db=db),
-    lambda db: main.add_monitored_server(main.ServerRequest(hostname="new"), session_id="s", db=db),
-    lambda db: main.delete_monitored_server(10, session_id="s", db=db),
-    lambda db: main.update_check_interval(10, {"check_interval_seconds": 30}, session_id="s", db=db),
+    lambda db: monitoring_routes.get_enrollment_key(session_id="s", db=db),
+    lambda db: monitoring_routes.rotate_enrollment_key(session_id="s", db=db),
+    lambda db: monitoring_routes.revoke_enrollment_key(session_id="s", db=db),
+    lambda db: monitoring_routes.approve_pending_collector(1, session_id="s", db=db),
+    lambda db: monitoring_routes.dismiss_pending_collector(1, session_id="s", db=db),
+    lambda db: monitoring_routes.add_monitored_server(main.ServerRequest(hostname="new"), session_id="s", db=db),
+    lambda db: monitoring_routes.delete_monitored_server(10, session_id="s", db=db),
+    lambda db: monitoring_routes.update_check_interval(10, {"check_interval_seconds": 30}, session_id="s", db=db),
     lambda db: main.get_admin_settings(session_id="s", db=db),
 ])
 def test_regular_user_cannot_manage_servers_or_collectors(fleet, monkeypatch, call):
@@ -140,12 +141,12 @@ def test_regular_user_cannot_manage_servers_or_collectors(fleet, monkeypatch, ca
 
 def test_enrollment_key_stops_working_when_owner_is_no_longer_admin(fleet, monkeypatch):
     _login_as(monkeypatch, 1)
-    key = main.rotate_enrollment_key(session_id="s", db=fleet)["enroll_key"]
+    key = monitoring_routes.rotate_enrollment_key(session_id="s", db=fleet)["enroll_key"]
     fleet.get(User, 1).role = "user"
     fleet.commit()
 
     with pytest.raises(HTTPException) as error:
-        main.enroll_collector(main.EnrollRequest(enroll_key=key, hostname="pi"), db=fleet)
+        monitoring_routes.enroll_collector(main.EnrollRequest(enroll_key=key, hostname="pi"), db=fleet)
     assert error.value.status_code == 403
 
 

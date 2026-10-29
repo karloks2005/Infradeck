@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import create_engine, func
 from sqlalchemy.orm import sessionmaker
 
+from src.backend.routes import monitoring as monitoring_routes
 from src.backend import main, rollups
 from src.backend.models import (
     AppSetting, Base, ContainerMetric, ContainerRollup, HostMetric, HostRollup, MountMetric, MountRollup, Server, User,
@@ -430,7 +431,7 @@ def test_deleting_a_server_deletes_its_summaries_but_not_another_servers(db, mon
     db.commit()
     rollups.run_rollups(db)
 
-    main.delete_monitored_server(1, session_id="s", db=db)
+    monitoring_routes.delete_monitored_server(1, session_id="s", db=db)
 
     for model in (HostRollup, MountRollup, ContainerRollup):
         assert db.query(model).filter_by(server_id=1).count() == 0

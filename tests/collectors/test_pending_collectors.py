@@ -11,6 +11,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.collector import collector
+from src.backend.routes import monitoring as monitoring_routes
 from src.backend import main
 from src.backend.models import Base, JoinToken, PendingCollector, Server, User
 
@@ -29,11 +30,11 @@ def db(monkeypatch):
 
 def _register(db, machine_id="machine-a", ip="10.0.0.5", hostname="nas"):
     request = SimpleNamespace(client=SimpleNamespace(host=ip))
-    return main.register_collector(main.CollectorRegisterRequest(hostname=hostname, machine_id=machine_id, os_info="Debian 12"), request, db=db)
+    return monitoring_routes.register_collector(main.CollectorRegisterRequest(hostname=hostname, machine_id=machine_id, os_info="Debian 12"), request, db=db)
 
 
 def _poll(db, secret):
-    return main.poll_collector_registration(authorization=f"Bearer {secret}", db=db)
+    return monitoring_routes.poll_collector_registration(authorization=f"Bearer {secret}", db=db)
 
 
 def test_registration_waits_until_approved_then_hands_out_token(db):
@@ -42,7 +43,7 @@ def test_registration_waits_until_approved_then_hands_out_token(db):
     assert db.query(Server).count() == 0
 
     pending_id = db.query(PendingCollector).one().id
-    approved = main.approve_pending_collector(pending_id, session_id="s", db=db)
+    approved = monitoring_routes.approve_pending_collector(pending_id, session_id="s", db=db)
     result = _poll(db, registration["request_secret"])
 
     server = db.query(Server).one()
@@ -56,9 +57,9 @@ def test_registration_waits_until_approved_then_hands_out_token(db):
 
 def test_approved_server_appears_in_fleet_before_first_checkin(db):
     _register(db)
-    main.approve_pending_collector(db.query(PendingCollector).one().id, session_id="s", db=db)
+    monitoring_routes.approve_pending_collector(db.query(PendingCollector).one().id, session_id="s", db=db)
 
-    overview = main.monitoring_overview(session_id="s", db=db)
+    overview = monitoring_routes.monitoring_overview(session_id="s", db=db)
     assert [server["hostname"] for server in overview["servers"]] == ["nas"]
     assert overview["pending_collectors"] == []
 
@@ -76,12 +77,12 @@ def test_pending_list_shows_live_requests_only(db):
 def test_dismissed_request_stays_listed_and_can_still_be_added(db):
     registration = _register(db)
     pending_id = db.query(PendingCollector).one().id
-    main.dismiss_pending_collector(pending_id, session_id="s", db=db)
+    monitoring_routes.dismiss_pending_collector(pending_id, session_id="s", db=db)
 
     assert _poll(db, registration["request_secret"]) == {"status": "dismissed"}
     assert main.visible_pending_collectors(db)[0]["status"] == "dismissed"
 
-    main.approve_pending_collector(pending_id, session_id="s", db=db)
+    monitoring_routes.approve_pending_collector(pending_id, session_id="s", db=db)
     assert _poll(db, registration["request_secret"])["status"] == "approved"
 
 
@@ -103,11 +104,11 @@ def test_approving_known_machine_reuses_existing_server(db):
 
     # Replacing a server's credentials locks out its current collector, so it needs explicit confirmation.
     with pytest.raises(HTTPException) as exc:
-        main.approve_pending_collector(pending_id, session_id="s", db=db)
+        monitoring_routes.approve_pending_collector(pending_id, session_id="s", db=db)
     assert exc.value.status_code == 409 and "nas" in exc.value.detail
     assert db.query(PendingCollector).one().status == "pending"
 
-    main.approve_pending_collector(pending_id, main.ApproveRequest(replace=True), session_id="s", db=db)
+    monitoring_routes.approve_pending_collector(pending_id, main.ApproveRequest(replace=True), session_id="s", db=db)
 
     assert _poll(db, registration["request_secret"])["server_id"] == 3
     assert db.query(Server).count() == 1
@@ -205,7 +206,7 @@ def test_collector_explains_a_refused_registration(monkeypatch, capsys):
 # --- join tokens and the collector listener -------------------------------------------------
 
 def _mint(db):
-    return main.create_join_token(session_id="s", db=db)["join_token"]
+    return monitoring_routes.create_join_token(session_id="s", db=db)["join_token"]
 
 
 def _request(via="", ip="10.0.0.5"):
@@ -214,7 +215,7 @@ def _request(via="", ip="10.0.0.5"):
 
 def _register_via(db, via, token=None, machine_id="machine-a", hostname="nas", ip="10.0.0.5"):
     payload = main.CollectorRegisterRequest(hostname=hostname, machine_id=machine_id, join_token=token)
-    return main.register_collector(payload, _request(via, ip), db=db)
+    return monitoring_routes.register_collector(payload, _request(via, ip), db=db)
 
 
 @pytest.fixture
@@ -242,7 +243,7 @@ def test_join_token_minting_requires_admin_and_is_capped(db, monkeypatch):
     db.add(User(id=2, name="Member", email="m@example.com", password_hash="x", role="user"))
     db.commit()
     with pytest.raises(HTTPException) as exc:
-        main.create_join_token(session_id="s", db=db)
+        monitoring_routes.create_join_token(session_id="s", db=db)
     assert exc.value.status_code == 403
 
 
@@ -281,7 +282,7 @@ def test_expired_token_is_refused(db, strict):
 def test_token_is_consumed_when_the_server_is_approved(db, strict):
     token = _mint(db)
     _register_via(db, "vpn", token)
-    main.approve_pending_collector(db.query(PendingCollector).one().id, session_id="s", db=db)
+    monitoring_routes.approve_pending_collector(db.query(PendingCollector).one().id, session_id="s", db=db)
 
     assert db.query(JoinToken).one().used_at is not None
     with pytest.raises(HTTPException) as exc:
@@ -325,5 +326,5 @@ def test_a_bad_token_is_refused_even_in_open_mode(db):
 def test_install_info_reports_the_configured_addresses(db, monkeypatch):
     monkeypatch.setattr(main, "COLLECTOR_PUBLIC_URL", "http://10.8.0.1:8081/api")
     monkeypatch.setattr(main, "COLLECTOR_IMAGE", "ghcr.io/o/c@sha256:abc")
-    info = main.install_info(session_id="s", db=db)
+    info = monitoring_routes.install_info(session_id="s", db=db)
     assert info == {"strict": False, "collector_url": "http://10.8.0.1:8081/api", "collector_image": "ghcr.io/o/c@sha256:abc", "proxy_image": None}

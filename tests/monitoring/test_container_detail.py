@@ -10,6 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.collector import collector
+from src.backend.routes import monitoring as monitoring_routes
 from src.backend import main
 from src.backend.models import Base, ContainerMetric, Server, User
 
@@ -48,7 +49,7 @@ def test_container_detail_returns_latest_and_chronological_history(monkeypatch):
     session = _session()
     monkeypatch.setattr(main, "_current_user", lambda session_id, db: {"id": 1})
 
-    result = main.container_detail(10, "abc", limit=60, session_id="s", db=session)
+    result = monitoring_routes.container_detail(10, "abc", limit=60, session_id="s", db=session)
 
     assert result["name"] == "web"
     assert result["latest"]["cpu_pct"] == 2.0
@@ -60,7 +61,7 @@ def test_container_detail_is_visible_to_regular_users(monkeypatch):
     session = _session()
     monkeypatch.setattr(main, "_current_user", lambda session_id, db: {"id": 2})
 
-    assert main.container_detail(10, "abc", limit=60, session_id="s", db=session)["name"] == "web"
+    assert monitoring_routes.container_detail(10, "abc", limit=60, session_id="s", db=session)["name"] == "web"
 
 
 def test_container_detail_returns_404_for_unknown_server(monkeypatch):
@@ -68,7 +69,7 @@ def test_container_detail_returns_404_for_unknown_server(monkeypatch):
     monkeypatch.setattr(main, "_current_user", lambda session_id, db: {"id": 1})
 
     with pytest.raises(HTTPException) as exc:
-        main.container_detail(99, "abc", limit=60, session_id="s", db=session)
+        monitoring_routes.container_detail(99, "abc", limit=60, session_id="s", db=session)
     assert exc.value.status_code == 404
 
 

@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from src.backend.routes import monitoring as monitoring_routes
 from src.backend import alerts, main
 from src.backend.models import Base, IncidentAlert, Server, User
 
@@ -25,7 +26,7 @@ def db():
 
 
 def _ingest(db, containers):
-    main.ingest_metrics(main.MetricsIngestRequest(server_id=5, containers=containers), authorization=f"Bearer {TOKEN}", session_id=None, db=db)
+    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=5, containers=containers), authorization=f"Bearer {TOKEN}", session_id=None, db=db)
 
 
 def _container(name, status="running", health=None, restarts=0):
@@ -119,7 +120,7 @@ def test_overview_lists_critical_first_with_hostname_and_true_count(db, monkeypa
     alerts.raise_alert(db, 5, "c", alerts.WARNING, "new warning", "d")
     db.commit()
 
-    overview = main.monitoring_overview(session_id="s", db=db)
+    overview = monitoring_routes.monitoring_overview(session_id="s", db=db)
 
     assert overview["alert_count"] == 3
     assert [a["title"] for a in overview["alerts"]] == ["old critical", "new warning"]
