@@ -1387,97 +1387,6 @@ def monitoring_server_events(server_id: PathId, days: int = 7, session_id: Annot
     return {"server_id": server.id, "days": days, "retention_days": get_metrics_retention_days(db), "events": dashboard.server_events(db, server, days)}
 
 
-STATS_CACHE_SECONDS = 60
-
-
-@app.get("/stats/fleet")
-def fleet_statistics(range_name: Annotated[RangeName, Query(alias="range")] = "24h", session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
-    """Incidents over time and per-server availability for the Statistics page's all-servers view."""
-    _current_user(session_id, db)
-    # Keyed only by the validated range, so a request can't create an unbounded number of cache entries.
-    cache_key = f"infradeck:stats:fleet:{range_name}"
-    try:
-        cached = redis_client.get(cache_key)
-        if cached:
-            return json.loads(cached)
-    except Exception:  # a cache problem must never break the page
-        cached = None
-    result = stats.fleet_stats(db, range_name)
-    try:
-        redis_client.set(cache_key, json.dumps(result), ex=STATS_CACHE_SECONDS)
-    except Exception:
-        pass
-    return result
-
-
-def _cached_server_stats(db, server_id: int, name: str, range_name: str, build) -> dict:
-    """A per-server statistic, remembered for a minute. Only existing servers and known ranges get this far, so the
-    cache can't grow without limit; a cache problem never breaks the page."""
-    server = db.query(Server).filter(Server.id == server_id).first()
-    if not server:
-        raise HTTPException(status_code=404, detail="Server not found.")
-    cache_key = f"infradeck:stats:{name}:{server.id}:{range_name}"
-    try:
-        cached = redis_client.get(cache_key)
-        if cached:
-            return json.loads(cached)
-    except Exception:
-        pass
-    result = build(db, server, range_name)
-    try:
-        redis_client.set(cache_key, json.dumps(result), ex=STATS_CACHE_SECONDS)
-    except Exception:
-        pass
-    return result
-
-
-@app.get("/stats/servers/{server_id}/containers")
-def server_container_usage(server_id: PathId, range_name: Annotated[RangeName, Query(alias="range")] = "24h", session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
-    """Every container of a server over a range, busiest first, for the Statistics page's ranked table."""
-    _current_user(session_id, db)
-    return _cached_server_stats(db, server_id, "containers", range_name, stats.container_usage)
-
-
-@app.get("/stats/servers/{server_id}/busiest")
-def server_busiest_containers(server_id: PathId, range_name: Annotated[RangeName, Query(alias="range")] = "24h", session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
-    """The container using the most CPU in each period of a range, for the timeline's tooltip."""
-    _current_user(session_id, db)
-    return _cached_server_stats(db, server_id, "busiest", range_name, stats.busiest_containers)
-
-
-@app.get("/stats/servers/{server_id}/spikes")
-def server_cpu_spikes(server_id: PathId, range_name: Annotated[RangeName, Query(alias="range")] = "24h", session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
-    """When the server's CPU was at or above 90% and for how long, for the Statistics page's findings."""
-    _current_user(session_id, db)
-    return _cached_server_stats(db, server_id, "spikes", range_name, stats.cpu_spikes)
-
-
-@app.get("/stats/servers/{server_id}/heatmap")
-def server_heatmap(
-    server_id: PathId, metric: Literal["cpu", "ram"] = "cpu", offset: Annotated[int, Query(ge=-stats.MAX_OFFSET_MINUTES, le=stats.MAX_OFFSET_MINUTES)] = 0,
-    session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db),
-):
-    """When a server is busy: its average per hour of the day and weekday over the last 30 days."""
-    _current_user(session_id, db)
-    server = db.query(Server).filter(Server.id == server_id).first()
-    if not server:
-        raise HTTPException(status_code=404, detail="Server not found.")
-    # Only existing servers, known metrics and a bounded offset get this far, so the cache can't grow without limit.
-    cache_key = f"infradeck:stats:heatmap:{server.id}:{metric}:{offset}"
-    try:
-        cached = redis_client.get(cache_key)
-        if cached:
-            return json.loads(cached)
-    except Exception:
-        pass
-    result = stats.hour_weekday_heatmap(db, server, metric, offset)
-    try:
-        redis_client.set(cache_key, json.dumps(result), ex=STATS_CACHE_SECONDS)
-    except Exception:
-        pass
-    return result
-
-
 @app.get("/monitoring/servers/{server_id}/mounts/history")
 def mount_history(
     server_id: PathId, mount: Annotated[str, Query(min_length=1, max_length=255)], range_name: Annotated[RangeName, Query(alias="range")] = "24h", metrics: str | None = None,
@@ -2790,8 +2699,6 @@ def _role_name(db, user: User) -> str:
     return "Owner" if user.id == _owner_id(db) else "Admin" if user.role == "admin" else "Viewer"
 
 
-
-
 def _deliver(db, channel: NotificationChannel, owner: User, title: str, body: str, severity: str) -> bool:
     try:
         ok, status_text = notify.send(channel.kind, secrets_box.decrypt(channel.target_enc), title, body, severity, allow_private=owner.role == "admin")
@@ -3152,7 +3059,8 @@ def root():
 
 
 # Routes split out of this file; imported last so they can reference this module's shared helpers (see routes/).
-from .routes import account as account_routes, availability as availability_routes, incidents as incidents_routes  # noqa: E402
+from .routes import account as account_routes, availability as availability_routes, incidents as incidents_routes, statistics as statistics_routes  # noqa: E402
 app.include_router(availability_routes.router)
 app.include_router(incidents_routes.router)
 app.include_router(account_routes.router)
+app.include_router(statistics_routes.router)
