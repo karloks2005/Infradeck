@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from src.backend.routes import chat as chat_routes
 from src.backend import main, rules
 from src.backend.auth import register_user
 from tests.fakes import FakeRedis
@@ -169,5 +170,5 @@ def test_agent_chat_is_rejected_while_disabled(fleet, monkeypatch):
     monkeypatch.setattr(main, "send_agent_message", lambda *args, **kwargs: pytest.fail("agent must not be called"))
 
     with pytest.raises(HTTPException) as error:
-        main.agent_chat(main.AgentChatRequest(conversation_id="c1", message="hi"), session_id="s", db=fleet)
+        chat_routes.agent_chat(main.AgentChatRequest(conversation_id="c1", message="hi"), session_id="s", db=fleet)
     assert error.value.status_code == 403
