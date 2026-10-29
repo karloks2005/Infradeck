@@ -99,14 +99,14 @@ def test_registration_closed_still_allows_first_account(monkeypatch):
     monkeypatch.setattr(main, "ALLOW_REGISTRATION", False)
 
     public = {"server_count": 0, "version": main.APP_VERSION}
-    assert main.auth_config(db=session) == {"registration_enabled": True, "bootstrap_required": True, "instance_name": None, **public}
+    assert auth_routes.auth_config(db=session) == {"registration_enabled": True, "bootstrap_required": True, "instance_name": None, **public}
     session.add(User(name="Owner", email="owner@example.com", password_hash="x"))
     session.commit()
     # The first account is not an admin here, so there is nobody to name the install after.
-    assert main.auth_config(db=session) == {"registration_enabled": False, "bootstrap_required": False, "instance_name": None, **public}
+    assert auth_routes.auth_config(db=session) == {"registration_enabled": False, "bootstrap_required": False, "instance_name": None, **public}
 
     with pytest.raises(HTTPException) as exc:
-        main.auth_register(main.RegisterRequest(name="Stranger", email="s@example.com", password="correct-horse-battery-staple"), request=None, response=None, db=session)
+        auth_routes.auth_register(main.RegisterRequest(name="Stranger", email="s@example.com", password="correct-horse-battery-staple"), request=None, response=None, db=session)
     assert exc.value.status_code == 403
 
 
@@ -146,7 +146,7 @@ def _register(main, session, token, email="owner@example.com"):
     from types import SimpleNamespace
     from fastapi import Response
     request = SimpleNamespace(client=SimpleNamespace(host="1.2.3.4"), headers={})
-    return main.auth_register(main.RegisterRequest(name="Owner", email=email, password="correct-horse-battery-staple", bootstrap_token=token), request=request, response=Response(), db=session)
+    return auth_routes.auth_register(main.RegisterRequest(name="Owner", email=email, password="correct-horse-battery-staple", bootstrap_token=token), request=request, response=Response(), db=session)
 
 
 def test_fresh_install_generates_a_token_and_stores_only_its_hash(monkeypatch):
@@ -213,6 +213,7 @@ def test_existing_installs_need_no_token_and_leftovers_are_cleaned_up(monkeypatc
 
 # --- password policy ------------------------------------------------------------------------
 
+from src.backend.routes import auth as auth_routes
 from src.backend import auth as auth_module
 
 
