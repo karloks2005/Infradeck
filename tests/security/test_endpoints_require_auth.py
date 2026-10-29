@@ -43,14 +43,15 @@ METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 
 
 def _routes():
+    # The OpenAPI schema lists every registered path and method, including those mounted from routers/* (which
+    # aren't flattened into app.routes in this FastAPI build). That makes this check cover the whole API.
     seen = []
-    for route in main.app.routes:
-        path = getattr(route, "path", None)
-        methods = getattr(route, "methods", None)
-        if not path or not methods or path.startswith(SKIP_PREFIXES):
+    for path, operations in main.app.openapi().get("paths", {}).items():
+        if path.startswith(SKIP_PREFIXES):
             continue
-        for method in sorted(methods & METHODS):
-            seen.append((method, path))
+        for method in operations:
+            if method.upper() in METHODS:
+                seen.append((method.upper(), path))
     return seen
 
 
