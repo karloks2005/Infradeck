@@ -211,6 +211,12 @@ stats, compose project, mount sources) and nothing more through Docker.
   and CORS stops other sites from reading the answers.
   If something between the browser and nginx rewrites the `Host` header, add your dashboard's URL to
   `CORS_ORIGINS` (for example `https://dashboard.example.com`).
+- **Every endpoint requires a session by default.** A single app-wide dependency runs before every handler and
+  rejects the request with 401 unless the path is on a short, explicit exempt list — the sign-in and registration
+  steps, the token-authenticated collector endpoints, and (when enabled) the API docs. Each handler still makes its
+  own role and ownership checks; this baseline just means a new endpoint that forgets its check **fails closed**
+  (unreachable) instead of silently becoming public. A test (`tests/security/test_endpoints_require_auth.py`) walks
+  every registered route and fails the build if a non-exempt one answers an unauthenticated request.
 
 ## Two-factor sign-in and sessions
 
