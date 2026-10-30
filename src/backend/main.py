@@ -238,8 +238,31 @@ def agent_error_message(exc: Exception) -> str:
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 # Jobs for the agent worker are published after the commit that opened or escalated an incident (see src/agent/jobs.py).
 agent_jobs.redis_getter = lambda: redis_client
+# Default-deny baseline (Option B, #154): every route requires a valid session unless its path is exempt — the
+# sign-in/registration pages, the token-authenticated collector endpoints, and the API docs. Handlers keep their own
+# checks (role, ownership, the user object); this only makes "a new endpoint forgot its auth" fail closed, not open.
+SESSION_EXEMPT_PATHS = {
+    "/", "/health", "/auth/config", "/auth/invite", "/auth/register", "/auth/login", "/auth/login/2fa", "/auth/logout",
+    # These accept the limited enrolment session (two-factor setup, profile) and enforce it themselves with
+    # _account_session(allow_limited=True); the baseline, which only knows full sessions, would wrongly block them.
+    "/auth/me", "/auth/2fa/status", "/auth/2fa/setup", "/auth/2fa/enable",
+    "/monitoring/collectors/register", "/monitoring/collectors/register/poll", "/monitoring/collectors/enroll",
+    "/monitoring/metrics/ingest", "/monitoring/metrics/checks",
+    "/openapi.json", "/docs", "/docs/oauth2-redirect",
+}
+
+
+def require_session(request: Request, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)) -> None:
+    """Runs before every handler. For a path that isn't exempt it demands a valid session (or API token), raising 401
+    otherwise; the handler then re-checks and reads the user. _current_user also accepts API tokens, so read tokens
+    keep working. Exempt paths authenticate themselves (a sign-in step, a collector token) or are public."""
+    if request.url.path not in SESSION_EXEMPT_PATHS:
+        _current_user(session_id, db)
+
+
 # The interactive API documentation is a map of every endpoint, so it is off unless ENABLE_API_DOCS=true.
-app = FastAPI(title="Infradeck API", docs_url="/docs" if ENABLE_API_DOCS else None, redoc_url=None, openapi_url="/openapi.json" if ENABLE_API_DOCS else None)
+app = FastAPI(title="Infradeck API", docs_url="/docs" if ENABLE_API_DOCS else None, redoc_url=None, openapi_url="/openapi.json" if ENABLE_API_DOCS else None,
+              dependencies=[Depends(require_session)])
 
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 

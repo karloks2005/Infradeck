@@ -91,3 +91,28 @@ def test_the_public_list_only_names_routes_that_exist():
     everything = set(_routes())
     missing = [entry for entry in PUBLIC if entry not in everything]
     assert not missing, f"PUBLIC names routes that no longer exist: {missing}"
+
+
+def test_public_routes_are_session_exempt():
+    # A route the security policy treats as public must also be exempt from the baseline, or it would be blocked.
+    for _method, path in PUBLIC:
+        assert path in main.SESSION_EXEMPT_PATHS, f"{path} is public but not in SESSION_EXEMPT_PATHS"
+
+
+def test_the_baseline_gate_blocks_non_exempt_paths_without_a_session(monkeypatch):
+    # require_session is the default-deny gate (Option B): with no session it raises on a non-exempt path and
+    # passes on an exempt one, before any handler runs.
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    monkeypatch.setattr(main, "redis_client", FakeRedis())   # empty: nobody has a session
+    with sessionmaker(bind=engine)() as db:
+        request = SimpleNamespace(url=SimpleNamespace(path="/availability"))
+        with pytest.raises(HTTPException) as caught:
+            main.require_session(request, session_id=None, db=db)
+        assert caught.value.status_code in (401, 403)
+        # an exempt path is let through without a session
+        main.require_session(SimpleNamespace(url=SimpleNamespace(path="/health")), session_id=None, db=db)

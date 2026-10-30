@@ -165,6 +165,7 @@ def test_a_full_install_refuses_new_servers_but_still_serves_the_ones_it_has(app
 
 def test_the_cap_applies_to_adding_by_hand_and_to_approving_requests(app, monkeypatch):
     monkeypatch.setattr(main, "MAX_SERVERS", 1)
+    monkeypatch.setattr(main, "_current_user", lambda session_id, db: {"id": 1, "role": "admin"})
     monkeypatch.setattr(main, "_require_admin", lambda session_id, db: {"id": 1, "role": "admin"})
 
     assert app.post("/monitoring/servers", json={"hostname": "manual", "check_interval_seconds": 60}).status_code == 409
