@@ -360,39 +360,31 @@ def test_the_watermark_is_stored_per_tier_and_a_damaged_one_is_ignored(db):
 
 # --- purging only what has been summarised ---------------------------------------------------
 
-def _set_retention(db, days):
-    db.add(AppSetting(key=main.METRICS_RETENTION_KEY, value=str(days)))
-    db.commit()
-
-
-def test_without_any_summaries_the_purge_behaves_as_before(db):
-    _set_retention(db, 1)
+def test_without_any_summaries_no_check_in_is_purged(db):
     host(db, T(2026, 3, 1, 10, 0), cpu_utilization_pct=1.0)
-    host(db, T(2026, 3, 5, 10, 0), cpu_utilization_pct=2.0)
+    host(db, T(2026, 3, 20, 10, 0), cpu_utilization_pct=2.0)
 
-    main.purge_old_metrics(db, now=T(2026, 3, 5, 12, 0))
+    main.retention.purge(db, now=T(2026, 3, 20, 12, 0))
 
-    assert db.query(HostMetric).count() == 1
+    assert db.query(HostMetric).count() == 2
 
 
 def test_samples_that_were_not_summarised_yet_are_never_purged(db):
-    _set_retention(db, 1)
-    for day in range(1, 5):
+    for day in range(1, 10):
         host(db, T(2026, 3, day, 10, 0), cpu_utilization_pct=float(day))
     db.add(AppSetting(key="rollup_done_hour", value=T(2026, 3, 2, 12).isoformat()))   # only the first day and a half are summarised
     db.commit()
 
-    main.purge_old_metrics(db, now=T(2026, 3, 5, 12, 0))      # retention alone would delete everything before 4 March
+    main.retention.purge(db, now=T(2026, 3, 12, 12, 0))      # the week alone would delete everything before 5 March
 
-    # 1 and 2 March are summarised and old enough; 3 March is old enough but not summarised yet, so it stays
-    assert [rollups._utc(row.time).day for row in db.query(HostMetric).order_by(HostMetric.time)] == [3, 4]
+    # 1 and 2 March are summarised and old enough; 3 and 4 March are old enough but not summarised yet, so they stay
+    assert [rollups._utc(row.time).day for row in db.query(HostMetric).order_by(HostMetric.time)] == [3, 4, 5, 6, 7, 8, 9]
 
 
 def test_maintenance_summarises_before_it_purges(db):
-    _set_retention(db, 1)
-    for days_back, cpu in ((4, 1.0), (3, 2.0)):
+    for days_back, cpu in ((9, 1.0), (8, 2.0)):
         host(db, ago(days_back), cpu_utilization_pct=cpu)
-    db.add(ContainerMetric(server_id=1, time=ago(4), container_id="c", name="web", status="running"))
+    db.add(ContainerMetric(server_id=1, time=ago(9), container_id="c", name="web", status="running"))
     host(db, datetime.now(timezone.utc) - timedelta(minutes=1), cpu_utilization_pct=99.0)   # recent: kept
     db.commit()
 
@@ -403,8 +395,7 @@ def test_maintenance_summarises_before_it_purges(db):
 
 
 def test_a_failing_rollup_job_stops_the_purge(db, monkeypatch):
-    _set_retention(db, 1)
-    host(db, ago(4), cpu_utilization_pct=1.0)
+    host(db, ago(9), cpu_utilization_pct=1.0)
 
     def broken(*args, **kwargs):
         raise RuntimeError("database trouble")

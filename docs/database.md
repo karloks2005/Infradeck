@@ -34,8 +34,13 @@ rule on that server opens no new incident (unless the condition breaks again, wh
 samples into `host_rollups`, `mount_rollups` and `container_rollups`: one row per server, mount or container
 per hour, day, week (Monday to Sunday) and month, all in UTC, with the average and maximum of each metric.
 Each tier is built from the finer one when its period ends, a period without check-ins gets no row, and the
-purge never deletes samples that have not been summarised yet. The Statistics page reads them (see [Statistics](statistics.md)). They are
-not purged yet; a retention setting for each level is planned.
+purge never deletes samples that have not been summarised yet. The Statistics page reads them (see [Statistics](statistics.md)).
+
+**Retention** (`src/backend/retention.py`, hourly): check-in samples and `check_results` are kept 7 days, and
+only deleted once summarised. Hourly rollups, `check_rollups` and `system_events` are kept for the
+`history_retention_days` setting (365 by default, 730, or 0 for forever); an hourly rollup is only deleted
+once its day is summarised. Daily, weekly and monthly rollups are never deleted. Deletes run in chunks of
+10,000 rows.
 
 The metrics tables carry only the indexes their queries use: `time` (for the hourly purge) and
 `(server_id, time)`, or `(server_id, container_id, time)` for containers. A database from before

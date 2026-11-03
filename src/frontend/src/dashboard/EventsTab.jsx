@@ -2,6 +2,7 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Icon } from '../icons.jsx'
+import { keptFor } from '../ui.jsx'
 import { usePolled } from './data.js'
 import { EVENT_SOURCES, dayHeading, describeEvent, describeGroup, eventCategory, eventStrip, eventsToCsv, groupRepeats } from './logic.js'
 
@@ -124,7 +125,7 @@ export function EventsTab({ server, pending, isAdmin, onReview }) {
       </div>
     )) : <p className="m-0 px-[18px] py-10 text-center text-[13px] text-muted">{events.length ? 'No events match this search.' : `Nothing happened on ${server.hostname} in the last ${DAYS} days.`}</p>}
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-line px-[18px] py-3 text-xs text-muted">
-      <span>Showing {visible.length} of {groups.length} {grouped ? 'grouped ' : ''}events from the last {DAYS} days. Events are kept for {data.retention_days} days.</span>
+      <span>Showing {visible.length} of {groups.length} {grouped ? 'grouped ' : ''}events from the last {DAYS} days. Events are kept {data.retention_days === 0 ? 'forever' : `for ${keptFor(data.retention_days)}`}.</span>
       {groups.length > visible.length && <button type="button" className="link" onClick={() => setLimit((value) => value + PAGE)}>Show {Math.min(PAGE, groups.length - visible.length)} more</button>}
     </div>
   </>

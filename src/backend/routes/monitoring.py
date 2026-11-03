@@ -146,7 +146,7 @@ def monitoring_server_events(server_id: main.PathId, days: int = 7, session_id: 
     if not server:
         raise main.HTTPException(status_code=404, detail="Server not found.")
     days = max(1, min(days, main.EVENTS_MAX_DAYS))
-    return {"server_id": server.id, "days": days, "retention_days": main.get_metrics_retention_days(db), "events": main.dashboard.server_events(db, server, days)}
+    return {"server_id": server.id, "days": days, "retention_days": main.retention.history_days(db), "events": main.dashboard.server_events(db, server, days)}
 
 @router.get("/monitoring/servers/{server_id}/mounts/history")
 def mount_history(

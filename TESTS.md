@@ -170,6 +170,7 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 | [`test_network_checks.py`](#test_network_checkspy) | 94 | The host's real network totals, listening-port inventory, optional internet check, firewall fingerprints, and the validation of all of it. |
 | [`test_pending_collectors.py`](#test_pending_collectorspy) | 28 | Adding servers: approval, join tokens, strict mode, re-pairing safety. |
 | [`test_rollups.py`](#test_rollupspy) | 31 | Summarised history: hourly, daily, weekly and monthly rollups, catching up, gaps, and purging only what has been summarised. |
+| [`test_retention.py`](#test_retentionpy) | 12 | How long history is kept: check-ins a week, hourly summaries and events for the setting, coarser summaries forever, in chunks. |
 | [`test_rules.py`](#test_rulespy) | 20 | Alert thresholds: sustained breaches, per-mount disks, settings validation. |
 | [`test_second_review.py`](#test_second_reviewpy) | 44 | The second security review's findings: helper-event caps, lockouts, chat limits, lookalike hostnames, odd input. |
 | [`test_stats.py`](#test_statspy) | 46 | Fleet statistics (incidents over time, availability) and the busy-hours heatmap: grouping, ranges, caching and validation. |
@@ -289,8 +290,8 @@ shouldn't, or an admin might be locked out.
 | `test_first_registered_user_is_admin_and_later_ones_are_not` | The first account created becomes the admin; the second is a regular user. |
 | `test_ensure_admin_exists_promotes_oldest_user_only_when_no_admin` | Upgrading an install from before roles existed promotes the oldest account to admin, only if there is no admin yet, and running it twice changes nothing more. |
 | `test_require_admin_rejects_regular_and_disabled_users` | Admin-only actions check the role in the database: regular users and disabled admins are refused with 403. |
-| `test_admin_can_change_retention_within_limits` | An admin can change how long metrics are kept; an invalid value (0 days) is rejected with 400. |
-| `test_purge_old_metrics_deletes_only_samples_past_retention` | The hourly cleanup deletes only host and container samples older than the retention period and keeps recent ones. |
+| `test_admin_can_keep_history_for_one_year_two_years_or_forever_and_nothing_shorter` | History is kept 1 year by default; an admin can choose 2 years or forever, and anything shorter (7, 30, 364 days) or longer than offered is rejected with 400. |
+| `test_the_purge_deletes_check_ins_older_than_a_week` | The hourly cleanup deletes host and container samples older than 7 days and keeps recent ones. |
 | `test_regular_user_sees_servers_but_not_pending_collectors` | Everyone signed in sees the servers, but only an admin sees the **New servers detected** list. |
 | `test_regular_user_cannot_manage_servers_or_collectors` *(9 inputs)* | A regular user is refused (403) for every admin action: viewing, rotating or revoking the enrollment key, approving or dismissing a pending server, adding or deleting a server, changing a check interval, and reading admin settings. |
 | `test_enrollment_key_stops_working_when_owner_is_no_longer_admin` | An enrollment key created by someone who was later demoted stops working. |
@@ -546,7 +547,7 @@ validation of container data, because everything a collector reports is untruste
 | `test_sustained_churn_is_capped_per_hour` | Containers constantly coming and going cannot flood the database: events are capped per hour with one notice. |
 | `test_container_changes_have_their_own_list_and_do_not_crowd_the_system_row` | Container changes appear in the Containers section, not in the System row, so they cannot push reboots out of it. |
 | `test_the_container_change_list_is_bounded` | The dashboard's container-change list is capped at 15 rows. |
-| `test_container_events_follow_the_normal_retention` | Container change events are deleted with the other old data after the retention period. |
+| `test_container_events_are_kept_for_the_history_retention` | Container change events are kept for the history setting: 40 days old stays, 400 days old goes. |
 
 **Memory-leak trends**
 
@@ -850,7 +851,7 @@ parsers odd, huge or hostile content.
 | `test_the_overview_shows_listeners_firewall_and_network_events` | The dashboard receives the listeners, firewall fingerprints, events and internet status. |
 | `test_network_events_have_their_own_list_and_do_not_crowd_the_other_rows` | Network events appear in the Network row and cannot push reboots or container changes out of theirs. |
 | `test_the_network_lists_are_bounded` | The dashboard's listener list is capped at 200 and the event list at 15. |
-| `test_network_events_follow_the_normal_retention` | Old network events are deleted with the other old data. |
+| `test_network_events_are_kept_for_the_history_retention` | Network events are kept for the history setting: 40 days old stays, 400 days old goes. |
 | `test_crafted_event_keys_cannot_raise_incidents_for_closed_or_loopback_ports` | Malformed or misleading stored event keys cannot raise an incident for a port that isn't open or isn't exposed. |
 
 ### test_pending_collectors.py
@@ -920,12 +921,29 @@ it was kept.
 | `test_after_downtime_the_job_catches_up_a_chunk_at_a_time` | After downtime the job catches up in limited chunks until nothing is left. |
 | `test_a_long_empty_stretch_cannot_stall_the_job` | A long stretch with no data at all still moves the job forward. |
 | `test_the_watermark_is_stored_per_tier_and_a_damaged_one_is_ignored` | The progress marker is saved per tier, and a damaged one makes the job start over harmlessly. |
-| `test_without_any_summaries_the_purge_behaves_as_before` | With no summaries yet, retention alone decides what the purge deletes (unchanged behaviour). |
+| `test_without_any_summaries_no_check_in_is_purged` | With no summaries yet, no check-in is deleted, however old. |
 | `test_samples_that_were_not_summarised_yet_are_never_purged` | The purge never deletes a sample newer than the last summarised hour, even when retention says it is old enough. |
 | `test_maintenance_summarises_before_it_purges` | Maintenance summarises first, then purges, so history is kept before it is deleted. |
 | `test_a_failing_rollup_job_stops_the_purge` | If summarising fails, nothing is purged that run. |
 | `test_between_purges_maintenance_only_summarises` | Between hourly purges, maintenance only summarises. |
 | `test_deleting_a_server_deletes_its_summaries_but_not_another_servers` | Deleting a server removes its summaries and leaves other servers' alone. |
+
+### test_retention.py
+
+How long history is kept (`src/backend/retention.py`).
+
+| Test | What it checks |
+|---|---|
+| `test_history_is_kept_a_year_unless_the_admin_chose_otherwise` | One year by default; the admin's choice is used. |
+| `test_a_stored_value_that_is_not_a_choice_means_the_default` *(3 inputs)* | A stored value that isn't 1 year, 2 years or forever falls back to one year. |
+| `test_hourly_summaries_older_than_the_setting_go_and_coarser_ones_stay` | Hourly host, mount and container summaries past a year go; daily and monthly ones stay. |
+| `test_two_years_keeps_what_one_year_would_delete` | The two-year setting keeps a 400-day-old hour. |
+| `test_forever_deletes_no_summary_and_no_event` | Forever deletes no hourly summary, event or availability hour. |
+| `test_hourly_summaries_stay_until_their_day_is_summarised` | An hour past the setting stays while its day has no summary yet. |
+| `test_events_older_than_the_setting_go` | Events past a year go, younger ones stay. |
+| `test_availability_results_go_after_a_week_and_their_hours_after_the_setting` | Availability results go after 7 days, their hourly summaries after the setting. |
+| `test_check_ins_go_after_a_week` | Check-in samples older than 7 days go. |
+| `test_a_big_purge_goes_in_chunks_and_still_deletes_everything_due` | Deleting in small chunks still deletes every row that is due. |
 
 ### test_rules.py
 

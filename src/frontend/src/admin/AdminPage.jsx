@@ -12,7 +12,7 @@ import { Caret, Icon } from '../icons.jsx'
 import { refreshOverview, useOverview } from '../overviewStore.js'
 import { AppShell, serverLink } from '../shell.jsx'
 import { ADMIN_GROUPS } from '../more/groups.js'
-import { Field, Notice, Outcome, Row, Section, SettingsLayout, ShownOnce, Soon, Switch, ago, useAction, useLoaded, usePhone } from '../ui.jsx'
+import { Field, Notice, Outcome, Row, Section, SettingsLayout, ShownOnce, Soon, Switch, ago, keptFor, useAction, useLoaded, usePhone } from '../ui.jsx'
 
 const REPOSITORY = 'https://github.com/karloks2005/Infradeck'
 const STATE_DOT = { critical: 'dot-signal', warn: 'dot-warn', ok: 'dot-ok', offline: '' }
@@ -442,11 +442,13 @@ function Retention({ settings, system, onSaved }) {
   const database = system.database
   return (
     <div className="card divide-y divide-line">
-      <Row title="Check-ins and their summaries" detail="Every check-in is kept for a week; hourly, daily, weekly and monthly summaries for as long as this says. Statistics reads the summaries for ranges past 7 days.">
-        <select className="select" aria-label="Retention" value={settings.metrics_retention_days} disabled={state.busy} onChange={(event) => run(async () => onSaved(await put({ metrics_retention_days: Number(event.target.value) })), 'Saved.')}>
-          {[...new Set([7, 30, 90, 365, settings.metrics_retention_days])].sort((a, b) => a - b).map((days) => <option key={days} value={days}>{days === 365 ? '1 year' : `${days} days`}</option>)}
+      <Row title="Every check-in" detail="Each server's report, about one a minute, and every availability result. Charts for ranges past 7 days read the summaries below."><span className="text-[13px] text-soft">7 days</span></Row>
+      <Row title="Hourly summaries and events" detail="The average and peak of every metric per hour, each check's uptime per hour, and events such as reboots, OOM kills and port changes. Older hours are deleted once their day is summarised.">
+        <select className="select" aria-label="Keep hourly summaries and events" value={settings.history_retention_days} disabled={state.busy} onChange={(event) => run(async () => onSaved(await put({ history_retention_days: Number(event.target.value) })), 'Saved.')}>
+          {[365, 730, 0].map((days) => <option key={days} value={days}>{keptFor(days)[0].toUpperCase() + keptFor(days).slice(1)}</option>)}
         </select>
       </Row>
+      <Row title="Daily, weekly and monthly summaries" detail="A few kilobytes per server a year, so they are never deleted."><span className="text-[13px] text-soft">Forever</span></Row>
       <Row title="Incidents" detail="Kept until their server is removed."><span className="text-[13px] text-soft">Forever</span></Row>
       <Row icon="db" title="Database" detail={`${database.engine}${database.host_rows != null ? ` · ${database.host_rows.toLocaleString()} check-ins stored, ${database.host_rows_week.toLocaleString()} from the last 7 days` : ''}`}>
         <span className="mr-2 text-lg font-semibold text-paper">{megabytes(database.bytes)}</span>

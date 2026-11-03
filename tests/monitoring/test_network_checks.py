@@ -619,12 +619,12 @@ def test_the_network_lists_are_bounded(db, monkeypatch):
     assert len(network["listeners"]) == main.LISTENERS_SHOWN and len(network["events"]) == main.NETWORK_EVENTS_SHOWN
 
 
-def test_network_events_follow_the_normal_retention(db):
-    old = datetime.now(timezone.utc) - timedelta(days=40)
-    db.add_all([SystemEvent(server_id=5, time=old, kind=kind, detail="x", event_key="x") for kind in rules.NETWORK_EVENT_KINDS])
+def test_network_events_are_kept_for_the_history_retention(db):
+    now = datetime.now(timezone.utc)
+    db.add_all([SystemEvent(server_id=5, time=now - timedelta(days=days), kind=kind, detail="x", event_key="x") for kind in rules.NETWORK_EVENT_KINDS for days in (40, 400)])
     db.commit()
 
-    assert main.purge_old_metrics(db) == len(rules.NETWORK_EVENT_KINDS)
+    assert main.retention.purge(db) == len(rules.NETWORK_EVENT_KINDS)   # the ones from 400 days ago; a year is the default
 
 
 def test_crafted_event_keys_cannot_raise_incidents_for_closed_or_loopback_ports(db):

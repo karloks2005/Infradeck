@@ -63,25 +63,27 @@ def test_require_admin_rejects_regular_and_disabled_users(db, monkeypatch):
         assert error.value.status_code == 403
 
 
-def test_admin_can_change_retention_within_limits(db, monkeypatch):
+def test_admin_can_keep_history_for_one_year_two_years_or_forever_and_nothing_shorter(db, monkeypatch):
     db.add(User(id=1, name="Admin", email="a@example.com", password_hash="x", role="admin"))
     db.commit()
     _login_as(monkeypatch, 1)
 
-    assert main.get_admin_settings(session_id="s", db=db)["metrics_retention_days"] == main.DEFAULT_METRICS_RETENTION_DAYS
-    main.update_admin_settings(main.AdminSettingsRequest(metrics_retention_days=7), session_id="s", db=db)
-    assert main.get_admin_settings(session_id="s", db=db)["metrics_retention_days"] == 7
+    assert main.get_admin_settings(session_id="s", db=db)["history_retention_days"] == 365
+    for days in (730, 0, 365):
+        main.update_admin_settings(main.AdminSettingsRequest(history_retention_days=days), session_id="s", db=db)
+        assert main.get_admin_settings(session_id="s", db=db)["history_retention_days"] == days
 
-    with pytest.raises(HTTPException) as error:
-        main.update_admin_settings(main.AdminSettingsRequest(metrics_retention_days=0), session_id="s", db=db)
-    assert error.value.status_code == 400
+    for days in (7, 30, 364, 3650):
+        with pytest.raises(HTTPException) as error:
+            main.update_admin_settings(main.AdminSettingsRequest(history_retention_days=days), session_id="s", db=db)
+        assert error.value.status_code == 400
 
 
-def test_purge_old_metrics_deletes_only_samples_past_retention(db):
+def test_the_purge_deletes_check_ins_older_than_a_week(db):
     now = datetime(2026, 9, 25, tzinfo=timezone.utc)
     db.add(User(id=1, name="Owner", email="o@example.com", password_hash="x"))
     db.add(Server(id=1, owner_id=1, hostname="nas"))
-    db.add(AppSetting(key=main.METRICS_RETENTION_KEY, value="7"))
+    db.add(AppSetting(key="rollup_done_hour", value=now.isoformat()))   # everything is summarised
     db.add_all([
         HostMetric(server_id=1, time=now - timedelta(days=8)),
         HostMetric(server_id=1, time=now - timedelta(days=6)),
@@ -90,7 +92,7 @@ def test_purge_old_metrics_deletes_only_samples_past_retention(db):
     ])
     db.commit()
 
-    assert main.purge_old_metrics(db, now=now) == 2
+    assert main.retention.purge(db, now=now) == 2
     assert db.query(HostMetric).count() == 1
     assert db.query(ContainerMetric).count() == 1
 
@@ -156,7 +158,7 @@ def test_admin_can_turn_agent_chat_off_and_on(fleet, monkeypatch):
 
     result = main.update_admin_settings(main.AdminSettingsRequest(agent_chat_enabled=False), session_id="s", db=fleet)
 
-    assert result == {"instance_name": main.get_instance_name(fleet), "metrics_retention_days": main.DEFAULT_METRICS_RETENTION_DAYS, "agent_chat_enabled": False, "alert_thresholds": rules.DEFAULT_THRESHOLDS, "mount_thresholds": {}, "require_2fa_for_admins": True, "secrets_configured": main.secrets_box.available(), "require_2fa_for_everyone": False, "disabled_rules": [],
+    assert result == {"instance_name": main.get_instance_name(fleet), "history_retention_days": 365, "agent_chat_enabled": False, "alert_thresholds": rules.DEFAULT_THRESHOLDS, "mount_thresholds": {}, "require_2fa_for_admins": True, "secrets_configured": main.secrets_box.available(), "require_2fa_for_everyone": False, "disabled_rules": [],
                       "agent_prices": {}, "agent_monthly_cap_usd": None, "agent_daily_chat_limit": main.agent_usage.DEFAULT_DAILY_CHAT_LIMIT, "agent_auto_diagnose": True,
                       "agent_show_diagnoses_to_users": True, "agent_chat_access": "admins_only"}
     _login_as(monkeypatch, 2)

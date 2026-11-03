@@ -27,7 +27,7 @@ from sqlalchemy import case, func
 from .alerts import CONTAINER_RULE_PREFIX, CRITICAL, SERVER_OFFLINE_RULE, SEVERITIES, active_rule_keys, raise_alert, resolve_alerts, sync_alerts
 import contextvars
 
-from . import auth, availability, dashboard, history as history_service, incidents, notify, rollups, secrets_box, stats, totp
+from . import auth, availability, dashboard, history as history_service, incidents, notify, retention, rollups, secrets_box, stats, totp
 from .auth import (
     STAGE_ENROLLMENT, STAGE_FULL, count_pending_attempt, create_pending_two_factor, create_session, delete_pending_two_factor, delete_session, get_recent_logs,
     get_session, get_user_from_session, hash_password, issue_recovery_codes, list_user_sessions, pending_two_factor_remember, read_pending_two_factor, session_lifetime, recovery_codes_left, record_audit_log,
@@ -180,7 +180,7 @@ class ApproveRequest(BaseModel):
 
 class AdminSettingsRequest(BaseModel):
     # Both optional so the admin page can save one setting at a time.
-    metrics_retention_days: int | None = None
+    history_retention_days: int | None = None
     agent_chat_enabled: bool | None = None
     require_2fa_for_admins: bool | None = None
     alert_thresholds: dict | None = None
@@ -509,12 +509,6 @@ def ensure_admin_exists(db) -> None:
         db.commit()
 
 
-METRICS_RETENTION_KEY = "metrics_retention_days"
-DEFAULT_METRICS_RETENTION_DAYS = 30
-MIN_METRICS_RETENTION_DAYS = 1
-MAX_METRICS_RETENTION_DAYS = 3650
-
-
 AGENT_CHAT_ENABLED_KEY = "agent_chat_enabled"
 REQUIRE_ADMIN_2FA_KEY = "require_admin_2fa"
 TWO_FACTOR_ATTEMPTS = 5
@@ -529,14 +523,6 @@ def _set_setting(db, key: str, value: str) -> None:
         setting.value = value
     else:
         db.add(AppSetting(key=key, value=value))
-
-
-def get_metrics_retention_days(db) -> int:
-    setting = db.get(AppSetting, METRICS_RETENTION_KEY)
-    try:
-        return int(setting.value) if setting else DEFAULT_METRICS_RETENTION_DAYS
-    except ValueError:
-        return DEFAULT_METRICS_RETENTION_DAYS
 
 
 def require_admin_two_factor(db) -> bool:
@@ -608,25 +594,10 @@ def get_mount_thresholds(db) -> dict:
 
 
 def _admin_settings(db) -> dict:
-    return {"instance_name": get_instance_name(db), "metrics_retention_days": get_metrics_retention_days(db), "agent_chat_enabled": is_agent_chat_enabled(db), "alert_thresholds": get_alert_thresholds(db), "mount_thresholds": get_mount_thresholds(db), "require_2fa_for_admins": require_admin_two_factor(db), "secrets_configured": secrets_box.available(),
+    return {"instance_name": get_instance_name(db), "history_retention_days": retention.history_days(db), "agent_chat_enabled": is_agent_chat_enabled(db), "alert_thresholds": get_alert_thresholds(db), "mount_thresholds": get_mount_thresholds(db), "require_2fa_for_admins": require_admin_two_factor(db), "secrets_configured": secrets_box.available(),
             "require_2fa_for_everyone": require_two_factor_for_everyone(db), "disabled_rules": sorted(get_disabled_rules(db)),
             "agent_prices": agent_usage.get_prices(db), "agent_monthly_cap_usd": agent_usage.get_cap(db), "agent_daily_chat_limit": agent_usage.get_daily_limit(db), "agent_auto_diagnose": agent_settings.auto_diagnose(db),
             "agent_show_diagnoses_to_users": agent_settings.show_diagnoses_to_users(db), "agent_chat_access": agent_settings.chat_access(db)}
-
-
-def purge_old_metrics(db, now: datetime | None = None) -> int:
-    """Delete host and container samples older than the retention period."""
-    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=get_metrics_retention_days(db))
-    # Check-in samples that haven't been summarised yet are never deleted, whatever the retention says.
-    summarised_until = rollups.hour_watermark(db)
-    if summarised_until is not None:
-        cutoff = min(cutoff, summarised_until)
-    deleted = db.query(HostMetric).filter(HostMetric.time < cutoff).delete(synchronize_session=False)
-    deleted += db.query(ContainerMetric).filter(ContainerMetric.time < cutoff).delete(synchronize_session=False)
-    deleted += db.query(MountMetric).filter(MountMetric.time < cutoff).delete(synchronize_session=False)
-    deleted += db.query(SystemEvent).filter(SystemEvent.time < cutoff).delete(synchronize_session=False)
-    db.commit()
-    return deleted
 
 
 @app.get("/admin/settings")
@@ -639,12 +610,12 @@ def get_admin_settings(session_id: Annotated[str | None, Cookie(alias=SESSION_CO
 def update_admin_settings(payload: AdminSettingsRequest, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     user = _require_admin(session_id, db)
     changes = []
-    days = payload.metrics_retention_days
-    if days is not None:
-        if not MIN_METRICS_RETENTION_DAYS <= days <= MAX_METRICS_RETENTION_DAYS:
-            raise HTTPException(status_code=400, detail=f"Retention must be between {MIN_METRICS_RETENTION_DAYS} and {MAX_METRICS_RETENTION_DAYS} days.")
-        _set_setting(db, METRICS_RETENTION_KEY, str(days))
-        changes.append(f"Changed metrics retention to {days} days")
+    days = payload.history_retention_days
+    if days is not None and days != retention.history_days(db):
+        if days not in retention.HISTORY_CHOICES:
+            raise HTTPException(status_code=400, detail="History is kept for 1 year, 2 years or forever.")
+        _set_setting(db, retention.HISTORY_KEY, str(days))
+        changes.append(f"Changed history retention to {retention.describe(days)}")
     if payload.require_2fa_for_admins is not None and payload.require_2fa_for_admins != require_admin_two_factor(db):
         _set_setting(db, REQUIRE_ADMIN_2FA_KEY, "true" if payload.require_2fa_for_admins else "false")
         changes.append(f"{'Required' if payload.require_2fa_for_admins else 'Stopped requiring'} two-factor for administrators")
@@ -982,8 +953,7 @@ def metrics_maintenance(db, purge_due: bool) -> bool:
         return False
     if not purge_due:
         return False
-    purge_old_metrics(db)
-    availability.purge(db)
+    retention.purge(db)
     analyze_memory_trends(db)
     return True
 

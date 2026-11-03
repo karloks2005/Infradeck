@@ -130,7 +130,7 @@ def admin_system(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_N
     return {
         "version": APP_VERSION, "database": {"engine": engine.dialect.name, "bytes": size,
                                              "host_rows": db.query(func.count(HostMetric.id)).scalar(), "host_rows_week": db.query(func.count(HostMetric.id)).filter(HostMetric.time >= week).scalar()},
-        "retention_days": main.get_metrics_retention_days(db),
+        "history_retention_days": main.retention.history_days(db),
         "agent": {"provider": "OpenAI", "model": AGENT_MODEL, "key_configured": bool(configured_key()), "budget": agent_usage.budget(db), "chat_enabled": main.is_agent_chat_enabled(db),
                   "incidents_this_month": db.query(IncidentAlert).filter(IncidentAlert.created_at >= month).count(),
                   "chat_messages_this_month": db.query(ChatMessage).filter(ChatMessage.role == "user", ChatMessage.created_at >= month).count()},

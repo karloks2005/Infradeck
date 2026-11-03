@@ -580,7 +580,8 @@ class CheckResult(Base):
     """One run of a check by one server's collector."""
 
     __tablename__ = "check_results"
-    __table_args__ = (Index("ix_check_results_check_time", "check_id", "time"),)
+    # (check_id, time) serves reading one check; time alone serves the purge.
+    __table_args__ = (Index("ix_check_results_check_time", "check_id", "time"), Index("ix_check_results_time", "time"))
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     check_id: Mapped[int] = mapped_column(ForeignKey("checks.id", ondelete="CASCADE"), nullable=False)
@@ -598,7 +599,8 @@ class CheckRollup(Base):
     1-year and 90-day views are added up from these; the current hour comes from the raw results."""
 
     __tablename__ = "check_rollups"
-    __table_args__ = (UniqueConstraint("check_id", "hour"),)
+    # hour alone serves the purge (retention.py).
+    __table_args__ = (UniqueConstraint("check_id", "hour"), Index("ix_check_rollups_hour", "hour"))
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     check_id: Mapped[int] = mapped_column(ForeignKey("checks.id", ondelete="CASCADE"), index=True, nullable=False)

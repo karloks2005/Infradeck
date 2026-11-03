@@ -146,13 +146,17 @@ Passive, and only what the collector can read without privileges.
 
 ## How history is stored
 
-The check-in snapshots are kept for the retention period (30 days by default). A background job also
+The check-in snapshots are kept for 7 days. A background job
 summarises them into one row per **hour, day, week (Monday to Sunday) and month**, all in UTC, for
 every server, filesystem and container. Each row stores, for every metric:
 
 - the **average** over the check-ins in that period,
 - the **highest value** (maximum) seen in a check-in,
 - the number of check-ins that reported it (so averages stay exact when some check-ins lack a value).
+
+Hourly rows are kept for 1 year by default (2 years or forever in *Admin → Data & retention*); daily,
+weekly and monthly rows are kept forever. The further back you look, the coarser the history, but a spike
+stays visible through the maximum.
 
 What that means on the Statistics page:
 

@@ -70,11 +70,14 @@ def test_a_database_from_before_migrations_keeps_its_data_and_ends_at_the_latest
     Base.metadata.create_all(engine)   # how the schema was made before Alembic
     with engine.begin() as connection:
         connection.execute(text("INSERT INTO app_settings (key, value, updated_at) VALUES ('instance_name', 'lab', CURRENT_TIMESTAMP)"))
+        connection.execute(text("INSERT INTO app_settings (key, value, updated_at) VALUES ('metrics_retention_days', '30', CURRENT_TIMESTAMP)"))
     upgrade_database(engine)
     assert _version(engine) == _head()
     assert _differences(engine) == []
     with engine.connect() as connection:
         assert connection.execute(text("SELECT value FROM app_settings WHERE key = 'instance_name'")).scalar() == "lab"
+        # 0002: the old retention setting has no meaning any more
+        assert connection.execute(text("SELECT count(*) FROM app_settings WHERE key = 'metrics_retention_days'")).scalar() == 0
 
 
 def test_an_old_database_missing_tables_and_columns_is_brought_up_to_date(engine):

@@ -483,13 +483,13 @@ def test_the_container_change_list_is_bounded(db, monkeypatch):
     assert len(monitoring_routes.monitoring_overview(session_id="s", db=db)["servers"][0]["container_events"]) == main.CONTAINER_EVENTS_SHOWN
 
 
-def test_container_events_follow_the_normal_retention(db):
-    old = datetime.now(timezone.utc) - timedelta(days=40)
-    db.add_all([SystemEvent(server_id=5, time=old, kind=kind, detail="x", event_key="x") for kind in rules.CONTAINER_EVENT_KINDS])
+def test_container_events_are_kept_for_the_history_retention(db):
+    now = datetime.now(timezone.utc)
+    db.add_all([SystemEvent(server_id=5, time=now - timedelta(days=days), kind=kind, detail="x", event_key="x") for kind in rules.CONTAINER_EVENT_KINDS for days in (40, 400)])
     db.commit()
 
-    assert main.purge_old_metrics(db) == len(rules.CONTAINER_EVENT_KINDS)
-    assert db.query(SystemEvent).count() == 0
+    assert main.retention.purge(db) == len(rules.CONTAINER_EVENT_KINDS)   # the ones from 400 days ago; a year is the default
+    assert db.query(SystemEvent).count() == len(rules.CONTAINER_EVENT_KINDS)
 
 
 # --- backend: memory leak trends (#20) --------------------------------------------------------------

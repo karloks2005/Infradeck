@@ -456,11 +456,11 @@ URL, a keyword or a value in a JSON reply, a TCP port, a TLS certificate, a DNS 
   whitelist of metric names, cap the number of points and rows they read, and cache fleet answers for a
   minute under keys made only from validated values, so a request cannot make them do unbounded work or
   fill the cache. Text from the server (container names, mount paths) is shown as text, never as HTML.
-- **Retention.** Raw check-in samples (host, container, mount and system-event rows) are deleted once
-  they are older than the retention period, an admin setting under *Admin → Data & retention* (7, 30, 90
-  or 365 days); samples not yet summarised are never deleted, whatever the setting says. The small
-  hourly/daily/weekly/monthly summaries are kept, so long-range history stays available while the bulky
-  raw rows don't grow without bound.
+- **Retention.** Raw check-in samples (host, container and mount rows) and availability results are
+  deleted after 7 days. Hourly summaries and events are kept for the admin setting under *Admin → Data &
+  retention* (1 year by default, 2 years or forever; nothing shorter can be chosen); daily, weekly and
+  monthly summaries are kept forever. Nothing is deleted before the coarser level that replaces it exists,
+  so long-range history stays available while the bulky raw rows don't grow without bound.
 
 ## Other exposure to be aware of
 

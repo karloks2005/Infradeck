@@ -50,4 +50,4 @@ What to know about the statistics:
   has **View as table** as an alternative.
 - **Not built yet** (tracked in Milestone 8 on GitHub): CSV and JSON export, reboots per month, a
   state timeline and restarts per day for containers, rankings over the chosen range, network
-  traffic charts, event markers on charts, and retention settings for the summaries.
+  traffic charts and event markers on charts.

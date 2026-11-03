@@ -199,6 +199,9 @@ export function ShownOnce({ value, children }) {
   )
 }
 
+// How long the history setting keeps something: 365 → "1 year", 0 → "forever".
+export const keptFor = (days) => (days === 0 ? 'forever' : days === 365 ? '1 year' : `${Math.round(days / 365)} years`)
+
 export const formatDate = (time) => new Date(time).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })
 
 // "4 s ago", "2 h ago", "6 d ago", or the date once it is more than a month back.
