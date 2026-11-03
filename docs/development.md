@@ -49,6 +49,22 @@ helpers have their own tests that need only Node 20 or newer: `cd src/frontend &
 [TESTS.md](../TESTS.md) for how the tests work, what they don't cover, and what every
 test is for.
 
+## Database migrations
+
+Change the models in `src/backend/models.py`, then generate a revision against a database that is at the
+latest revision (the development stack's PostgreSQL, or any empty database the backend has started on once):
+
+```bash
+DATABASE_URL=postgresql+psycopg://infradeck:<password>@127.0.0.1:5432/infradeck alembic revision --autogenerate -m "add servers.location"
+```
+
+Read the generated file in `src/backend/migrations/versions/` before committing it: Alembic can't tell a
+renamed column from a dropped and added one, and data changes (backfills) have to be written by hand. Name
+revisions with the next number (`--rev-id 0002`). The backend applies new revisions at its next start;
+`alembic upgrade head` and `alembic downgrade -1` do it by hand. `tests/history/test_migrations.py` fails when
+the models and the revisions describe different schemas; set `MIGRATION_TEST_POSTGRES_URL` to an empty
+PostgreSQL database to run it there as well as on SQLite.
+
 ## Project layout
 
 ```text
@@ -61,6 +77,7 @@ SECURITY.md                 what each component can touch, and its limits
 TESTS.md                    how to run the tests and what each one checks
 requirements-dev.txt        app requirements plus pytest, for running the tests
 pytest.ini                  test settings (lets plain `pytest` find the `src` package)
+alembic.ini                 settings for the `alembic` command (writing new migrations)
 .github/workflows/
   images.yml                builds, signs and publishes the collector images on a version tag
 docker/
@@ -73,12 +90,13 @@ docker/
   nginx.strict.conf         server stack: public listener, collector endpoints refused
   nginx.collector.conf      server stack: collector gate (VPN and internal listeners)
   Caddyfile                 optional HTTPS front door (dev compose, --profile https)
-  postgres/init/            SQL run on a fresh PostgreSQL volume
 src/
   backend/                  API: auth, monitoring, enrollment, rate limits, models
     alerts.py               alert engine: one incident per rule, auto-resolve
     rules.py                alert rules and default thresholds
     rollups.py              summarises check-ins into hourly/daily/weekly/monthly rollups
+    migrate.py              runs the database migrations at start
+    migrations/             Alembic revisions (versions/); 0001 is the baseline
     history.py              range-aware history behind the Statistics page
     stats.py                fleet statistics: incidents over time, availability, busy-hours heatmap
     totp.py                 one-time codes and recovery codes (standard library only)

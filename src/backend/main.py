@@ -22,7 +22,7 @@ from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, EmailStr, Field, field_validator
-from sqlalchemy import case, func, inspect, text
+from sqlalchemy import case, func
 
 from .alerts import CONTAINER_RULE_PREFIX, CRITICAL, SERVER_OFFLINE_RULE, SEVERITIES, active_rule_keys, raise_alert, resolve_alerts, sync_alerts
 import contextvars
@@ -34,9 +34,10 @@ from .auth import (
     register_user, revoke_other_sessions, revoke_user_session, validate_password, verify_credentials, verify_password, verify_second_factor,
 )
 from .db import SessionLocal, check_database, get_db
-from .models import ApiToken, Invite, NotificationChannel, AppSetting, AuditLog, Base, ChatMessage, Check, ContainerMetric, ContainerRollup, Conversation, EnrollmentKey, FirewallState, HostMetric, HostRollup, IncidentAlert, JoinToken, ListenerState, MountMetric, MountRollup, PendingCollector, RecoveryCode, Server, SystemEvent, User
+from .models import ApiToken, Invite, NotificationChannel, AppSetting, AuditLog, ChatMessage, Check, ContainerMetric, ContainerRollup, Conversation, EnrollmentKey, FirewallState, HostMetric, HostRollup, IncidentAlert, JoinToken, ListenerState, MountMetric, MountRollup, PendingCollector, RecoveryCode, Server, SystemEvent, User
 
 from .db import engine
+from .migrate import upgrade_database
 from .config import (
     AGENT_MODEL,
     APP_VERSION,
@@ -330,83 +331,7 @@ def registration_warning(db) -> str | None:
 
 @app.on_event("startup")
 def startup_event():
-    Base.metadata.create_all(bind=engine)
-    with engine.begin() as connection:
-        if engine.dialect.name == "postgresql":
-            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS task_title VARCHAR(255)"))
-            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS steps TEXT"))
-            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS conversation_id VARCHAR(255)"))
-            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS event_type VARCHAR(50)"))
-            for column, column_type in (
-                ("memory_limit_mb", "DOUBLE PRECISION"), ("net_rx_mb", "DOUBLE PRECISION"), ("net_tx_mb", "DOUBLE PRECISION"),
-                ("block_read_mb", "DOUBLE PRECISION"), ("block_write_mb", "DOUBLE PRECISION"), ("pids", "INTEGER"),
-                ("started_at", "VARCHAR(64)"), ("ports", "VARCHAR(512)"),
-            ):
-                connection.execute(text(f"ALTER TABLE container_metrics ADD COLUMN IF NOT EXISTS {column} {column_type}"))
-            for column, column_type in (
-                ("boot_id", "VARCHAR(64)"), ("oom_kill_total", "INTEGER"), ("kernel_tainted", "INTEGER"),
-                ("ntp_synced", "BOOLEAN"), ("reboot_required", "BOOLEAN"), ("last_shutdown", "VARCHAR(16)"),
-                ("docker_status", "VARCHAR(16)"), ("docker_reason", "VARCHAR(16)"), ("docker_latency_ms", "INTEGER"),
-                ("internet_status", "VARCHAR(16)"), ("internet_latency_ms", "INTEGER"), ("collect_duration_ms", "INTEGER"),
-            ):
-                connection.execute(text(f"ALTER TABLE host_metrics ADD COLUMN IF NOT EXISTS {column} {column_type}"))
-            for column, column_type in (("exit_code", "INTEGER"), ("oom_killed", "BOOLEAN"), ("finished_at", "TIMESTAMP WITH TIME ZONE"), ("image_id", "VARCHAR(80)"), ("project", "VARCHAR(128)"), ("volumes", "VARCHAR(512)"), ("swap_mb", "DOUBLE PRECISION")):
-                connection.execute(text(f"ALTER TABLE container_metrics ADD COLUMN IF NOT EXISTS {column} {column_type}"))
-            connection.execute(text("ALTER TABLE system_events ADD COLUMN IF NOT EXISTS event_key VARCHAR(128)"))
-            connection.execute(text("ALTER TABLE pending_collectors ADD COLUMN IF NOT EXISTS join_token_id INTEGER REFERENCES join_tokens(id) ON DELETE SET NULL"))
-            connection.execute(text("ALTER TABLE pending_collectors ADD COLUMN IF NOT EXISTS details TEXT"))
-            for column, column_type in (("avg_swap_mb", "DOUBLE PRECISION"), ("n_swap_mb", "INTEGER NOT NULL DEFAULT 0"), ("max_swap_mb", "DOUBLE PRECISION")):
-                connection.execute(text(f"ALTER TABLE container_rollups ADD COLUMN IF NOT EXISTS {column} {column_type}"))
-            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_system_events_event_key ON system_events (event_key)"))
-            # Composite indexes that match how the metrics tables are read, then the single-column ones they make
-            # redundant (and the pointless indexes on each table's own primary key). Safe to repeat. Creating an index
-            # briefly blocks writes to that table; on a very large table create them first by hand with CONCURRENTLY.
-            for table, name, columns in (
-                ("host_metrics", "ix_host_metrics_server_time", "server_id, time"),
-                ("mount_metrics", "ix_mount_metrics_server_time", "server_id, time"),
-                ("system_events", "ix_system_events_server_time", "server_id, time"),
-                ("container_metrics", "ix_container_metrics_server_container_time", "server_id, container_id, time"),
-            ):
-                connection.execute(text(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({columns})"))
-            for redundant in (
-                "ix_host_metrics_id", "ix_host_metrics_server_id", "ix_mount_metrics_id", "ix_mount_metrics_server_id",
-                "ix_system_events_id", "ix_system_events_server_id",
-                "ix_container_metrics_id", "ix_container_metrics_server_id", "ix_container_metrics_container_id",
-            ):
-                connection.execute(text(f"DROP INDEX IF EXISTS {redundant}"))
-            for column, column_type in (("totp_secret_enc", "TEXT"), ("totp_enabled", "BOOLEAN NOT NULL DEFAULT FALSE"), ("totp_last_step", "INTEGER"), ("password_changed_at", "TIMESTAMP WITH TIME ZONE")):
-                connection.execute(text(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {column} {column_type}"))
-            connection.execute(text("ALTER TABLE incident_alerts ADD COLUMN IF NOT EXISTS rule_key VARCHAR(255)"))
-            connection.execute(text("ALTER TABLE incident_alerts ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP WITH TIME ZONE"))
-            for column, column_type in (("resolution", "VARCHAR(255)"), ("acknowledged_at", "TIMESTAMP WITH TIME ZONE"), ("acknowledged_by", "INTEGER"), ("muted_until", "TIMESTAMP WITH TIME ZONE"),
-                                        ("notified_at", "TIMESTAMP WITH TIME ZONE"), ("resolve_notified_at", "TIMESTAMP WITH TIME ZONE"), ("reopen_after", "TIMESTAMP WITH TIME ZONE")):
-                connection.execute(text(f"ALTER TABLE incident_alerts ADD COLUMN IF NOT EXISTS {column} {column_type}"))
-            for column, column_type in (("username", "VARCHAR(64)"), ("avatar_color", "VARCHAR(16)"), ("preferences", "TEXT"), ("last_seen_at", "TIMESTAMP WITH TIME ZONE"), ("agent_chat_enabled", "BOOLEAN NOT NULL DEFAULT FALSE")):
-                connection.execute(text(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {column} {column_type}"))
-            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_incident_alerts_rule_key ON incident_alerts (rule_key)"))
-            # Alerts from before the alert engine: offline alerts keep going under their rule, the rest were
-            # duplicated on every check-in with no way to resolve, so close them; the engine re-raises live ones.
-            connection.execute(text("UPDATE incident_alerts SET rule_key = :rule WHERE rule_key IS NULL AND description = :description"), {"rule": SERVER_OFFLINE_RULE, "description": OFFLINE_ALERT_DESCRIPTION})
-            connection.execute(text("UPDATE incident_alerts SET status = 'resolved', resolved_at = NOW() WHERE rule_key IS NULL AND status = 'active'"))
-            # Disk and inode alerts became per mount; the old keys were for the root filesystem.
-            connection.execute(text("UPDATE incident_alerts SET rule_key = rule_key || ':/' WHERE rule_key IN ('host:disk', 'host:inodes')"))
-    if "servers" in inspect(engine).get_table_names():
-        columns = {column["name"] for column in inspect(engine).get_columns("servers")}
-        if "collector_token_hash" not in columns:
-            with engine.begin() as connection:
-                connection.execute(text("ALTER TABLE servers ADD COLUMN collector_token_hash VARCHAR(64)"))
-        if "machine_id" not in columns:
-            with engine.begin() as connection:
-                connection.execute(text("ALTER TABLE servers ADD COLUMN machine_id VARCHAR(64)"))
-        if "is_dashboard_host" not in columns:
-            with engine.begin() as connection:
-                connection.execute(text("ALTER TABLE servers ADD COLUMN is_dashboard_host BOOLEAN NOT NULL DEFAULT FALSE"))
-        if "system_info" not in columns:
-            with engine.begin() as connection:
-                connection.execute(text("ALTER TABLE servers ADD COLUMN system_info TEXT"))
-        if "name_locked" not in columns:
-            with engine.begin() as connection:
-                connection.execute(text("ALTER TABLE servers ADD COLUMN name_locked BOOLEAN NOT NULL DEFAULT FALSE"))
+    upgrade_database(engine)   # src/backend/migrations; a failing revision stops the start here
     db = SessionLocal()
     try:
         ensure_admin_exists(db)

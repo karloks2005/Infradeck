@@ -1,3 +1,4 @@
+alembic
 bcrypt
 cryptography
 email-validator

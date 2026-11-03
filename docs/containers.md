@@ -140,8 +140,8 @@ while it was down are lost (the collector does not queue them), so the history h
 The full list of tables is in [Database schema](database.md).
 
 **How it works.** The official `postgres:16-alpine` image with its data in the `postgres_data` volume.
-On the very first start, [`docker/postgres/init/`](../docker/postgres/init) creates the users table; the
-backend creates and upgrades everything else itself at startup. The healthcheck (`pg_isready`) holds the
+The backend creates every table and upgrades the schema itself at startup (Alembic migrations in
+[`src/backend/migrations/`](../src/backend/migrations)). The healthcheck (`pg_isready`) holds the
 backend back until the database accepts connections. The container is on the internal `data` network
 only and publishes no port.
 

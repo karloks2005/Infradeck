@@ -2,9 +2,8 @@
 
 # Database schema
 
-Tables are created on backend startup (`Base.metadata.create_all`), and new
-columns are added with `ALTER TABLE ... IF NOT EXISTS` in the startup hook in
-`src/backend/main.py`. Each check-in stores one row in `host_metrics` (which also
+The backend creates and upgrades the schema itself at startup with Alembic migrations
+(see [Migrations](#migrations)). Each check-in stores one row in `host_metrics` (which also
 carries the boot ID, OOM counter, kernel flags, clock state and last shutdown), one
 per filesystem in `mount_metrics` and one per container in `container_metrics` (which
 also records the exit code, out-of-memory flag, finish time and image ID), all with the
@@ -12,8 +11,8 @@ same timestamp. `system_events` holds reboots, OOM kills, kernel messages, conta
 changes (appeared, removed, image changed) and network changes (ports opened or closed,
 firewall changes); `listener_states` and `firewall_states` hold what was last seen, `join_tokens` the hashed single-use tokens, `recovery_codes` the hashed two-factor
 recovery codes (the encrypted two-factor secret lives on the `users` row), and per-mount disk
-thresholds live in `app_settings`. `docker/postgres/init/01_create_users.sql` initialises
-the `users` table on a fresh volume.
+thresholds live in `app_settings`. Every table is created and changed by the migrations in
+`src/backend/migrations/` (see Migrations below).
 
 **The agent's spending.** `agent_runs` has one row per call to the language model: what it was for (`chat`, later
 `diagnosis`), whether it worked, the model, input and output tokens, the estimated cost in USD, how long it took, and
@@ -39,9 +38,29 @@ purge never deletes samples that have not been summarised yet. The Statistics pa
 not purged yet; a retention setting for each level is planned.
 
 The metrics tables carry only the indexes their queries use: `time` (for the hourly purge) and
-`(server_id, time)`, or `(server_id, container_id, time)` for containers. Older databases are
-migrated at start: the new indexes are created and the redundant single-column ones are dropped,
-which can be repeated safely. Creating an index briefly blocks writes to that table (a few
-seconds for a table of millions of rows); on a very large install, create the indexes yourself
-first with `CREATE INDEX CONCURRENTLY IF NOT EXISTS <name> ON <table> (<columns>)` using the names
-in `src/backend/models.py`, and the start-up migration will skip them.
+`(server_id, time)`, or `(server_id, container_id, time)` for containers. A database from before
+migrations gets them from the baseline migration, which also drops the redundant single-column
+ones. Creating an index briefly blocks writes to that table (a few seconds for a table of millions
+of rows); on a very large install, create the indexes yourself first with
+`CREATE INDEX CONCURRENTLY IF NOT EXISTS <name> ON <table> (<columns>)` using the names in
+`src/backend/models.py`, and the migration will skip them.
+
+## Migrations
+
+The schema is versioned with [Alembic](https://alembic.sqlalchemy.org/). The revisions live in
+`src/backend/migrations/versions/`, and the database records the one it is at in the `alembic_version`
+table. At every start the backend runs the revisions the database doesn't have yet, in order, before it
+serves anything (`src/backend/migrate.py`):
+
+- On PostgreSQL an advisory lock makes a second process wait instead of migrating at the same time.
+- Each revision runs in its own transaction. If one fails, the database stays at the revision before it and
+  the backend refuses to start; the log says which revision failed.
+- The log has one line per revision applied (`Database migration applied: 0002 (...)`).
+
+The first revision, `0001_baseline`, is the schema as it was when migrations were introduced. A new database
+gets every table from it. A database from before migrations (made by the backend's old start-up code) keeps
+its tables and data: the baseline creates only the tables it lacks and brings the others up to date, so
+upgrading needs no manual step.
+
+How to add a revision is in [Development](development.md#database-migrations).
+

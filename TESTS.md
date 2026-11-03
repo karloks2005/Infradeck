@@ -164,6 +164,7 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 | [`test_health_checks.py`](#test_health_checkspy) | 4 | The assistant's fixed health checks and the critical-only webhook. |
 | [`test_history.py`](#test_historypy) | 36 | The history API behind long-range charts: which level of detail answers each range, point limits, gaps, and agreement with the raw samples. |
 | [`test_indexes.py`](#test_indexespy) | 9 | The database indexes on the metrics tables: only the ones queries use, none duplicated. |
+| [`test_migrations.py`](#test_migrationspy) | 5 | Database migrations: new and pre-migration databases both end at the latest revision with the models' schema. |
 | [`test_ingest_validation.py`](#test_ingest_validationpy) | 178 | What collectors report is checked and bounded: numbers, names, filesystems, spacing of check-ins. |
 | [`test_input_limits.py`](#test_input_limitspy) | 38 | Size and shape limits on request bodies, the audit-log endpoint, and safe defaults. |
 | [`test_network_checks.py`](#test_network_checkspy) | 94 | The host's real network totals, listening-port inventory, optional internet check, firewall fingerprints, and the validation of all of it. |
@@ -681,6 +682,19 @@ The indexes on the metrics tables. The live migration is checked by hand against
 | `test_the_metrics_tables_carry_exactly_the_indexes_they_need` | Each metrics table has only the planned indexes: `time` for the purge, `(server_id, time)` (or `(server_id, container_id, time)` for containers) for reads. |
 | `test_deleting_a_server_and_purging_old_rows_can_both_use_an_index` *(4 inputs)* | Every metrics table keeps an index starting with `server_id` (deleting a server cascades through it) and one on `time` alone (the hourly purge). |
 | `test_a_primary_key_is_never_indexed_a_second_time` *(4 inputs)* | No table gets a redundant index on its own `id`. |
+
+### test_migrations.py
+
+The Alembic migrations in `src/backend/migrations`. Every test runs on SQLite, and also on PostgreSQL when
+`MIGRATION_TEST_POSTGRES_URL` points at an empty database (its schema is wiped first).
+
+| Test | What it checks |
+|---|---|
+| `test_the_migrations_live_next_to_the_backend` | The revisions are where the backend looks for them. |
+| `test_a_new_database_ends_at_the_latest_revision_with_the_models_schema` | An empty database ends at the latest revision, and Alembic finds no difference between it and the models. |
+| `test_upgrading_twice_changes_nothing` | Running the upgrade again at the latest revision changes no table. |
+| `test_a_database_from_before_migrations_keeps_its_data_and_ends_at_the_latest_revision` | A database made the old way (`create_all`) keeps its rows and ends at the latest revision with the models' schema. |
+| `test_an_old_database_missing_tables_and_columns_is_brought_up_to_date` | An install from an older version, without the availability tables and some `servers` columns, gets them. |
 
 ### test_ingest_validation.py
 
