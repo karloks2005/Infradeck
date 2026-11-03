@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { apiRequest } from '../api.js'
 import { problemRank } from '../containerLogic.js'
 import { Caret, Icon } from '../icons.jsx'
+import { Soon } from '../ui.jsx'
 import { LineChart, Meter, Sparkline } from './charts.jsx'
 import {
   CONTAINER_FILTERS, STANDALONE, classifyPort, collapsePaths, collapseRanges, containerUptime, formatMegabytes, formatMegabytesShort, formatPercent, formatSpan, groupContainers, niceCeiling, parsePorts, reachablePortSet,
@@ -102,8 +103,8 @@ function ContainerDetails({ server, container }) {
           <div><div className="text-[11px] text-muted">Disk read / write</div><div className="mt-1 whitespace-nowrap text-[13px] font-semibold text-paper">{formatMegabytes(latest.block_read_mb)} / {formatMegabytes(latest.block_write_mb)}</div></div>
         </div>
         <div className="mt-4 flex flex-wrap gap-1.5">
-          <button type="button" className="btn btn-sm" disabled title={READ_ONLY_NOTE}><Icon name="logs" size={13} />Logs</button>
-          <button type="button" className="btn btn-sm" disabled title={READ_ONLY_NOTE}><Icon name="restart" size={13} />Restart</button>
+          <button type="button" className="btn btn-sm" disabled title={READ_ONLY_NOTE}><Icon name="logs" size={13} />Logs<Soon /></button>
+          <button type="button" className="btn btn-sm" disabled title={READ_ONLY_NOTE}><Icon name="restart" size={13} />Restart<Soon /></button>
           <Link to="/agent" className="btn btn-sm"><Icon name="agent" size={13} />Ask the agent</Link>
         </div>
       </div>

@@ -60,6 +60,11 @@ export function Notice({ tone = 'warn', children }) {
   return <div role={tone === 'warn' ? 'alert' : 'status'} className={`rounded-md border px-3.5 py-2.5 text-xs leading-5 ${tone === 'warn' ? 'border-warn/40 text-warn' : tone === 'ok' ? 'border-ok/40 text-ok' : 'border-line text-soft'}`}>{children}</div>
 }
 
+// The label on a button for a feature that isn't built yet; the button itself stays disabled.
+export function Soon() {
+  return <span className="text-[10px] font-medium uppercase tracking-[0.06em] text-muted">Coming soon</span>
+}
+
 export function Outcome({ state }) {
   if (state.error) return <p role="alert" className="m-0 text-xs text-warn">{state.error}</p>
   if (state.ok) return <p role="status" className="m-0 text-xs text-ok">{state.ok}</p>

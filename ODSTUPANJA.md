@@ -25,7 +25,7 @@ su anotacije dizajna i namjerno nisu ugrađeni.
 | „Ask the agent" otvara razgovor o tom kontejneru | Vodi na `/agent` bez konteksta kontejnera („Open diagnosis" otvara točno taj incident) | Chat još ne prima kontekst kontejnera | – |
 | Zadnji incident: „Resolved 2 h ago · memory limit raised to 6 GB" | Piše samo kada je riješen i na kojem serveru | Nitko ne upisuje kako je incident riješen | – |
 | „You'll get a push on ntfy if that changes" | Rečenica je izostavljena | Obavijesti ovise o kanalima koje je svaki korisnik postavio, pa rečenica ne bi vrijedila za svakoga | – |
-| Gumbi Logs i Restart u proširenom redu kontejnera | Prikazani, ali onemogućeni, s objašnjenjem u tooltipu | Dogovoreno: aplikacija ostaje read-only dok se to sigurnosno ne pregleda | #100 |
+| Gumbi Logs i Restart u proširenom redu kontejnera | Prikazani, ali onemogućeni, s oznakom „Coming soon" i objašnjenjem u tooltipu | Dogovoreno: aplikacija ostaje read-only dok se to sigurnosno ne pregleda | #100 |
 | „Monitor this machine": „Check every 15 s · change later in Admin" | „Checks every minute at first · change it once it reports" | Novi server počinje s intervalom od 60 s; interval se mijenja na Overviewu ili u Adminu | – |
 | „Another machine": jedna `docker run` naredba | Dvije `docker run` naredbe (collector i docker-proxy) | Collector namjerno nema Docker socket; drži ga zaseban read-only proxy | – |
 | „Another machine": polje samo za ime | Dodano je i polje za adresu na koju se novi stroj javlja | Bez ispravne adrese naredba ne radi (localhost, VPN) | – |
@@ -104,7 +104,7 @@ su anotacije dizajna i namjerno nisu ugrađeni.
 | Email „Verified" | Bez oznake | Infradeck ne šalje e-mail, pa nema provjere | – |
 | Recovery codes: „Show" | Samo „Regenerate" | Kodovi su spremljeni kao hash | – |
 | Recovery codes: „8 of 10 left · generated 25 Sep" | „8 left" | Datum generiranja se ne bilježi | – |
-| Passkeys: „Add passkey" | Gumb je onemogućen | WebAuthn nije napravljen | #77 |
+| Passkeys: „Add passkey" | Gumb je onemogućen, s oznakom „Coming soon" | WebAuthn nije napravljen | #77 |
 | Sessions: lokacija („Zagreb, HR") i „Last active" | IP adresa i vrijeme prijave | Nema geolokacije; zadnja aktivnost se ne bilježi | – |
 | „Sessions expire after 30 days without activity" | „A session lasts a day, or 30 days…" | Sesija istječe od prijave, ne od zadnje aktivnosti | – |
 | Kanali: Telegram, Slack, Gotify, Pushover | ntfy, Discord webhook, bilo koji webhook, e-mail (ako je SMTP postavljen) | Ostali idu kroz generički webhook | #50 |
@@ -125,7 +125,7 @@ su anotacije dizajna i namjerno nisu ugrađeni.
 | Uloge Owner / Admin / Viewer | Owner je prvi admin i ne može se mijenjati; ostalo Admin ili Viewer | Nema zasebne uloge vlasnika | #106 |
 | Alert rules: „Disk forecast full in < 30 days", „CPU > 90%" | Ne postoje; popis ima 20 stvarnih pravila | Ta pravila nisu napravljena | – |
 | Alert rules: stupac Servers s izborom servera | Uvijek „All" | Pravila vrijede za sve servere | – |
-| Alert rules: „New rule" | Gumb je onemogućen | Vlastita pravila ne postoje | – |
+| Alert rules: „New rule" | Gumb je onemogućen, s oznakom „Coming soon" | Vlastita pravila ne postoje | – |
 | Alert rules: bilješka zašto je pravilo isključeno | Samo broj isključenih pravila | Razlog se ne upisuje | – |
 | Incident agent: „Anthropic API · key ending 4f2a", „Change" | OpenAI, ključ i model iz `.env`; „Change" je onemogućen, „Test connection" provjerava ključ | Ključ se zasad postavlja u `.env`; spremanje u Adminu je dio #109 | #109 |
 | „Diagnose new incidents automatically" prekidač | Uvijek uključeno i onemogućeno | Dijagnoza je lokalna i ne može se isključiti | #93 |
@@ -133,7 +133,7 @@ su anotacije dizajna i namjerno nisu ugrađeni.
 | „Redact IPs and hostnames" | Onemogućeno | Nije napravljeno | – |
 | „$1.84 estimated provider cost · cap $10" | „— · not tracked" | Potrošnja se ne mjeri | #91 |
 | Retention: tri zasebna roka | Jedan rok za sažetke; javljanja se čuvaju tjedan dana | Tako radi postojeće zadržavanje | #58 |
-| Database: putanja, rast po tjednu, „Last backup", „Export", „Back up now" | Veličina baze i broj zapisa; gumbi su onemogućeni | Backup ne postoji | – |
+| Database: putanja, rast po tjednu, „Last backup", „Export", „Back up now" | Veličina baze i broj zapisa; gumbi su onemogućeni, s oznakom „Coming soon" | Backup ne postoji | – |
 | About: „built 2 Oct 2026" | Samo verzija | Datum builda se ne bilježi | #106 |
 
 ## Mobitel i tablet (`design/mobile/`)
@@ -143,7 +143,7 @@ su anotacije dizajna i namjerno nisu ugrađeni.
 | Overview: ploča „Agent" s bilješkom nije na mobitelu | Kartica incidenta nema agentovu bilješku | Dizajn je na mobitelu ne prikazuje; bilješka je na ekranu incidenta | – |
 | Server: graf „Disk" uz CPU, Memory i Load | Disk crta najpuniji disk iz povijesti diska (1 h ili 6 h), ne iz živih uzoraka | Živi uzorci nemaju disk | – |
 | Server: tabovi Network, System i Events nisu nacrtani za mobitel | Desktopni sadržaj u jednom stupcu; tablica portova postaje kartice, tablica diskova se pomiče vodoravno | Za te tabove nema mobilnog dizajna | – |
-| Kontejner u sheetu: gumbi Logs i Restart | Prikazani, ali onemogućeni, s objašnjenjem ispod | Isto kao na desktopu | #100 |
+| Kontejner u sheetu: gumbi Logs i Restart | Prikazani, ali onemogućeni, s oznakom „Coming soon" | Isto kao na desktopu | #100 |
 | Statistics: Timeline je zaseban ekran, ulaz nije nacrtan | Na glavnom ekranu je kartica „Timeline" s gumbom „Open timeline"; „Show on timeline" otvara ekran na tom trenutku | Dizajn ne kaže kako se dolazi do ekrana B | – |
 | Statistics: „Time spent at each level" nije na mobitelu | Prikazano ispod „When it's busy" | Dizajn kaže „Same data as desktop" | – |
 | Statistics: legenda „This week / Last week" | „Last 7 days / The previous 7 days" | Isti tekst kao na desktopu | – |
@@ -168,7 +168,7 @@ Prvi dio milestonea: provjere HTTP(s), Keyword i TCP port, pokreću ih collector
 
 | Dizajn | Implementacija | Razlog | Issue |
 | --- | --- | --- | --- |
-| Gumbi „Status page" i „Maintenance" | Prikazani, ali onemogućeni | Još nisu napravljeni | #143, #144 |
+| Gumbi „Status page" i „Maintenance" | Prikazani, ali onemogućeni, s oznakom „Coming soon" | Još nisu napravljeni | #143, #144 |
 | Devet vrsta provjera | Rade HTTP(s), Keyword, JSON query, TCP port, TLS certificate, DNS i Ping; Docker container i Push prikazani kao „later" i ne mogu se odabrati | Preostala dva dijela | #135, #136 |
 | JSON query: JSONata izrazi (kao Uptime Kuma) | Jednostavna staza (`data.status`, `items[0].ok`) + usporedba (equals / contains / > / < / exists) | JSONata traži vanjsku ovisnost i izvršavanje izraza nad odgovorom (DoS/sigurnost); staza je čisto navigiranje | #133 |
 | TLS certificate: čita istek i za samopotpisane certifikate | Lanac certifikata mora biti valjan; za samopotpisane ide TCP ili HTTP provjera uz „Ignore TLS errors" | Čitanje isteka bez validacije traži ručni ASN.1 parser; izbjegnuto | #133 |

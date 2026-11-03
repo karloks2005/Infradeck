@@ -7,7 +7,7 @@ import { Icon } from '../icons.jsx'
 import { applyDisplay } from '../prefs.js'
 import { AppShell } from '../shell.jsx'
 import { ACCOUNT_GROUPS } from '../more/groups.js'
-import { Check, Field, Notice, Outcome, Row, Section, SettingsLayout, ShownOnce, Switch, ago, describeBrowser, formatDate, useAction, useCopy, useLoaded, usePhone } from '../ui.jsx'
+import { Check, Field, Notice, Outcome, Row, Section, SettingsLayout, ShownOnce, Soon, Switch, ago, describeBrowser, formatDate, useAction, useCopy, useLoaded, usePhone } from '../ui.jsx'
 
 const COLORS = ['', '#FF5A1F', '#E2B04A', '#6DBE8F', '#7FA7D9', '#B58BD6', '#D98BA4']
 const post = (path, body) => apiRequest(path, { method: 'POST', body: JSON.stringify(body || {}) })
@@ -171,7 +171,7 @@ function Security({ account, reload, forced = false, onEnrolled }) {
         <Row icon="#" title="Recovery codes" detail={`${two.recovery_codes_left} left. Stored only as hashes, so they can't be shown again, only replaced.`} tone={two.recovery_codes_left <= 2 ? 'warn' : undefined}><button type="button" className="btn btn-sm" aria-expanded={open === 'codes'} onClick={() => toggle('codes')}>Regenerate</button></Row>
         {open === 'codes' && !codes && <Reauth label="Generate new codes" path="/auth/2fa/recovery-codes" onCancel={() => setOpen(null)} onDone={(data) => { setCodes(data.recovery_codes); reload() }} />}
       </div>}
-      {!forced && <Row icon="key" title="Passkeys" detail="Sign in with a fingerprint or security key instead of a password. Not available yet."><button type="button" className="btn btn-sm" disabled title="Passkeys are not built yet"><Icon name="plus" size={13} />Add passkey</button></Row>}
+      {!forced && <Row icon="key" title="Passkeys" detail="Sign in with a fingerprint or security key instead of a password. Not available yet."><button type="button" className="btn btn-sm" disabled title="Passkeys are not built yet"><Icon name="plus" size={13} />Add passkey<Soon /></button></Row>}
       {message && <p role="status" className="m-0 px-[18px] py-3 text-xs text-ok">{message}</p>}
     </div>
   )

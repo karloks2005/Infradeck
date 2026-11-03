@@ -12,7 +12,7 @@ import { Caret, Icon } from '../icons.jsx'
 import { refreshOverview, useOverview } from '../overviewStore.js'
 import { AppShell, serverLink } from '../shell.jsx'
 import { ADMIN_GROUPS } from '../more/groups.js'
-import { Field, Notice, Outcome, Row, Section, SettingsLayout, ShownOnce, Switch, ago, useAction, useLoaded, usePhone } from '../ui.jsx'
+import { Field, Notice, Outcome, Row, Section, SettingsLayout, ShownOnce, Soon, Switch, ago, useAction, useLoaded, usePhone } from '../ui.jsx'
 
 const REPOSITORY = 'https://github.com/karloks2005/Infradeck'
 const STATE_DOT = { critical: 'dot-signal', warn: 'dot-warn', ok: 'dot-ok', offline: '' }
@@ -245,7 +245,7 @@ function Rules({ onCount }) {
       </table></div>
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-[18px] py-3 text-xs text-muted">
         <span>{off.length ? `${off.length} ${off.length === 1 ? 'rule is' : 'rules are'} switched off and open no incidents.` : 'Every rule is on.'} A rule that is switched off also closes the incidents it had open. <Outcome state={state} /></span>
-        <button type="button" className="btn btn-sm" disabled title="Rules of your own are not built yet; the built-in ones can be tuned and switched off."><Icon name="plus" size={13} />New rule</button>
+        <button type="button" className="btn btn-sm" disabled title="Rules of your own are not built yet; the built-in ones can be tuned and switched off."><Icon name="plus" size={13} />New rule<Soon /></button>
       </div>
     </div>
   )
@@ -450,8 +450,8 @@ function Retention({ settings, system, onSaved }) {
       <Row title="Incidents" detail="Kept until their server is removed."><span className="text-[13px] text-soft">Forever</span></Row>
       <Row icon="db" title="Database" detail={`${database.engine}${database.host_rows != null ? ` · ${database.host_rows.toLocaleString()} check-ins stored, ${database.host_rows_week.toLocaleString()} from the last 7 days` : ''}`}>
         <span className="mr-2 text-lg font-semibold text-paper">{megabytes(database.bytes)}</span>
-        <button type="button" className="btn btn-sm" disabled title="Not built yet. Back up the postgres volume with pg_dump for now (see SETUP_DATABASES.md).">Export</button>
-        <button type="button" className="btn btn-sm" disabled title="Not built yet. Back up the postgres volume with pg_dump for now (see SETUP_DATABASES.md).">Back up now</button>
+        <button type="button" className="btn btn-sm" disabled title="Not built yet. Back up the postgres volume with pg_dump for now (see SETUP_DATABASES.md).">Export<Soon /></button>
+        <button type="button" className="btn btn-sm" disabled title="Not built yet. Back up the postgres volume with pg_dump for now (see SETUP_DATABASES.md).">Back up now<Soon /></button>
       </Row>
       {(state.error || state.ok) && <div className="px-[18px] py-2.5"><Outcome state={state} /></div>}
     </div>

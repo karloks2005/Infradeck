@@ -6,7 +6,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { apiRequest } from '../api.js'
 import { Icon } from '../icons.jsx'
 import { AppShell, PhoneHeader } from '../shell.jsx'
-import { Drawer, Notice, ago, useAction, usePhone } from '../ui.jsx'
+import { Drawer, Notice, Soon, ago, useAction, usePhone } from '../ui.jsx'
 import { SectionHeading } from '../dashboard/NeedsAttention.jsx'
 import { CheckForm } from './CheckForm.jsx'
 
@@ -407,8 +407,8 @@ export default function AvailabilityPage({ user, onLogout }) {
           <p className="mb-0 mt-1.5 max-w-[680px] text-[13px] leading-5 text-soft">Checks that your services answer, run from your own servers. Like Uptime Kuma, but every check knows which machine it ran from.</p>
         </div>
         <span className="flex flex-wrap gap-2">
-          <button type="button" className="btn" disabled title="Coming in a later step">Status page</button>
-          <button type="button" className="btn" disabled title="Coming in a later step">Maintenance</button>
+          <button type="button" className="btn" disabled title="Coming in a later step">Status page<Soon /></button>
+          <button type="button" className="btn" disabled title="Coming in a later step">Maintenance<Soon /></button>
           {canEdit && <button type="button" className="btn btn-primary" onClick={() => setEditing('new')}><Icon name="plus" size={14} />New check</button>}
         </span>
       </header>}

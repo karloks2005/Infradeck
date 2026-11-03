@@ -8,7 +8,7 @@ import { problemRank } from '../containerLogic.js'
 import { containerState, isOnline } from '../fleetLogic.js'
 import { Caret, Icon } from '../icons.jsx'
 import { PhoneHeader, RoundButton } from '../shell.jsx'
-import { Sheet } from '../ui.jsx'
+import { Sheet, Soon } from '../ui.jsx'
 import { LineChart, Meter, Sparkline } from './charts.jsx'
 import { forecastKey, usePolled } from './data.js'
 import { AllClear } from './NeedsAttention.jsx'
@@ -332,8 +332,8 @@ function ContainerSheet({ server, container, onClose }) {
   return (
     <Sheet open onClose={onClose} title={title} label={`Container ${container.name}`} footer={<>
       <div className="grid grid-cols-3 gap-2">
-        <button type="button" className="btn h-12" disabled title={READ_ONLY_NOTE}><Icon name="logs" size={15} />Logs</button>
-        <button type="button" className="btn h-12" disabled title={READ_ONLY_NOTE}><Icon name="restart" size={15} />Restart</button>
+        <button type="button" className="btn h-12 flex-col gap-0.5" disabled title={READ_ONLY_NOTE}><span className="flex items-center gap-2"><Icon name="logs" size={15} />Logs</span><Soon /></button>
+        <button type="button" className="btn h-12 flex-col gap-0.5" disabled title={READ_ONLY_NOTE}><span className="flex items-center gap-2"><Icon name="restart" size={15} />Restart</span><Soon /></button>
         <Link to="/agent" className="btn h-12"><Icon name="agent" size={15} />Ask</Link>
       </div>
       <p className="mb-0 mt-2 text-center text-[11px] text-dim">{READ_ONLY_NOTE}</p>
