@@ -217,4 +217,4 @@ cd src/frontend && node --test                                                # 
 
 ## License
 
-MIT; see [LICENSE](LICENSE).
+Copyright (c) 2026 Karlo Kajba Šimanić. Licensed under the GNU Affero General Public License v3.0; see [LICENSE](LICENSE).

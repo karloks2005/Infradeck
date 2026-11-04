@@ -465,7 +465,7 @@ function About({ settings, system, onSaved }) {
   const [state, run] = useAction()
   return (
     <div className="card divide-y divide-line">
-      <Row title={`Infradeck ${system.version}`} detail="Open source, MIT licensed. Infradeck doesn't call home, so it can't tell you about new versions; the changelog can."><a className="btn btn-sm" href={`${REPOSITORY}/releases`} target="_blank" rel="noreferrer">Changelog</a><a className="btn btn-sm" href={`${REPOSITORY}#readme`} target="_blank" rel="noreferrer">How to update</a></Row>
+      <Row title={`Infradeck ${system.version}`} detail="Open source, AGPL-3.0 licensed. Infradeck doesn't call home, so it can't tell you about new versions; the changelog can."><a className="btn btn-sm" href={`${REPOSITORY}/releases`} target="_blank" rel="noreferrer">Changelog</a><a className="btn btn-sm" href={`${REPOSITORY}#readme`} target="_blank" rel="noreferrer">How to update</a></Row>
       <Row title="Source" detail="github.com/karloks2005/Infradeck"><a className="btn btn-sm" href={REPOSITORY} target="_blank" rel="noreferrer">Open</a></Row>
       <form className="flex flex-wrap items-end gap-3 px-[18px] py-3.5" onSubmit={(event) => { event.preventDefault(); run(async () => { const saved = await put({ instance_name: name }); setName(saved.instance_name || ''); onSaved(saved); refreshOverview() }, 'Saved.') }}>
         <Field label="Name of this install" hint="Shown in the sidebar and on the sign-in page, where anyone who can reach it can read it. Leave empty for the default." className="min-w-0 flex-1 basis-72"><input className="field h-9" maxLength={60} value={name} onChange={(event) => setName(event.target.value)} /></Field>
