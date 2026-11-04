@@ -4,7 +4,7 @@ Infradeck ships with an automated test suite. This page explains how to run it, 
 covers (and what it doesn't), and what every single test is for, so you can decide
 whether a failure matters before you upgrade or change your setup.
 
-- **1085 test cases** from 555 test functions, plus 16 small tests of the chart helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
+- **1409 test cases** from 762 test functions, plus 38 small tests of the frontend helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
 - **About two minutes** to run. No Docker, PostgreSQL, Redis, network or root access needed.
 - **Safe to run next to a live install.** The tests use a throwaway in-memory database
   and fakes; they never touch your running containers or your data. (Two collector
@@ -36,7 +36,7 @@ pytest
 A healthy run ends with a line like:
 
 ```text
-507 passed, 3 warnings in 17.0s
+1409 passed, 4 warnings in 117.5s
 ```
 
 The warnings are harmless notices from the libraries (FastAPI deprecating the
