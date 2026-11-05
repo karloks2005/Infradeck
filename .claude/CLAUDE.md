@@ -18,7 +18,7 @@ infradeck: a self-hosted dashboard for monitoring homelab machines. One machine 
 <!-- TODO: replace with the real commands -->
 - Dev stack: `docker compose up`
 - Backend tests: `pytest tests/`
-- Frontend tests + lint: `cd src/frontend && npm test && npx oxlint`
+- Frontend tests + lint: `cd src/frontend && node --test && npx oxlint`
 - New migration: `alembic revision --autogenerate -m "<message>"` (review the generated file before applying)
 
 # Workflow
@@ -36,14 +36,17 @@ infradeck: a self-hosted dashboard for monitoring homelab machines. One machine 
 
 # Hard rules
 - `src/collector/` stays standard library only. Never add third-party packages there.
-- Never push directly to `main`, never force-push shared branches, never merge PRs.
-- Never close, reopen or relabel issues manually.
+- Never push directly to `main`, never force-push shared branches, never merge PRs without approval.
+- Never close, reopen or relabel issues manually or without approval.
 - Anything sent to an LLM provider from `src/agent/` goes through `masking.py` first.
 
 # Git & GitHub
 - One issue = one branch = one PR. Branch: `<type>/<issue-number>-<short-desc>` (e.g. `fix/42-login-redirect`).
 - Commits: Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, `chore:` …).
 - PR description: summary of changes, how it was verified, and `Fixes #<n>`. If the issue is only partly solved, use `Refs #<n>` and list what's left.
+- Open issues may be edited. Never edit a closed issue; if closed work needs a
+  follow-up or new scope, open a new issue and reference the old one (`Related: #<number>`).
+- Always check if there are new issues that can be resolved/closed after commiting and pushing changes.
 
 # Security
 - Validate all external input (body, params, headers, files) with Pydantic models / explicit checks.
