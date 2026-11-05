@@ -468,6 +468,30 @@ URL, a keyword or a value in a JSON reply, a TCP port, a TLS certificate, a DNS 
   monthly summaries are kept forever. Nothing is deleted before the coarser level that replaces it exists,
   so long-range history stays available while the bulky raw rows don't grow without bound.
 
+## Container privileges
+
+Every container the stack builds or runs runs with `no-new-privileges` and a read-only filesystem, and drops
+all Linux capabilities, adding back only the few listed here. The only exception is the optional Caddy of the
+development stack's `https` profile, which uses the official image's defaults.
+
+| Container | Runs as | Capabilities | Filesystem |
+|---|---|---|---|
+| backend, agent-worker | UID 10001 | none | read-only, `/tmp` in memory |
+| frontend | `nginx` (port 8080 inside the container, so it needs no capability to listen) | none | read-only; cache, pid file and the `TRUSTED_PROXIES` file in memory |
+| redis | `redis` | none while running | read-only, data in its volume |
+| postgres | `postgres` | none while running | read-only, data in its volume, socket and `/tmp` in memory |
+| collector | root | none, so it can't read other users' files (see below) | read-only |
+| collector-gate | root, workers as `nginx` | `CHOWN`, `SETUID`, `SETGID` | read-only, cache and pid in memory |
+| docker-proxy | root (to open the Docker socket) | none | read-only, no network |
+| system-helper, port-owners (optional) | root | `SYSLOG`; `SYS_PTRACE` and `DAC_READ_SEARCH` (see their sections above) | read-only, no network |
+
+**Exceptions, and why.** The official Redis and PostgreSQL images start as root to make their data folder
+belong to their own user (and, for PostgreSQL, give it mode `0700`), then switch to that user. That start needs
+`CHOWN`, `DAC_READ_SEARCH` (to walk a data folder only its owner can read), `SETUID` and `SETGID`, and
+PostgreSQL also `FOWNER` (to set the mode). The database process keeps none of them: switching away from root
+clears them. Without the hand-over, an existing `redis_data` volume written by an older version (when Redis
+ran as root) would no longer be writable.
+
 ## Other exposure to be aware of
 
 - The collector mounts the host filesystem read-only at `/hostfs` to read disk usage and a few

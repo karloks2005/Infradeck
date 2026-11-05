@@ -14,7 +14,7 @@ services:
       - traefik.http.routers.${TRAEFIK_ROUTER:-infradeck}.rule=Host(`${DASHBOARD_DOMAIN:?Set DASHBOARD_DOMAIN in .env}`)
       - traefik.http.routers.${TRAEFIK_ROUTER:-infradeck}.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}
       - traefik.http.routers.${TRAEFIK_ROUTER:-infradeck}.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-letsencrypt}
-      - traefik.http.services.${TRAEFIK_ROUTER:-infradeck}.loadbalancer.server.port=80
+      - traefik.http.services.${TRAEFIK_ROUTER:-infradeck}.loadbalancer.server.port=8080
 
 networks:
   traefik:

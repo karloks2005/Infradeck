@@ -144,6 +144,13 @@ frontend, collector, Docker proxy and system helper each have their code built
 into their image, so a service that isn't rebuilt keeps running the old version.
 The database schema is updated automatically when the backend starts.
 
+**Upgrading from a version where the frontend listened on port 80 inside its container:** it now listens on
+8080 and runs without root. The compose files, `deploy/traefik.yml` and the Caddy profile already use the new
+port; only a reverse proxy you configured yourself to reach `frontend:80` over a Docker network must change to
+`frontend:8080`. A proxy that uses the published port (`127.0.0.1:5173`) needs no change. Update with
+`docker compose up -d --build`: without `--build` the old frontend image runs under the new settings and keeps
+restarting with `mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)`.
+
 **Upgrading from a version with the Traefik labels in `docker-compose.server.yml`:** they moved to
 `deploy/traefik.yml`. Before you update, change `.env` to
 `COMPOSE_FILE=docker-compose.server.yml:deploy/traefik.yml`. Without it the dashboard starts
@@ -170,7 +177,7 @@ compose project). Collectors started from `collector-compose.yml` need
 - **Another reverse proxy (nginx, Caddy, HAProxy, a tunnel connector, ...):** use the **server stack**
   (`docker-compose.server.yml`) on its own, not the development stack, and point your proxy at its dashboard
   port (`127.0.0.1:5173` by default). A proxy that runs in Docker can instead join the stack's `front` network
-  and reach `frontend:80`. The server stack is the one that keeps the collector endpoints off the
+  and reach `frontend:8080`. The server stack is the one that keeps the collector endpoints off the
   public side, registration closed and the session cookie HTTPS-only. Terminate HTTPS in your proxy, have it
   send `X-Forwarded-For`, and set `TRUSTED_PROXIES` to its address (see below).
 - **Caddy profile (`--profile https`, development stack): private use only.** It publishes the development

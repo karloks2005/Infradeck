@@ -223,6 +223,7 @@ docker compose up -d
 | Signed out right after signing in | The dashboard was opened over `http://`, or `SESSION_COOKIE_SECURE` was set to `false`. | Use `https://<your-domain>` and leave `SESSION_COOKIE_SECURE` empty. |
 | Everyone is locked out after a few failed sign-ins | `TRUSTED_PROXIES` is empty or wrong, so all visitors share Traefik's address. | Set it as in step 2, then `docker compose up -d`. |
 | The frontend restarts over and over | `TRUSTED_PROXIES` contains something other than IP addresses and CIDR ranges. | `docker compose logs frontend` names the bad value. Fix it in `.env`. |
+| The frontend restarts over and over with `mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)` | The stack was updated without `--build`, so an old frontend image runs under the new settings. | `docker compose up -d --build`. |
 
 More symptoms: [Troubleshooting](troubleshooting.md).
 
