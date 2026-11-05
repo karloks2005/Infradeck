@@ -1,4 +1,4 @@
-<img width="8000" height="2000" alt="infradeck-banner-dark" src="https://github.com/user-attachments/assets/34d3011c-cecb-4708-a88b-822d91f6af3c" />
+<img width="2000" height="500" alt="infradeck-banner" src="https://github.com/user-attachments/assets/a8fcce0c-e46c-4be3-96ad-a9a16c328a29" />
 
 # Infradeck | Know What's Healthy - Fix What Isn't
 
