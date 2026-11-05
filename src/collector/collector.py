@@ -512,7 +512,20 @@ def collect_system() -> dict[str, Any]:
     }
 
 
-COLLECTOR_VERSION = "0.10.0"
+def _read_version():
+    """The release this collector belongs to: VERSION next to this file in the image, or at the repository root
+    when run from a checkout. "dev" when neither exists."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for path in (os.path.join(here, "VERSION"), os.path.join(here, "..", "..", "VERSION")):
+        try:
+            with open(path, encoding="utf-8") as file:
+                return file.read().strip()
+        except OSError:
+            continue
+    return "dev"
+
+
+COLLECTOR_VERSION = _read_version()
 MAX_INTERFACES = 16
 MAX_TEMPERATURES = 8
 _KERNEL_IMAGE = re.compile(r"vmlinuz-(\d[\w.+~-]*)")

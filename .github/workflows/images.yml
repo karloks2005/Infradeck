@@ -1,5 +1,6 @@
 # Builds the collector, Docker proxy and system helper images and publishes them to GHCR, signed
-# with cosign (keyless, using this workflow's identity). Runs when a version tag is pushed:
+# with cosign (keyless, using this workflow's identity). Runs when a version tag is pushed; the tag must match
+# the VERSION file:
 #   git tag v0.1.0 && git push origin v0.1.0
 # Remote hosts install from these images, pinned by digest, so no code is ever fetched from the
 # dashboard. Third-party actions are pinned to commit hashes; update them deliberately.
@@ -26,6 +27,13 @@ jobs:
           - { name: system-helper, dockerfile: docker/system-helper.Dockerfile }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # The images report the version in VERSION, so a tag that says otherwise would publish mislabelled images.
+      - name: The tag matches VERSION
+        run: |
+          if [ "${GITHUB_REF_NAME#v}" != "$(cat VERSION)" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} doesn't match VERSION ($(cat VERSION)). Update VERSION first, then tag."
+            exit 1
+          fi
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3

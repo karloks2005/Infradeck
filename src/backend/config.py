@@ -10,8 +10,9 @@ for _name, _value in dotenv_values(BASE_DIR / ".env").items():
     if _value:
         os.environ.setdefault(_name, _value)
 
-# Shown in the sidebar and compared with what each collector reports.
-APP_VERSION = "0.10.0"
+# Shown in the sidebar and compared with what each collector reports. VERSION at the repository root is the
+# only place the version is written; the backend image copies it to /app/VERSION.
+APP_VERSION = (BASE_DIR / "VERSION").read_text().strip()
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",

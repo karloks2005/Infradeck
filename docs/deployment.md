@@ -114,11 +114,15 @@ Things to get right:
 Remote machines install the collector and the Docker proxy from container images,
 pinned by digest, so no code is ever downloaded from the dashboard. The
 [Publish images](../.github/workflows/images.yml) workflow builds them (amd64 and
-arm64), signs them with cosign and prints their digests:
+arm64), signs them with cosign and prints their digests. The version lives in one place, the `VERSION` file
+at the repository root; the dashboard and the collector both read it. Tag the version it holds:
 
 ```bash
-git tag v0.9.2 && git push origin v0.9.2     # the version in src/backend/config.py
+git tag "v$(cat VERSION)" && git push origin "v$(cat VERSION)"
 ```
+
+For a new version, change `VERSION` in a pull request first and tag after it is merged. The workflow refuses a
+tag that doesn't match `VERSION`, so the images never report a different version than their tag.
 
 1. Open the workflow run's summary and copy the `COLLECTOR_IMAGE=…` and
    `DOCKER_PROXY_IMAGE=…` lines into `.env`.
