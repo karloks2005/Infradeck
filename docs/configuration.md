@@ -23,6 +23,7 @@ Every setting below is listed, with no values, in [`example.env`](../example.env
 | `INGEST_MIN_SPACING_RATIO` | `0.25` | A check-in must arrive at least this share of the server's check interval (and never sooner than 5 seconds) after the previous one, or it is refused with 429. `0` switches the limit off. |
 | `ENROLL_RATE_LIMIT` | `30` | Enrollments with the enrollment key allowed per address per hour (twice that per key). Raise it if many collectors reach the dashboard from one address (for example behind NAT). |
 | `ENABLE_API_DOCS` | `false` | Serves the interactive API documentation at `/api/docs`. Leave off on a public install. |
+| `TRUSTED_PROXIES` | empty | The address or network of the reverse proxy in front of the dashboard, comma-separated, so rate limits count each client by its real address. Only these may set `X-Forwarded-For`. Empty trusts nobody: behind a proxy all clients then share its address. See `example.env` for how to find the value. |
 | `SECRETS_KEY` | empty | Key that encrypts two-factor secrets. Required for two-factor sign-in and for the "require two-factor for admins" policy to be enforced. Generate with `python -m src.backend.secrets_box`; comma-separated keys allow rotation. |
 | `ADMIN_BOOTSTRAP_TOKEN` | generated at start | Setup token for the first account. Leave empty to have one generated and printed in the backend log until the first account exists. |
 | `FRONTEND_BIND` | `0.0.0.0` (dev), `127.0.0.1` (server file) | Interface for the dashboard's plain-HTTP port. |

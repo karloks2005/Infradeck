@@ -25,6 +25,7 @@ Then set at least these:
 | `POSTGRES_PASSWORD` | *(required)* | A long random password for the bundled database. |
 | `REDIS_PASSWORD` | *(required)* | A long random password for Redis, which holds the login sessions. Letters and digits only (`openssl rand -hex 24`). |
 | `DASHBOARD_DOMAIN` | *(required)* | Your domain, without `https://`. Used for the Traefik router. |
+| `TRUSTED_PROXIES` | empty | The subnet of your reverse proxy's Docker network, for Traefik `docker network inspect traefik_default --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}'`. Without it every client shares Traefik's address, so one person's failed sign-ins can lock everyone out for a minute. See [Reverse proxies](#reverse-proxies-and-client-addresses). |
 | `TRAEFIK_ENTRYPOINT` | `websecure` | Your Traefik HTTPS entrypoint name. |
 | `TRAEFIK_CERT_RESOLVER` | `letsencrypt` | Your Traefik certificate resolver name. |
 | `TRAEFIK_NETWORK` | `traefik_default` | The Docker network Traefik is attached to. |
@@ -144,8 +145,8 @@ compose project). Collectors started from `collector-compose.yml` need
 - **Another reverse proxy (nginx, Caddy, HAProxy, ...):** use the **server stack** (`docker-compose.server.yml`),
   not the development stack, and point your proxy at its dashboard port (`127.0.0.1:5173` by default; the
   Traefik labels are simply unused). The server stack is the one that keeps the collector endpoints off the
-  public side, registration closed and the session cookie HTTPS-only. Terminate HTTPS in your proxy and have it
-  send `X-Forwarded-For`.
+  public side, registration closed and the session cookie HTTPS-only. Terminate HTTPS in your proxy, have it
+  send `X-Forwarded-For`, and set `TRUSTED_PROXIES` to its address (see below).
 - **Caddy profile (`--profile https`, development stack): private use only.** It publishes the development
   stack's single listener, which serves the collector endpoints on the same address as the dashboard, so it
   is not suitable for a dashboard that is open to the internet. Use it on a LAN or behind a VPN.
@@ -154,3 +155,28 @@ compose project). Collectors started from `collector-compose.yml` need
   (collectors: `http://<vpn-ip>:5173/api`). Nothing is exposed publicly. This uses
   the development stack's single listener; for a public dashboard with collectors
   on a VPN, use the server stack above.
+
+## Reverse proxies and client addresses
+
+Sign-in, registration, two-factor and enrollment are rate limited per client address. Behind a reverse proxy
+every request arrives from the proxy, so the dashboard needs to know which addresses belong to your proxy:
+only those may tell it the real client address in `X-Forwarded-For`. Put them in `TRUSTED_PROXIES` in `.env`,
+comma-separated, and restart the frontend (`docker compose up -d frontend`). It works the same for any proxy.
+
+| Your proxy runs | Set `TRUSTED_PROXIES` to | Find it with |
+|---|---|---|
+| In Docker (Traefik, Caddy, nginx, ...) | The subnet of the Docker network it shares with the dashboard | `docker network inspect <network> --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}'` |
+| On the host itself | The gateway of the dashboard's `front` network, where traffic from the host arrives from | `docker network inspect <project>_front --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'` |
+| On another machine | That machine's address as the dashboard sees it | Your network setup |
+
+Not sure? Sign in through the proxy and open **Account › Sessions**: the address shown there is the proxy's.
+After setting it, the same page shows your own address instead.
+
+- **Empty (default): nobody is trusted.** Every client behind the proxy shares the proxy's address and limits,
+  so one person's failed sign-ins can lock everyone out for a minute. Safe, but set it.
+- **Trusting a whole network** also trusts every other container on it. Prefer a network only the proxy and
+  the dashboard share.
+- **Several proxies in a chain** (for example a CDN in front of Traefik): list each of them; the dashboard
+  takes the last address in the chain that isn't one of yours.
+- The value is checked when the frontend starts: only IP addresses and CIDR ranges are accepted, and anything
+  else stops the container with a message in `docker compose logs frontend`.
