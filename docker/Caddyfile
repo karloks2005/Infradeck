@@ -2,5 +2,8 @@
 # The domain's DNS must point at this server and ports 80/443 must be open.
 {$DOMAIN} {
 	encode zstd gzip
+	# Same value as docker/nginx.strict.conf. No includeSubDomains, since other apps on your domain may not be
+	# HTTPS-only.
+	header Strict-Transport-Security "max-age=15552000"
 	reverse_proxy frontend:80
 }

@@ -365,6 +365,44 @@ def test_admins_can_change_the_policy_and_it_is_audited(app, monkeypatch):
     assert any("Stopped requiring two-factor" in row.message for row in app.db.query(AuditLog))
 
 
+def _policy(app, monkeypatch, **change):
+    monkeypatch.setattr(main, "_require_admin", lambda session_id, db: {"id": 1})
+    return main.update_admin_settings(main.AdminSettingsRequest(**change), session_id="s", db=app.db)
+
+
+def test_switching_the_admin_policy_on_signs_out_admins_without_two_factor(app, monkeypatch):
+    app.db.add(AppSetting(key=main.REQUIRE_ADMIN_2FA_KEY, value="false"))
+    app.db.commit()
+    admin, member = _signed_in(), _signed_in("member@example.com")
+
+    _policy(app, monkeypatch, require_2fa_for_admins=True)
+
+    assert admin.get("/monitoring/overview").status_code == 401
+    assert member.get("/monitoring/overview").status_code == 200
+    assert _login(TestClient(main.app)).json()["setup_required"] is True
+    assert any(row.message == "Signed out 1 session of accounts that must now set up two-factor" for row in app.db.query(AuditLog))
+
+
+def test_admins_who_already_use_two_factor_stay_signed_in_when_the_policy_is_switched_on(app, monkeypatch):
+    admin = _signed_in()
+    _enroll(app, admin)
+    _policy(app, monkeypatch, require_2fa_for_admins=False)
+
+    _policy(app, monkeypatch, require_2fa_for_admins=True)
+
+    assert admin.get("/monitoring/overview").status_code == 200
+    assert not any(row.message.startswith("Signed out") for row in app.db.query(AuditLog))
+
+
+def test_requiring_two_factor_of_everyone_signs_out_users_without_it(app, monkeypatch):
+    member = _signed_in("member@example.com")
+
+    _policy(app, monkeypatch, require_2fa_for_everyone=True)
+
+    assert member.get("/monitoring/overview").status_code == 401
+    assert _login(TestClient(main.app), "member@example.com").json()["setup_required"] is True
+
+
 def test_enrolling_upgrades_the_session_and_rotates_its_id(app):
     client = _signed_in()
     limited_cookie = client.cookies.get(COOKIE)

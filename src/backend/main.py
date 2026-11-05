@@ -552,6 +552,16 @@ def two_factor_required_for(db, role: str) -> bool:
     return require_two_factor_for_everyone(db) or (role == "admin" and require_admin_two_factor(db))
 
 
+def end_sessions_without_two_factor(db) -> int:
+    """After a two-factor rule is switched on: signs out every account it now applies to that hasn't set two-factor
+    up, so they sign in again under the rule (and land on the setup). Returns how many sessions ended."""
+    ended = 0
+    for account in db.query(User).filter(User.totp_enabled.is_(False)):
+        if two_factor_required_for(db, account.role):
+            ended += revoke_other_sessions(redis_client, account.id, None)
+    return ended
+
+
 DISABLED_RULES_KEY = "disabled_rules"
 
 
@@ -610,6 +620,7 @@ def get_admin_settings(session_id: Annotated[str | None, Cookie(alias=SESSION_CO
 def update_admin_settings(payload: AdminSettingsRequest, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     user = _require_admin(session_id, db)
     changes = []
+    two_factor_tightened = False
     days = payload.history_retention_days
     if days is not None and days != retention.history_days(db):
         if days not in retention.HISTORY_CHOICES:
@@ -618,6 +629,7 @@ def update_admin_settings(payload: AdminSettingsRequest, session_id: Annotated[s
         changes.append(f"Changed history retention to {retention.describe(days)}")
     if payload.require_2fa_for_admins is not None and payload.require_2fa_for_admins != require_admin_two_factor(db):
         _set_setting(db, REQUIRE_ADMIN_2FA_KEY, "true" if payload.require_2fa_for_admins else "false")
+        two_factor_tightened |= payload.require_2fa_for_admins
         changes.append(f"{'Required' if payload.require_2fa_for_admins else 'Stopped requiring'} two-factor for administrators")
     if payload.instance_name is not None:
         name = _printable(payload.instance_name, MAX_INSTANCE_NAME)
@@ -628,6 +640,7 @@ def update_admin_settings(payload: AdminSettingsRequest, session_id: Annotated[s
             changes.append(f"Renamed this install to {name}" if name else "Reset this install's name to the default")
     if payload.require_2fa_for_everyone is not None and payload.require_2fa_for_everyone != require_two_factor_for_everyone(db):
         _set_setting(db, REQUIRE_2FA_EVERYONE_KEY, "true" if payload.require_2fa_for_everyone else "false")
+        two_factor_tightened |= payload.require_2fa_for_everyone
         changes.append(f"{'Required' if payload.require_2fa_for_everyone else 'Stopped requiring'} two-factor for everyone")
     if payload.disabled_rules is not None:
         known = {row["kind"] for row in RULE_ROWS}
@@ -684,6 +697,10 @@ def update_admin_settings(payload: AdminSettingsRequest, session_id: Annotated[s
             _set_setting(db, MOUNT_THRESHOLDS_KEY, json.dumps(mount_thresholds))
             changes.append("Changed per-mount disk thresholds: " + (", ".join(f"{mount}={limits['disk_warning_pct']:g}/{limits['disk_critical_pct']:g}" for mount, limits in mount_thresholds.items()) or "none"))
     db.commit()
+    if two_factor_tightened:
+        ended = end_sessions_without_two_factor(db)
+        if ended:
+            changes.append(f"Signed out {ended} session{'s' if ended != 1 else ''} of accounts that must now set up two-factor")
     for change in changes:
         record_audit_log(db, user_id=user["id"], level="INFO", message=change, source="admin")
     return _admin_settings(db)

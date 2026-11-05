@@ -28,6 +28,7 @@ import os
 import re
 import socket
 import socketserver
+import threading
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any, Callable
@@ -41,6 +42,10 @@ SOCKET_PATH = os.getenv("DOCKER_SOCKET_PATH", "/var/run/docker.sock")
 LISTEN_PATH = os.getenv("INFRADECK_DOCKER_PROXY_SOCKET", "/run/docker-proxy/docker.sock")
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 UPSTREAM_TIMEOUT_SECONDS = 10
+# A stalled client is dropped after this long without sending anything, and only this many connections are served
+# at once (the collector sends one request at a time), so no client can tie the proxy up.
+CLIENT_TIMEOUT_SECONDS = 30
+MAX_CONNECTIONS = 16
 
 _ID = r"[0-9a-f]{12,64}"
 # Matched against the whole request target, query string included.
@@ -144,6 +149,7 @@ class _UnixHTTPConnection(http.client.HTTPConnection):
 class ProxyHandler(BaseHTTPRequestHandler):
     server_version = "infradeck-docker-proxy"
     socket_path = SOCKET_PATH
+    timeout = CLIENT_TIMEOUT_SECONDS
 
     def _send(self, status: int, body: bytes = b"", content_type: str = "text/plain") -> None:
         self.send_response(status)
@@ -185,6 +191,27 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
 class _Server(socketserver.ThreadingUnixStreamServer):
     daemon_threads = True
+
+    def __init__(self, *args: Any, **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        self.slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        """Closes a connection beyond MAX_CONNECTIONS straight away instead of starting a thread for it."""
+        if not self.slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.slots.release()
 
 
 def make_server(listen_path: str = LISTEN_PATH, socket_path: str = SOCKET_PATH) -> socketserver.ThreadingUnixStreamServer:
