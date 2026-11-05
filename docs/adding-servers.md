@@ -39,7 +39,7 @@ services:
   collector:
     image: ghcr.io/…/collector@sha256:…
     environment:
-      INFRADECK_API_URL: http://10.8.0.1:8081/api
+      INFRADECK_API_URL: http://<vpn-address>:8081/api
       INFRADECK_JOIN_TOKEN: hlj_…
       INFRADECK_DOCKER_HOST: /run/docker-proxy/docker.sock
     volumes:
