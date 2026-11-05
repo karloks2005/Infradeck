@@ -4,7 +4,7 @@ Infradeck ships with an automated test suite. This page explains how to run it, 
 covers (and what it doesn't), and what every single test is for, so you can decide
 whether a failure matters before you upgrade or change your setup.
 
-- **1409 test cases** from 762 test functions, plus 38 small tests of the frontend helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
+- **1418 test cases** from 770 test functions, plus 38 small tests of the frontend helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
 - **About two minutes** to run. No Docker, PostgreSQL, Redis, network or root access needed.
 - **Safe to run next to a live install.** The tests use a throwaway in-memory database
   and fakes; they never touch your running containers or your data. (Two collector
@@ -135,7 +135,7 @@ side and the backend's side in one file, because the feature only works when bot
 | `tests/monitoring/` | What is watched and how it turns into incidents: the alert engine and its rules, system, container and network checks, the system helper and the container details. |
 | `tests/history/` | Long-term history: rollups, the history API, statistics and the database indexes behind them. |
 | `tests/assistant/` | The AI assistant: its fixed health checks, error messages and conversations. |
-| `tests/security/` | Tests written from security reviews that cut across areas: request size limits and the second review's findings. |
+| `tests/security/` | Tests written from security reviews that cut across areas: request size limits, the second review's findings and the nginx security headers. |
 
 `tests/conftest.py` (settings every test shares) and `tests/fakes.py` (the fake Redis) stay at the top.
 The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
@@ -144,7 +144,7 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 
 | File | Cases | Protects |
 |---|---|---|
-| [`test_account_security.py`](#test_account_securitypy) | 136 | Two-factor sign-in, recovery codes, encrypted secrets, sessions you can review and end, password change, and the password check before turning two-factor on. |
+| [`test_account_security.py`](#test_account_securitypy) | 146 | Two-factor sign-in, recovery codes, encrypted secrets, sessions you can review and end, password change, and the password check before turning two-factor on. |
 | [`test_admin.py`](#test_adminpy) | 18 | Who may do what: admin-only actions, roles, retention cleanup, the chat on/off switch. |
 | [`test_agent_errors.py`](#test_agent_errorspy) | 5 | Helpful, non-leaking error messages from the AI assistant. |
 | [`test_agent_service.py`](#test_agent_servicepy) | 9 | The assistant can only run the fixed read-only checks; the OpenAI provider and conversation history. |
@@ -158,7 +158,7 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 | [`test_conversations.py`](#test_conversationspy) | 1 | Deleting one assistant conversation leaves the others alone. |
 | [`test_container_checks.py`](#test_container_checkspy) | 126 | Docker health, container exit codes, inventory and image changes, memory-leak trends, and the validation of everything a collector sends about containers. |
 | [`test_dashboard_host.py`](#test_dashboard_hostpy) | 8 | The "this machine" logic, history charts, container list and incident counts. |
-| [`test_docker_proxy.py`](#test_docker_proxypy) | 111 | The read-only Docker proxy: what it allows, refuses and hides. |
+| [`test_docker_proxy.py`](#test_docker_proxypy) | 119 | The read-only Docker proxy: what it allows, refuses and hides, and how it limits its own clients. |
 | [`test_enrollment.py`](#test_enrollmentpy) | 10 | Enrollment keys, collector credentials and offline-server detection. |
 | [`test_enrollment_limits.py`](#test_enrollment_limitspy) | 12 | Limits on the enrollment key: rate limits, the server cap, and a warning when credentials are replaced. |
 | [`test_health_checks.py`](#test_health_checkspy) | 4 | The assistant's fixed health checks and the critical-only webhook. |
@@ -167,6 +167,7 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 | [`test_migrations.py`](#test_migrationspy) | 5 | Database migrations: new and pre-migration databases both end at the latest revision with the models' schema. |
 | [`test_ingest_validation.py`](#test_ingest_validationpy) | 178 | What collectors report is checked and bounded: numbers, names, filesystems, spacing of check-ins. |
 | [`test_input_limits.py`](#test_input_limitspy) | 38 | Size and shape limits on request bodies, the audit-log endpoint, and safe defaults. |
+| [`test_nginx_headers.py`](#test_nginx_headerspy) | 4 | The development and server nginx send the same security headers, HSTS only on the server one. |
 | [`test_network_checks.py`](#test_network_checkspy) | 94 | The host's real network totals, listening-port inventory, optional internet check, firewall fingerprints, and the validation of all of it. |
 | [`test_pending_collectors.py`](#test_pending_collectorspy) | 28 | Adding servers: approval, join tokens, strict mode, re-pairing safety. |
 | [`test_rollups.py`](#test_rollupspy) | 31 | Summarised history: hourly, daily, weekly and monthly rollups, catching up, gaps, and purging only what has been summarised. |
@@ -246,6 +247,9 @@ out of their own install.
 | `test_when_no_key_is_configured_two_factor_is_not_enforced_and_cannot_be_set_up` | Without a key the "require 2FA" policy isn't enforced (no lock-out) and setup says why it can't proceed. |
 | `test_the_policy_can_be_turned_off_and_defaults_to_on` | "Require two-factor for admins" is on by default and an admin can switch it off. |
 | `test_admins_can_change_the_policy_and_it_is_audited` | Policy changes are admin-only and recorded in the log. |
+| `test_switching_the_admin_policy_on_signs_out_admins_without_two_factor` | Switching the admin policy on ends the sessions of admins who haven't set two-factor up, so they sign in again and land on the setup; members stay signed in. The sign-out is recorded in the log. |
+| `test_admins_who_already_use_two_factor_stay_signed_in_when_the_policy_is_switched_on` | Admins who already use two-factor keep their sessions. |
+| `test_requiring_two_factor_of_everyone_signs_out_users_without_it` | Requiring two-factor of everyone does the same for members. |
 | `test_the_policy_only_applies_to_administrators` | Members are never forced to enrol. |
 | `test_an_admin_without_two_factor_gets_a_limited_session_when_it_is_required` | An admin who hasn't enrolled can sign in, but only to set up two-factor. |
 | `test_enrolling_upgrades_the_session_and_rotates_its_id` | Finishing enrolment turns the limited session into a full one with a new ID. |
@@ -598,6 +602,8 @@ tested hardest (91 cases). If any of these fail, do not run the proxy until it i
 | `test_oversized_upstream_answers_are_rejected` | A huge answer from Docker is rejected instead of being passed on. |
 | `test_proxy_socket_is_not_world_accessible_and_replaces_a_stale_one` | The proxy's socket file is created with owner and group access only, and a leftover socket from a crash is replaced. |
 | `test_collector_still_supports_the_plain_socket_path` | The collector still works without Docker access (it just reports no containers). |
+| `test_a_stalled_client_is_dropped` | A client that connects and sends nothing is disconnected after the timeout instead of holding the connection open. |
+| `test_connections_beyond_the_limit_are_closed_until_a_slot_frees` | Connections beyond the limit are closed at once, and served again as soon as an earlier one ends. |
 
 ### test_enrollment.py
 
@@ -744,6 +750,17 @@ Request bodies have sizes and shapes, and the defaults are the safe ones.
 | `test_registration_is_closed_unless_someone_opens_it` | Registration, API documentation and CORS origins default to closed and empty, and registration opens only when asked. |
 | `test_the_api_documentation_is_not_served_to_anonymous_visitors` | `/docs`, `/redoc` and `/openapi.json` return 404. |
 | `test_an_open_registration_is_called_out_in_the_log` | With registration open and accounts existing, the startup log gets a SECURITY WARNING; not on a fresh install. |
+
+### test_nginx_headers.py
+
+The development nginx (`docker/nginx.conf`) and the server nginx (`docker/nginx.strict.conf`) are separate files
+with the same intent. These tests catch a security header changed in one but not the other.
+
+| Test | What it checks |
+|---|---|
+| `test_both_send_the_same_security_headers` | Both files send the same security headers with the same values, apart from HSTS. |
+| `test_only_the_server_nginx_sends_hsts` | HSTS is sent by the server nginx (behind HTTPS) and not by the development one (plain HTTP). |
+| `test_no_location_drops_the_server_wide_headers` *(2 inputs)* | No `location` block has its own `add_header`, which would silently drop the server-wide headers there. |
 
 ### test_network_checks.py
 
