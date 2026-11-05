@@ -94,9 +94,9 @@ Collectors reach the **collector gate**, not the public domain. In `.env`:
 
 | Setting | Example | Meaning |
 |---|---|---|
-| `COLLECTOR_BIND` | `10.8.0.1` | Your VPN server's address on the dashboard machine (for OpenVPN, the `tun` address). The gate's port is published on this address only. |
+| `COLLECTOR_BIND` | `<vpn-address>` | Your VPN server's address on the dashboard machine (for OpenVPN, the `tun` address). The gate's port is published on this address only. |
 | `COLLECTOR_PORT` | `8081` | Port of the gate on that address. |
-| `COLLECTOR_PUBLIC_URL` | `http://10.8.0.1:8081/api` | What **Connect a server** tells new machines to use. |
+| `COLLECTOR_PUBLIC_URL` | `http://<vpn-address>:8081/api` | What **Connect a server** tells new machines to use. |
 | `COLLECTOR_IMAGE`, `DOCKER_PROXY_IMAGE` | `ghcr.io/…@sha256:…` | The images remote machines install; see below. |
 
 Things to get right:

@@ -35,7 +35,7 @@ Every setting below is listed, with no values, in [`example.env`](../example.env
 | `LOGIN_RATE_LIMIT` / `LOGIN_RATE_WINDOW_SECONDS` | `5` / `60` | Login attempts per IP and per email. |
 | `REGISTER_RATE_LIMIT` / `REGISTER_RATE_WINDOW_SECONDS` | `3` / `3600` | Registrations per IP. |
 | `COLLECTOR_BIND` / `COLLECTOR_PORT` | `127.0.0.1` / `8081` | Server file: address and port where the collector gate is published. Set the address to your VPN's. |
-| `COLLECTOR_PUBLIC_URL` | empty | What **Connect a server** tells new machines to use, e.g. `http://10.8.0.1:8081/api`. |
+| `COLLECTOR_PUBLIC_URL` | empty | What **Connect a server** tells new machines to use, e.g. `http://<vpn-address>:8081/api`. |
 | `COLLECTOR_IMAGE` / `DOCKER_PROXY_IMAGE` | empty | Digest-pinned images remote machines install. **Connect a server** needs both. |
 | `JOIN_TOKEN_TTL_SECONDS` | `900` | How long a generated join token stays valid. |
 | `COLLECTOR_ACCESS` | `open` (dev), `strict` (server file) | `strict` makes the backend answer collector endpoints only when they came through the collector gate. |
