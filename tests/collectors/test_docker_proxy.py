@@ -1,7 +1,9 @@
 import http.client
 import json
+import socket
 import socketserver
 import threading
+import time
 from http.server import BaseHTTPRequestHandler
 
 import pytest
@@ -244,3 +246,55 @@ def test_proxy_socket_is_not_world_accessible_and_replaces_a_stale_one(tmp_path)
 
 def test_collector_still_supports_the_plain_socket_path(tmp_path):
     assert collector.collect_containers(str(tmp_path / "missing.sock")) == []
+
+
+@pytest.fixture
+def bare_proxy(tmp_path):
+    """A proxy with no Docker daemon behind it, for tests of how it treats its own clients."""
+    def start():
+        listen_path = str(tmp_path / "proxy" / "docker.sock")
+        server = proxy.make_server(listen_path, str(tmp_path / "unused"))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        servers.append(server)
+        return listen_path
+    servers = []
+    yield start
+    for server in servers:
+        server.shutdown()
+        server.server_close()
+
+
+def _connect(listen_path):
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(5)
+    client.connect(listen_path)
+    return client
+
+
+def test_a_stalled_client_is_dropped(bare_proxy, monkeypatch):
+    monkeypatch.setattr(proxy.ProxyHandler, "timeout", 0.2)
+    client = _connect(bare_proxy())
+    try:
+        assert client.recv(1) == b""   # closed by the proxy, not by the 5 s timeout here
+    finally:
+        client.close()
+
+
+def test_connections_beyond_the_limit_are_closed_until_a_slot_frees(bare_proxy, monkeypatch):
+    monkeypatch.setattr(proxy, "MAX_CONNECTIONS", 1)
+    listen_path = bare_proxy()
+    holder = _connect(listen_path)
+    try:
+        with pytest.raises((http.client.RemoteDisconnected, ConnectionError)):
+            _raw(listen_path, "GET", "/containers/json?all=1")
+    finally:
+        holder.close()
+
+    deadline = time.monotonic() + 5
+    while True:
+        try:
+            assert _raw(listen_path, "GET", "/containers/json?all=1")[0] == 502   # served again; no daemon behind it
+            break
+        except (http.client.RemoteDisconnected, ConnectionError):
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
