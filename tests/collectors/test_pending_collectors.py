@@ -326,5 +326,6 @@ def test_a_bad_token_is_refused_even_in_open_mode(db):
 def test_install_info_reports_the_configured_addresses(db, monkeypatch):
     monkeypatch.setattr(main, "COLLECTOR_PUBLIC_URL", "http://10.8.0.1:8081/api")
     monkeypatch.setattr(main, "COLLECTOR_IMAGE", "ghcr.io/o/c@sha256:abc")
+    monkeypatch.setattr(main, "DOCKER_PROXY_IMAGE", "")
     info = monitoring_routes.install_info(session_id="s", db=db)
     assert info == {"strict": False, "collector_url": "http://10.8.0.1:8081/api", "collector_image": "ghcr.io/o/c@sha256:abc", "proxy_image": None}
