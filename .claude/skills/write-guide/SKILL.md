@@ -8,7 +8,7 @@ description: Write or update a step-by-step guide for infradeck — deploying th
 A guide gets a reader from a starting state to a working result. They follow it while doing the task, often in a terminal, sometimes when something is already broken. Explanations of internals belong in docs (write-docs); link to them instead.
  
 ## Before writing
-- **Take everything from the repo.** Commands, file names, environment variables, ports, defaults and image names come from `compose.yml`, `docker-compose.server.yml`, `docker/`, `.env.example`, config code and existing docs. Never invent a flag or variable. If something can't be confirmed, ask me or mark it `TODO: verify`.
+- **Take everything from the repo.** Commands, file names, environment variables, ports, defaults and image names come from `compose.yml`, `docker-compose.server.yml`, `docker/`, `example.env`, config code and existing docs. Never invent a flag or variable. If something can't be confirmed, ask me or mark it `TODO: verify`.
 - **Run what you can.** If a step can be run in this environment, run it and use the real output. Say which steps you couldn't test.
 - **Check what exists.** Update an existing guide in `docs/` rather than adding a parallel one. New guides go in `docs/` with a task-based kebab-case name (`deploy-server.md`, `install-collector.md`).
 - **Pin down the reader and the setup.** Default reader: a homelab user comfortable with Linux and Docker, new to infradeck. Name the setups the guide covers (single LAN, multi-site/VPS, behind Traefik or Caddy) and don't mix them in one path; branch clearly or write separate guides.
