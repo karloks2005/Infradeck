@@ -18,7 +18,8 @@ The [README](../README.md) is the short version: what the project is, how to sta
 | Page | What is in it |
 |---|---|
 | [The containers and why each one exists](containers.md) | Every container in the stack: what it does, how it works, why it is separate, and what happens when it stops. |
-| [Deploying on a server](deployment.md) | The server stack behind Traefik, the VPN collector gate, publishing the collector images, updating, running without Traefik. |
+| [Deploying on a server](deployment.md) | The server stack behind your reverse proxy (ready-made for Traefik), the VPN collector gate, publishing the collector images, updating, other proxies. |
+| [Deploy Infradeck behind Traefik](deploy-traefik.md) | Step by step on a server that already runs Traefik: `.env`, first start, admin account, verifying, upgrading and rolling back, common errors. |
 | [Adding servers](adding-servers.md) | **Connect a server**, what its command does, how registration and approval work, networking. |
 | [Configuration](configuration.md) | Every `.env` setting for the stack, the collector and the frontend build. |
 | [Troubleshooting](troubleshooting.md) | Symptoms and what to check. |

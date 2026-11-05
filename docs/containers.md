@@ -285,7 +285,7 @@ keep coming.
 ## infradeck-collector-gate (server stack only)
 
 **What it does.** The only way to reach the four collector endpoints (register, poll registration,
-enroll, ingest) when the stack runs behind Traefik.
+enroll, ingest) when the server stack runs behind a reverse proxy.
 
 **How it works.** A plain `nginx:alpine` with [`docker/nginx.collector.conf`](../docker/nginx.collector.conf)
 and two listeners:
@@ -296,7 +296,7 @@ and two listeners:
 
 Everything else answers `404`. The gate marks each request with the listener it came through, and the
 backend (with `COLLECTOR_ACCESS=strict`) accepts collector traffic only when that mark is present. The
-gate is not on Traefik's network, so other apps behind the same Traefik can't reach the collector
+gate is not on the reverse proxy's network, so other apps behind the same proxy can't reach the collector
 endpoints either.
 
 **Why this approach.** The dashboard itself may be public on the internet, but the endpoints that
@@ -350,7 +350,7 @@ it obtains and renews a Let's Encrypt certificate for `DOMAIN` and proxies every
 Start it with `docker compose --profile https up -d`.
 
 **Why Caddy here.** It handles certificates with no configuration beyond the domain name. The server
-stack doesn't include it because it expects an existing Traefik to handle HTTPS (see
+stack doesn't include it because it expects the reverse proxy you already run to handle HTTPS (see
 [Deploying](deployment.md)).
 
 ## Volumes

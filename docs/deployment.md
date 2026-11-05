@@ -1,13 +1,21 @@
 [← Documentation](README.md)
 
-# Deploying on a server (behind Traefik)
+# Deploying on a server
 
 There are two Compose files:
 
 | File | Use | Differences |
 |---|---|---|
 | `compose.yml` | Laptop / development (the default when you run `docker compose` without `-f`) | Dashboard on port 5173 on all interfaces; plain HTTP; optional Caddy (`--profile https`). |
-| `docker-compose.server.yml` | Server behind an existing Traefik | Traefik labels and network; HTTPS-only session cookie; only the first account can register; port 5173 bound to `127.0.0.1`; no Caddy; **collector endpoints removed from the public side** and served by a separate collector gate on your VPN address. |
+| `docker-compose.server.yml` | Server behind your reverse proxy (Traefik, Caddy, nginx, ...) | HTTPS-only session cookie; only the first account can register; port 5173 bound to `127.0.0.1`; no Caddy; **collector endpoints removed from the public side** and served by a separate collector gate on your VPN address. |
+
+The server stack works behind any reverse proxy. For some proxies there is also a ready-made file in
+[`deploy/`](../deploy) that you add on top of it, so the proxy picks the dashboard up without any setup of its own:
+
+| Your proxy | Add | What it adds |
+|---|---|---|
+| Traefik | `deploy/traefik.yml` | The Traefik labels (router, entrypoint, certificate resolver) and Traefik's Docker network. Step-by-step: [Deploy Infradeck behind Traefik](deploy-traefik.md). |
+| Anything else | nothing | Point your proxy at the dashboard port, `127.0.0.1:5173` (see [Other reverse proxies](#other-reverse-proxies)). |
 
 ## 1. Create `.env` on the server
 
@@ -24,26 +32,36 @@ Then set at least these:
 |---|---|---|
 | `POSTGRES_PASSWORD` | *(required)* | A long random password for the bundled database. |
 | `REDIS_PASSWORD` | *(required)* | A long random password for Redis, which holds the login sessions. Letters and digits only (`openssl rand -hex 24`). |
-| `DASHBOARD_DOMAIN` | *(required)* | Your domain, without `https://`. Used for the Traefik router. |
+| `DASHBOARD_DOMAIN` | *(required)* | Your domain, without `https://`. Used for the allowed origin (CORS) and the Traefik router. |
 | `TRUSTED_PROXIES` | empty | The subnet of your reverse proxy's Docker network, for Traefik `docker network inspect traefik_default --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}'`. Without it every client shares Traefik's address, so one person's failed sign-ins can lock everyone out for a minute. See [Reverse proxies](#reverse-proxies-and-client-addresses). |
-| `TRAEFIK_ENTRYPOINT` | `websecure` | Your Traefik HTTPS entrypoint name. |
-| `TRAEFIK_CERT_RESOLVER` | `letsencrypt` | Your Traefik certificate resolver name. |
-| `TRAEFIK_NETWORK` | `traefik_default` | The Docker network Traefik is attached to. |
-| `TRAEFIK_ROUTER` | `infradeck` | Name of this dashboard's Traefik router and service; change it only if it clashes with another one. |
-| `COMPOSE_FILE` | `docker-compose.server.yml` | Makes plain `docker compose ...` commands use the server file (see below). |
+| `TRAEFIK_ENTRYPOINT` | `websecure` | Traefik only: your HTTPS entrypoint name. |
+| `TRAEFIK_CERT_RESOLVER` | `letsencrypt` | Traefik only: your certificate resolver name. |
+| `TRAEFIK_NETWORK` | `traefik_default` | Traefik only: the Docker network Traefik is attached to. |
+| `TRAEFIK_ROUTER` | `infradeck` | Traefik only: name of this dashboard's router and service; change it only if it clashes with another one. |
+| `COMPOSE_FILE` | `docker-compose.server.yml`, with Traefik `docker-compose.server.yml:deploy/traefik.yml` | Makes plain `docker compose ...` commands use the server file and your proxy's file (see below). |
 | `SECRETS_KEY` | *(strongly recommended)* | Encrypts two-factor secrets and notification addresses. Two-factor is required for admins by default and can't be set up without it. Generate with `docker compose run --rm backend python -m src.backend.secrets_box`. |
 | `OPENAI_API_KEY`, `AGENT_MODEL` | empty, `gpt-5-mini` | Optional: the incident agent's diagnoses and chat. See [Incident agent](assistant.md#setting-it-up). |
 
-Find the network with `docker network ls` or
+With Traefik, find its network with `docker network ls` or
 `docker inspect <traefik-container> --format '{{json .NetworkSettings.Networks}}'`.
 The entrypoint and resolver names are in Traefik's static configuration
 (`entryPoints:` / `certificatesResolvers:`).
 
 ## 2. Use the right Compose file
 
-`COMPOSE_FILE=docker-compose.server.yml` in `.env` matters. Without it, Compose picks
-`compose.yml` (the development stack), and an `up` would replace the server containers
-with ones that have no Traefik labels and open registration.
+`COMPOSE_FILE` in `.env` matters. Without it, Compose picks `compose.yml` (the development
+stack), and an `up` would replace the server containers with ones that have open registration
+and serve the collector endpoints publicly. Set it to the server file, followed by your proxy's
+file from `deploy/` if you use one, separated by `:`:
+
+```bash
+COMPOSE_FILE=docker-compose.server.yml:deploy/traefik.yml   # with Traefik
+COMPOSE_FILE=docker-compose.server.yml                      # any other proxy
+```
+
+All commands below are plain `docker compose ...` and rely on it. Don't add
+`-f docker-compose.server.yml`: `-f` replaces `COMPOSE_FILE`, so it would leave out your proxy's
+file (with Traefik, the dashboard would disappear from your domain until the next plain `up`).
 
 **Don't copy the server file under another name** (for example `docker-compose.yml`). If
 both `compose.yml` and `docker-compose.yml` exist, Compose silently uses `compose.yml`, and
@@ -53,14 +71,14 @@ into `.env`, delete the copy, and continue with `docker-compose.server.yml`.
 ## 3. Start it
 
 ```bash
-docker compose -f docker-compose.server.yml up -d --build
+docker compose up -d --build
 ```
 
 Open `https://<your-domain>` and register your account right away. The first
 account needs the **setup token** (`docker compose logs backend | grep "setup token"`,
 or the value of `ADMIN_BOOTSTRAP_TOKEN` if you set one), so a stranger who finds a
 fresh deployment can't claim it; then registration closes. That first account is
-the admin. Traefik terminates HTTPS with its own certificates; the stack needs no
+the admin. Your reverse proxy terminates HTTPS with its own certificates; the stack needs no
 certificate configuration.
 
 The public address serves only the dashboard. Collectors don't use it; set up
@@ -110,7 +128,7 @@ git tag v0.9.2 && git push origin v0.9.2     # the version in src/backend/config
    credentials. Check from any machine that isn't signed in to GHCR:
    `docker manifest inspect ghcr.io/<owner>/infradeck/collector:<version>`.
 3. Rebuild the stack so the backend knows the images:
-   `docker compose -f docker-compose.server.yml up -d --build`.
+   `docker compose up -d --build`.
 
 **Connect a server** won't generate a command until both images are set.
 
@@ -118,13 +136,20 @@ git tag v0.9.2 && git push origin v0.9.2     # the version in src/backend/config
 
 ```bash
 git pull
-docker compose -f docker-compose.server.yml up -d --build
+docker compose up -d --build
 ```
 
 Always rebuild **all** services (don't name individual ones). The backend,
 frontend, collector, Docker proxy and system helper each have their code built
 into their image, so a service that isn't rebuilt keeps running the old version.
 The database schema is updated automatically when the backend starts.
+
+**Upgrading from a version with the Traefik labels in `docker-compose.server.yml`:** they moved to
+`deploy/traefik.yml`. Before you update, change `.env` to
+`COMPOSE_FILE=docker-compose.server.yml:deploy/traefik.yml`. Without it the dashboard starts
+without the labels and Traefik stops serving your domain; adding it and running `docker compose up -d` again
+fixes that.
+The dashboard port's default is `127.0.0.1:5173` again; set `FRONTEND_PORT` if you rely on another one.
 
 **Upgrading from a version that had no `REDIS_PASSWORD`:** add one to `.env` first
 (`echo "REDIS_PASSWORD=$(openssl rand -hex 24)" >> .env`), then update as above. Compose refuses to start
@@ -140,11 +165,12 @@ compose project). Collectors started from `collector-compose.yml` need
 
 <diagram - What each step updates: git pull → source on disk; docker compose up -d --build → backend, frontend, collector, docker-proxy and gate containers rebuilt and recreated; git tag → Publish images workflow → new digests → .env and a fresh Connect a server command for remote machines; show that skipping --build leaves the old image running>
 
-## Without Traefik
+## Other reverse proxies
 
-- **Another reverse proxy (nginx, Caddy, HAProxy, ...):** use the **server stack** (`docker-compose.server.yml`),
-  not the development stack, and point your proxy at its dashboard port (`127.0.0.1:5173` by default; the
-  Traefik labels are simply unused). The server stack is the one that keeps the collector endpoints off the
+- **Another reverse proxy (nginx, Caddy, HAProxy, a tunnel connector, ...):** use the **server stack**
+  (`docker-compose.server.yml`) on its own, not the development stack, and point your proxy at its dashboard
+  port (`127.0.0.1:5173` by default). A proxy that runs in Docker can instead join the stack's `front` network
+  and reach `frontend:80`. The server stack is the one that keeps the collector endpoints off the
   public side, registration closed and the session cookie HTTPS-only. Terminate HTTPS in your proxy, have it
   send `X-Forwarded-For`, and set `TRUSTED_PROXIES` to its address (see below).
 - **Caddy profile (`--profile https`, development stack): private use only.** It publishes the development
