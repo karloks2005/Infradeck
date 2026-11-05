@@ -50,7 +50,7 @@ the kernel log and the login records, which the collector deliberately can't
 read. A separate container does:
 
 ```bash
-docker compose --profile system-events up -d     # add -f docker-compose.server.yml on a server
+docker compose --profile system-events up -d     # on a server, with COMPOSE_FILE set in .env
 ```
 
 It runs with a single capability (`CAP_SYSLOG`), no network and a read-only

@@ -1,0 +1,22 @@
+# Publishes the server stack through an existing Traefik (step by step: docs/deploy-traefik.md).
+# Add it after the server file in .env:
+#   COMPOSE_FILE=docker-compose.server.yml:deploy/traefik.yml
+# Then a plain `docker compose up -d --build` uses both. All values come from .env: DASHBOARD_DOMAIN
+# (required), TRAEFIK_ROUTER, TRAEFIK_ENTRYPOINT, TRAEFIK_CERT_RESOLVER and TRAEFIK_NETWORK (defaults shown).
+# Also set TRUSTED_PROXIES to the subnet of Traefik's network, so each client keeps its own address.
+services:
+  frontend:
+    networks:
+      - traefik
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_NETWORK:-traefik_default}
+      - traefik.http.routers.${TRAEFIK_ROUTER:-infradeck}.rule=Host(`${DASHBOARD_DOMAIN:?Set DASHBOARD_DOMAIN in .env}`)
+      - traefik.http.routers.${TRAEFIK_ROUTER:-infradeck}.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}
+      - traefik.http.routers.${TRAEFIK_ROUTER:-infradeck}.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      - traefik.http.services.${TRAEFIK_ROUTER:-infradeck}.loadbalancer.server.port=80
+
+networks:
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK:-traefik_default}  # Traefik's Docker network; same value as the label above

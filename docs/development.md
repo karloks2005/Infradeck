@@ -69,7 +69,8 @@ PostgreSQL database to run it there as well as on SQLite.
 
 ```text
 compose.yml                 development stack (default for `docker compose`)
-docker-compose.server.yml   server stack behind Traefik
+docker-compose.server.yml   server stack behind your reverse proxy
+deploy/                     ready-made additions for a reverse proxy (deploy/traefik.yml)
 collector-compose.yml       collector-only stack for monitored machines
 README.md                   what it is and how to start it (the short version)
 docs/                       the full documentation (start at docs/README.md)

@@ -1,9 +1,12 @@
-# Server stack, published over HTTPS by an existing Traefik.
-#   docker compose -f docker-compose.server.yml up -d --build
-# Nothing here needs editing: your domain and Traefik names come from .env (see example.env),
+# Server stack, published over HTTPS by the reverse proxy you already run (Traefik, Caddy, nginx, ...).
+# Your proxy reaches the dashboard on 127.0.0.1:5173, or over the `front` network if it runs in Docker.
+# Set COMPOSE_FILE in .env, adding the ready-made file for your proxy from deploy/ if there is one
+# (see docs/deployment.md), then run a plain `docker compose up -d --build`:
+#   COMPOSE_FILE=docker-compose.server.yml:deploy/traefik.yml   (Traefik)
+#   COMPOSE_FILE=docker-compose.server.yml                      (any other reverse proxy)
+# Nothing here needs editing: your settings come from .env (see example.env),
 # so `git pull` can always update this file. Don't copy it under another name: Compose
 # prefers compose.yml (the development stack) when two default-named files exist.
-# Tip: put COMPOSE_FILE=docker-compose.server.yml in .env so a plain `docker compose ...` uses it.
 services:
   postgres:
     image: postgres:16-alpine
@@ -53,7 +56,7 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env (generate one with openssl rand -hex 24)}@redis:6379/0
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       AGENT_MODEL: ${AGENT_MODEL:-gpt-5-mini}
-      # Served over HTTPS via Traefik, so the login cookie is HTTPS-only.
+      # Served over HTTPS by your reverse proxy, so the login cookie is HTTPS-only.
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
       # Only the first account can register; set to true to let others sign up.
       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
@@ -292,26 +295,15 @@ services:
     environment:
       # Address or network of your reverse proxy; empty trusts nobody's X-Forwarded-For.
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
-    # Serves the dashboard and proxies /api to the backend; Traefik publishes it
+    # Serves the dashboard and proxies /api to the backend; your reverse proxy publishes it
     # over HTTPS on your domain. The plain-HTTP port is bound to localhost only
     # (set FRONTEND_BIND=0.0.0.0 to also allow direct LAN/VPN access).
     ports:
-      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-8080}:80"
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-5173}:80"
     volumes:
       # Public listener only: collector endpoints are refused here (see the collector-gate service).
       - ./docker/nginx.strict.conf:/etc/nginx/conf.d/default.conf:ro
-    networks:
-      - front
-      - traefik
-    labels:
-      - traefik.enable=true
-      # All values come from .env: DASHBOARD_DOMAIN (required), TRAEFIK_ROUTER, TRAEFIK_ENTRYPOINT,
-      # TRAEFIK_CERT_RESOLVER and TRAEFIK_NETWORK (defaults shown).
-      - traefik.docker.network=${TRAEFIK_NETWORK:-traefik_default}
-      - traefik.http.routers.${TRAEFIK_ROUTER:-infradeck}.rule=Host(`${DASHBOARD_DOMAIN:?Set DASHBOARD_DOMAIN in .env}`)
-      - traefik.http.routers.${TRAEFIK_ROUTER:-infradeck}.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}
-      - traefik.http.routers.${TRAEFIK_ROUTER:-infradeck}.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-letsencrypt}
-      - traefik.http.services.${TRAEFIK_ROUTER:-infradeck}.loadbalancer.server.port=80
+    networks: [front]
     depends_on:
       backend:
         condition: service_healthy
@@ -323,9 +315,6 @@ networks:
     internal: true
   front:
   collector:
-  traefik:
-    external: true
-    name: ${TRAEFIK_NETWORK:-traefik_default}  # Traefik's Docker network; same value as the label above
 
 volumes:
   postgres_data:

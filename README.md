@@ -162,17 +162,19 @@ need published images; see [Publishing the collector images](docs/deployment.md#
 
 ## Deploying on a server
 
-The server stack (`docker-compose.server.yml`) publishes the dashboard through an existing **Traefik** and
-serves the collector endpoints only on a separate listener bound to your **VPN address**. In short:
+The server stack (`docker-compose.server.yml`) publishes the dashboard through the reverse proxy you already run
+(a ready-made file for **Traefik** is in [`deploy/`](deploy)) and serves the collector endpoints only on a separate listener bound to your **VPN address**. In short:
 
-1. `cp example.env .env`, then set `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `DASHBOARD_DOMAIN`, your Traefik names and
-   `COMPOSE_FILE=docker-compose.server.yml` (the last one matters: without it Compose uses the development stack).
+1. `cp example.env .env`, then set `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `DASHBOARD_DOMAIN`, `TRUSTED_PROXIES` and
+   `COMPOSE_FILE=docker-compose.server.yml`, with Traefik `docker-compose.server.yml:deploy/traefik.yml` and your
+   Traefik names (`COMPOSE_FILE` matters: without it Compose uses the development stack).
 2. Generate `SECRETS_KEY` (needed for two-factor sign-in) and set `COLLECTOR_BIND` / `COLLECTOR_PUBLIC_URL` for your VPN.
-3. `docker compose -f docker-compose.server.yml up -d --build`, then register the first account with the setup token from the backend log.
+3. `docker compose up -d --build`, then register the first account with the setup token from the backend log.
 4. Click **Connect a server** to add other machines.
 
-Every step, with the reasons and the pitfalls, is in [Deploying on a server](docs/deployment.md) and
-[Adding servers](docs/adding-servers.md). To update later: `git pull` and `docker compose -f docker-compose.server.yml up -d --build`.
+Every step, with the reasons and the pitfalls, is in [Deploying on a server](docs/deployment.md) (with Traefik:
+[Deploy Infradeck behind Traefik](docs/deploy-traefik.md)) and
+[Adding servers](docs/adding-servers.md). To update later: `git pull` and `docker compose up -d --build`.
 
 ## Documentation
 

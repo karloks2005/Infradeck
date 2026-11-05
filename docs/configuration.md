@@ -30,7 +30,7 @@ Every setting below is listed, with no values, in [`example.env`](../example.env
 | `BACKEND_PORT` | `8060` | Development stack only: the host port (on `127.0.0.1`) where the backend is published for debugging. The server stack publishes no backend port. |
 | `FRONTEND_PORT` | `5173` | Dashboard port on the host. |
 | `DASHBOARD_DOMAIN` | *(required on a server)* | Domain of the dashboard, without `https://` (server file). |
-| `TRAEFIK_ENTRYPOINT` / `TRAEFIK_CERT_RESOLVER` / `TRAEFIK_NETWORK` / `TRAEFIK_ROUTER` | `websecure` / `letsencrypt` / `traefik_default` / `infradeck` | Your Traefik names (server file). |
+| `TRAEFIK_ENTRYPOINT` / `TRAEFIK_CERT_RESOLVER` / `TRAEFIK_NETWORK` / `TRAEFIK_ROUTER` | `websecure` / `letsencrypt` / `traefik_default` / `infradeck` | Your Traefik names (`deploy/traefik.yml`). |
 | `CORS_ORIGINS` | `http://localhost:5173` (dev), `https://<DASHBOARD_DOMAIN>` (server file) | Comma-separated origins. Also the allow-list for the cross-site request check: a state-changing request from any other origin is refused unless its `Origin` matches the `Host` the dashboard was reached on. Add your dashboard URL if something in front rewrites `Host`. |
 | `LOGIN_RATE_LIMIT` / `LOGIN_RATE_WINDOW_SECONDS` | `5` / `60` | Login attempts per IP and per email. |
 | `REGISTER_RATE_LIMIT` / `REGISTER_RATE_WINDOW_SECONDS` | `3` / `3600` | Registrations per IP. |
@@ -42,7 +42,7 @@ Every setting below is listed, with no values, in [`example.env`](../example.env
 | `INFRADECK_ENROLL_KEY` | empty | Lets the stack's own collector skip approval. |
 | `INFRADECK_SERVER_NAME` | host's hostname | Name shown for the stack's own machine. |
 | `DOMAIN` | `localhost` | Domain for the optional Caddy profile. |
-| `COMPOSE_FILE` | – | Set to `docker-compose.server.yml` on a server so plain `docker compose` uses it. |
+| `COMPOSE_FILE` | – | On a server: `docker-compose.server.yml`, with Traefik `docker-compose.server.yml:deploy/traefik.yml`, so plain `docker compose` uses them. |
 | `LIVE_GRAPH_REFRESH_INTERVAL_SECONDS` | `3` | How often the dashboard refreshes (server file; applied when the frontend image is built). |
 | `INFRADECK_CHECK_INTERVAL_SECONDS` | `60` | Initial check interval of the stack's own collector (server file); the dashboard setting overrides it. |
 
