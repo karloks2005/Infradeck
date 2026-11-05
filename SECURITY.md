@@ -413,9 +413,13 @@ URL, a keyword or a value in a JSON reply, a TCP port, a TLS certificate, a DNS 
 
 ## Client addresses and collector installs
 
-- **Client IPs.** nginx accepts `X-Forwarded-For` only from private or Docker network addresses (for
-  example Traefik), so login and registration rate limits see the real client address and it can't be
-  spoofed from outside.
+- **Client IPs.** nginx accepts `X-Forwarded-For` only from the addresses in `TRUSTED_PROXIES`: the reverse
+  proxy in front of the dashboard, whichever one it is (Traefik, Caddy, nginx, HAProxy, ...). Anyone else's
+  header is ignored and the address that connected counts, so another container, a LAN or a VPN client can't
+  appear to come from a new address on every request and get around the sign-in, registration, two-factor
+  and enrollment limits. With `TRUSTED_PROXIES` empty (the default) nobody is trusted; behind a proxy every
+  client then shares the proxy's address and limits, which is safe but strict, so set it. The value is checked
+  when the container starts (IP addresses and CIDR ranges only); anything else stops the container.
 - **No one-line installer.** The old `docker run` install is gone. Remote machines run the compose
   command **Connect a server** generates (signed, digest-pinned images), and machines set up from
   `collector-compose.yml` build the images locally.
@@ -442,8 +446,10 @@ URL, a keyword or a value in a JSON reply, a TCP port, a TLS certificate, a DNS 
   network separation are what stop that.
 - **Upgrade.** Sessions written in the old format no longer work (everyone signs in once) and are deleted from
   Redis at start, so the old session IDs don't linger there.
-- **Still open:** the backend trusts `X-Forwarded-For` from any address that can reach it (`--forwarded-allow-ips`).
-  With the separation, only the nginx containers can, but narrowing it further is tracked separately.
+- **The backend** trusts `X-Forwarded-For` from any address that can reach it (`--forwarded-allow-ips *`). That
+  is deliberate: every request from outside reaches it through nginx, which replaces the header with the address
+  it settled on, and only the stack's own containers can connect to it directly. Narrowing it to the nginx
+  containers would need fixed addresses on the Docker networks, which can clash with networks already on the host.
 
 ## Statistics and history
 

@@ -289,6 +289,9 @@ services:
         VITE_LIVE_GRAPH_REFRESH_INTERVAL_SECONDS: ${LIVE_GRAPH_REFRESH_INTERVAL_SECONDS:-3}
     container_name: infradeck-frontend
     restart: unless-stopped
+    environment:
+      # Address or network of your reverse proxy; empty trusts nobody's X-Forwarded-For.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
     # Serves the dashboard and proxies /api to the backend; Traefik publishes it
     # over HTTPS on your domain. The plain-HTTP port is bound to localhost only
     # (set FRONTEND_BIND=0.0.0.0 to also allow direct LAN/VPN access).

@@ -176,6 +176,7 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 | [`test_stats.py`](#test_statspy) | 46 | Fleet statistics (incidents over time, availability) and the busy-hours heatmap: grouping, ranges, caching and validation. |
 | [`test_system_checks.py`](#test_system_checkspy) | 17 | Reboot, OOM, kernel-fault, clock and pending-reboot detection, and the System row's event list. |
 | [`test_system_helper.py`](#test_system_helperpy) | 35 | The optional system helper: kernel-log parsing, `wtmp`, crash detection, hostile input. |
+| [`test_trusted_proxies.py`](#test_trusted_proxiespy) | 17 | Whose `X-Forwarded-For` nginx believes: nobody by default, only addresses and CIDR ranges from `TRUSTED_PROXIES`. |
 
 ## Every test, explained
 
@@ -1095,6 +1096,17 @@ log lines, user names), so most of these tests feed it hostile input.
 | `test_clean_shutdown_keeps_the_reboot_informational` | A reboot after a clean shutdown stays informational. |
 | `test_helper_arriving_after_the_reboot_was_noticed_updates_the_event_and_alert` | If the helper finishes after the reboot was first noticed, the event and incident are updated to the right answer. |
 | `test_invalid_last_shutdown_values_are_dropped` | An unexpected value for "last shutdown" is discarded. |
+
+### test_trusted_proxies.py
+
+`docker/trusted-proxies.sh` runs when the frontend container starts and turns `TRUSTED_PROXIES` into the nginx
+settings that decide whose `X-Forwarded-For` is believed. These tests run the real script.
+
+| Test | What it checks |
+|---|---|
+| `test_by_default_nobody_is_trusted` *(5 inputs)* | Unset, empty or only separators: no address is trusted, so the address that connected always counts. |
+| `test_each_proxy_is_trusted_and_the_header_read_from_it` | IPv4 and IPv6 addresses and ranges, with or without spaces, each become a trusted proxy, and the header is read from them. |
+| `test_anything_but_addresses_stops_the_container` *(11 inputs)* | Injected nginx directives, a line break, `*`, host names, shell commands and malformed ranges stop the container; nothing is written. |
 
 ## Frontend helper tests
 
