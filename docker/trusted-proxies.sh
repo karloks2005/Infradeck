@@ -8,7 +8,7 @@
 # file to write (used by the tests).
 set -euf
 
-out="${1:-/etc/nginx/conf.d/trusted-proxies.conf}"
+out="${1:-/etc/nginx/trusted-proxies/trusted-proxies.conf}"
 ipv4='^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$'
 ipv6='^[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*(/[0-9]{1,3})?$'
 

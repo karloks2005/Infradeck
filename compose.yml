@@ -4,6 +4,16 @@ services:
     image: postgres:16-alpine
     container_name: infradeck-postgres
     restart: unless-stopped
+    # The image's entrypoint prepares the data folder as root (owner and 0700 mode), then runs PostgreSQL as the
+    # postgres user, which keeps none of these. Its socket and lock files live in memory.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_READ_SEARCH, FOWNER, SETUID, SETGID]
+    read_only: true
+    tmpfs:
+      - /var/run/postgresql:uid=70,gid=70
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
     networks: [data]
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-infradeck}
@@ -24,7 +34,14 @@ services:
     networks: [data]
     # Needs a password: Redis holds the login sessions, so nothing that can merely reach it on the network
     # may use it. Generate one with `openssl rand -hex 24` (letters and digits only, so it fits in a URL).
-    command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
+    # Through the image's entrypoint, which hands /data to the redis user and drops root before Redis starts.
+    command: ["sh", "-c", "exec docker-entrypoint.sh redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
+    # Only what that hand-over needs: reading and chowning /data, and switching to the redis user.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_READ_SEARCH, SETUID, SETGID]
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env (generate one with openssl rand -hex 24)}
     volumes:
@@ -42,6 +59,13 @@ services:
     container_name: infradeck-backend
     image: infradeck-backend:latest
     restart: unless-stopped
+    # Runs as an unprivileged user (see the Dockerfile) with no capabilities and a read-only filesystem.
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
     networks: [data, front]
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-infradeck}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-infradeck}
@@ -253,6 +277,16 @@ services:
         VITE_API_BASE_URL: /api
     container_name: infradeck-frontend
     restart: unless-stopped
+    # Runs as the unprivileged nginx user (see the Dockerfile) with no capabilities and a read-only filesystem;
+    # it writes only its cache, its pid file and the TRUSTED_PROXIES settings, all in memory.
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp:uid=101,gid=101
+      - /var/cache/nginx:uid=101,gid=101
+      - /etc/nginx/trusted-proxies:uid=101,gid=101
+    security_opt:
+      - no-new-privileges:true
     environment:
       # Address or network of a reverse proxy in front of this one; empty trusts nobody's X-Forwarded-For.
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
@@ -260,7 +294,7 @@ services:
     # Serves the dashboard and proxies /api to the backend. Reach it directly over
     # LAN/VPN, or put the `https` profile's Caddy in front for a public domain.
     ports:
-      - "${FRONTEND_BIND:-0.0.0.0}:${FRONTEND_PORT:-5173}:80"
+      - "${FRONTEND_BIND:-0.0.0.0}:${FRONTEND_PORT:-5173}:8080"
     depends_on:
       backend:
         condition: service_healthy

@@ -84,7 +84,8 @@ those files are copied into a plain `nginx:alpine` image. Node and the source co
 running container. nginx sets the security headers (Content-Security-Policy, Permissions-Policy and
 others) and proxies `/api/` to `backend:8000`. On the server stack it uses
 [`docker/nginx.strict.conf`](../docker/nginx.strict.conf), which additionally **refuses** the collector
-endpoints: on the public side nobody can register a collector or send metrics.
+endpoints: on the public side nobody can register a collector or send metrics. nginx runs as the
+unprivileged `nginx` user on port 8080, with no capabilities and a read-only filesystem.
 
 **Why this approach.**
 - *One address for the app and the API.* The browser loads the page and calls the API on the same origin,
@@ -112,6 +113,7 @@ through the gate); on the development stack the local collector talks to the bac
 columns in PostgreSQL, moves old Redis keys to the current prefix, and prints the first-run setup token
 if no account exists yet. Two background threads run inside it: one marks servers offline when their
 collector stops checking in, the other sends notifications for opened and resolved incidents.
+It runs as an unprivileged user (UID 10001) with no capabilities and a read-only filesystem.
 `GET /health` reports whether PostgreSQL and Redis answer; Docker's healthcheck uses it, and the other
 containers wait for it before they start.
 
@@ -143,7 +145,8 @@ The full list of tables is in [Database schema](database.md).
 The backend creates every table and upgrades the schema itself at startup (Alembic migrations in
 [`src/backend/migrations/`](../src/backend/migrations)). The healthcheck (`pg_isready`) holds the
 backend back until the database accepts connections. The container is on the internal `data` network
-only and publishes no port.
+only and publishes no port. PostgreSQL itself runs as the `postgres` user with no capabilities; the
+image's start script gets a few as root to prepare the data folder (see [SECURITY.md](../SECURITY.md#container-privileges)).
 
 **Why this approach.**
 - *Many writers at once.* Every collector checks in every minute while the background threads and
@@ -179,6 +182,8 @@ Redis doesn't hand out working sessions or a list of email addresses.
 **How it works.** The official `redis:7-alpine` image with a password (`REDIS_PASSWORD`) and append-only
 persistence (`--appendonly yes`) into the `redis_data` volume, so people stay signed in across a restart.
 It is on the internal `data` network only and publishes no port; the backend connects with `REDIS_URL`.
+Redis runs as the `redis` user with no capabilities and a read-only filesystem; the image's start script
+hands `/data` to that user first.
 
 **Why Redis is a required part, and why not just PostgreSQL.**
 - *Sessions are checked on every request.* Each API call looks up its session. Redis answers that from
@@ -346,7 +351,7 @@ and a read-only filesystem, and it is opt-in. Read [SECURITY.md](../SECURITY.md)
 **What it does.** Puts HTTPS in front of the frontend on a public domain when you don't run Traefik.
 
 **How it works.** The official `caddy:2-alpine` image with [`docker/Caddyfile`](../docker/Caddyfile):
-it obtains and renews a Let's Encrypt certificate for `DOMAIN` and proxies everything to `frontend:80`.
+it obtains and renews a Let's Encrypt certificate for `DOMAIN` and proxies everything to `frontend:8080`.
 Start it with `docker compose --profile https up -d`.
 
 **Why Caddy here.** It handles certificates with no configuration beyond the domain name. The server

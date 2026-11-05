@@ -5,5 +5,5 @@
 	# Same value as docker/nginx.strict.conf. No includeSubDomains, since other apps on your domain may not be
 	# HTTPS-only.
 	header Strict-Transport-Security "max-age=15552000"
-	reverse_proxy frontend:80
+	reverse_proxy frontend:8080
 }

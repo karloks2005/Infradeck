@@ -15,8 +15,15 @@ RUN npm run build
 FROM nginx:alpine
 
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
-# Writes conf.d/trusted-proxies.conf from TRUSTED_PROXIES before nginx starts.
+# Writes trusted-proxies/trusted-proxies.conf from TRUSTED_PROXIES before nginx starts.
 COPY --chmod=755 docker/trusted-proxies.sh /docker-entrypoint.d/40-trusted-proxies.sh
 COPY --from=build /app/dist /usr/share/nginx/html
 
-EXPOSE 80
+# Runs as the unprivileged nginx user: no `user` switch, the pid file in /tmp, and only the folders nginx
+# writes to owned by it.
+RUN sed -i -e '/^user /d' -e 's#^pid .*#pid /tmp/nginx.pid;#' /etc/nginx/nginx.conf \
+    && install -d -o nginx -g nginx /etc/nginx/trusted-proxies \
+    && chown -R nginx:nginx /var/cache/nginx
+USER nginx
+
+EXPOSE 8080
