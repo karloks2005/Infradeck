@@ -4,7 +4,7 @@ Infradeck ships with an automated test suite. This page explains how to run it, 
 covers (and what it doesn't), and what every single test is for, so you can decide
 whether a failure matters before you upgrade or change your setup.
 
-- **1435 test cases** from 773 test functions, plus 38 small tests of the frontend helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
+- **1438 test cases** from 776 test functions, plus 38 small tests of the frontend helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
 - **About two minutes** to run. No Docker, PostgreSQL, Redis, network or root access needed.
 - **Safe to run next to a live install.** The tests use a throwaway in-memory database
   and fakes; they never touch your running containers or your data. (Two collector
@@ -131,7 +131,7 @@ side and the backend's side in one file, because the feature only works when bot
 | Folder | What is in it |
 |---|---|
 | `tests/accounts/` | Sign-in, two-factor, sessions, passwords, roles and the admin settings. |
-| `tests/collectors/` | Adding and trusting collectors (enrollment, approval, pending servers, the dashboard's own machine), what they report and how it is validated, the filesystems they report, and the read-only Docker proxy. |
+| `tests/collectors/` | Adding and trusting collectors (enrollment, approval, pending servers, the dashboard's own machine), what they report and how it is validated, the filesystems they report, the read-only Docker proxy, and the version they report. |
 | `tests/monitoring/` | What is watched and how it turns into incidents: the alert engine and its rules, system, container and network checks, the system helper and the container details. |
 | `tests/history/` | Long-term history: rollups, the history API, statistics and the database indexes behind them. |
 | `tests/assistant/` | The AI assistant: its fixed health checks, error messages and conversations. |
@@ -178,6 +178,7 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 | [`test_system_checks.py`](#test_system_checkspy) | 17 | Reboot, OOM, kernel-fault, clock and pending-reboot detection, and the System row's event list. |
 | [`test_system_helper.py`](#test_system_helperpy) | 35 | The optional system helper: kernel-log parsing, `wtmp`, crash detection, hostile input. |
 | [`test_trusted_proxies.py`](#test_trusted_proxiespy) | 17 | Whose `X-Forwarded-For` nginx believes: nobody by default, only addresses and CIDR ranges from `TRUSTED_PROXIES`. |
+| [`test_version.py`](#test_versionpy) | 3 | The dashboard and the collector report the version from the one `VERSION` file. |
 
 ## Every test, explained
 
@@ -1124,6 +1125,17 @@ settings that decide whose `X-Forwarded-For` is believed. These tests run the re
 | `test_by_default_nobody_is_trusted` *(5 inputs)* | Unset, empty or only separators: no address is trusted, so the address that connected always counts. |
 | `test_each_proxy_is_trusted_and_the_header_read_from_it` | IPv4 and IPv6 addresses and ranges, with or without spaces, each become a trusted proxy, and the header is read from them. |
 | `test_anything_but_addresses_stops_the_container` *(11 inputs)* | Injected nginx directives, a line break, `*`, host names, shell commands and malformed ranges stop the container; nothing is written. |
+
+### test_version.py
+
+The version is written once, in `VERSION` at the repository root. If these fail, the dashboard could call an
+outdated collector "up to date", or the other way round.
+
+| Test | What it checks |
+|---|---|
+| `test_the_dashboard_and_the_collector_report_the_version_in_the_version_file` | The backend and the collector both report the version in `VERSION`, and it looks like `1.2.3`. |
+| `test_the_collector_image_reads_the_version_file_next_to_it` | In the collector image, `VERSION` sits next to `collector.py` and is read from there. |
+| `test_a_collector_without_a_version_file_says_dev` | A collector copied somewhere without `VERSION` reports `dev` instead of failing. |
 
 ## Frontend helper tests
 

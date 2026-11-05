@@ -6,6 +6,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src ./src
+COPY VERSION ./VERSION
 
 # Runs as an unprivileged user with a fixed UID; the code is owned by root, so it can't change it.
 RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin infradeck

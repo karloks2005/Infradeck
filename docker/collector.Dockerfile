@@ -3,6 +3,7 @@ FROM python:3.12-alpine
 
 WORKDIR /app
 COPY src/collector/collector.py ./collector.py
+COPY VERSION ./VERSION
 
 ENV INFRADECK_STATE_DIR=/var/lib/infradeck-collector \
     HOST_PROC=/host/proc \
