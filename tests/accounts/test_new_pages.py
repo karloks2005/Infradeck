@@ -342,27 +342,57 @@ def test_a_server_is_renamed_and_keeps_the_name_and_the_install_describes_itself
 
 def test_admin_tests_the_agent_connection_and_the_key_never_comes_back(app, monkeypatch):
     owner = signed_in(app, 1)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-secret-value")
-    monkeypatch.setattr(main, "check_provider_connection", lambda: {"provider": "OpenAI", "model": "gpt-test"})
+    monkeypatch.setattr(main, "check_provider_connection", lambda db: {"provider": "Anthropic", "model": "claude-test"})
 
+    saved = owner.put("/admin/agent/provider", json={"provider": "anthropic", "model": "claude-test", "api_key": "sk-ant-test-secret-value"})
     system = owner.get("/admin/system")
-    assert system.json()["agent"]["key_configured"] is True and system.json()["agent"]["provider"] == "OpenAI"
+    assert system.json()["agent"]["key_configured"] is True and system.json()["agent"]["provider"] == "anthropic"
     result = owner.post("/admin/agent/test")
-    assert result.json() == {"ok": True, "provider": "OpenAI", "model": "gpt-test"}
-    assert "sk-test-secret-value" not in system.text + result.text
+    assert result.json() == {"ok": True, "provider": "Anthropic", "model": "claude-test"}
+    assert "sk-ant-test-secret-value" not in saved.text + system.text + result.text
     assert signed_in(app, 3).post("/admin/agent/test").status_code == 403
 
 
 def test_a_failed_agent_connection_test_explains_itself_without_the_key(app, monkeypatch):
     owner = signed_in(app, 1)
 
-    def rejected():
+    def rejected(db):
         raise RuntimeError("Error code: 401 - Incorrect API key provided: sk-test-secret-value")
     monkeypatch.setattr(main, "check_provider_connection", rejected)
 
     response = owner.post("/admin/agent/test")
     assert response.status_code == 502 and "rejected the API key" in response.json()["detail"]
     assert "sk-test-secret-value" not in response.text
+
+
+@pytest.mark.parametrize("body", [{"provider": "somewhere-else"}, {"provider": "openai", "model": "gpt test; drop"}, {"provider": "openai", "api_key": "has spaces in it"},
+                                  {"provider": "openai", "api_key": "short"}, {"provider": "openai", "api_key": "x" * 513}, {}])
+def test_the_agent_provider_refuses_odd_input(app, body):
+    assert signed_in(app, 1).put("/admin/agent/provider", json=body).status_code == 422
+
+
+def test_only_admins_choose_the_agent_provider_and_remove_its_key(app):
+    viewer = signed_in(app, 3)
+    assert viewer.put("/admin/agent/provider", json={"provider": "openai", "api_key": "sk-test-not-real"}).status_code == 403
+    assert viewer.delete("/admin/agent/key").status_code == 403
+
+
+def test_without_secrets_key_no_api_key_is_stored(app, monkeypatch):
+    monkeypatch.delenv("SECRETS_KEY")
+    response = signed_in(app, 1).put("/admin/agent/provider", json={"provider": "openai", "api_key": "sk-test-not-real"})
+
+    assert response.status_code == 409 and "SECRETS_KEY" in response.json()["detail"]
+    assert app.db.get(main.AppSetting, "agent_api_key_openai") is None
+
+
+def test_saving_and_removing_the_agent_key_is_audited_without_the_key(app):
+    owner = signed_in(app, 1)
+    saved = owner.put("/admin/agent/provider", json={"provider": "gemini", "api_key": "AIza-test-secret-value"}).json()
+    assert saved["provider"] == "gemini" and saved["model"] == "gemini-3.1-flash-lite" and saved["key_configured"] is True
+
+    assert owner.delete("/admin/agent/key").json()["key_configured"] is False
+    logged = " ".join(entry.message for entry in app.db.query(main.AuditLog))
+    assert "Google Gemini" in logged and "removed" in logged and "AIza-test-secret-value" not in logged
 
 
 # --- the agent's spending (#112) ---------------------------------------------------------------------------------
@@ -372,13 +402,14 @@ from src.backend.models import AgentRun
 
 
 def _fake_agent(monkeypatch, tokens=(1000, 200), fail=None):
-    def fake(user_id, conversation_id, message, command_logger=None, usage_logger=None):
+    def fake(user_id, conversation_id, message, provider, command_logger=None, usage_logger=None):
         if fail:
             raise fail
         # A dated model name, as the API reports it: it must still use the price set for "gpt-test".
         usage_logger(Completion(text="{}", model="gpt-test-2026-01-01", input_tokens=tokens[0], output_tokens=tokens[1]), 1500)
         return "Here is the answer."
     monkeypatch.setattr(main, "send_agent_message", fake)
+    monkeypatch.setattr(main, "get_provider", lambda db: object())
     monkeypatch.setattr(main, "is_agent_chat_enabled", lambda db: True)
 
 
@@ -497,7 +528,7 @@ def test_asking_for_a_new_diagnosis_queues_a_job(app, monkeypatch):
     owner = signed_in(app, 1)
     assert owner.post("/incidents/42/diagnose").status_code == 409          # no key configured
 
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    assert owner.put("/admin/agent/provider", json={"provider": "openai", "api_key": "sk-test-not-real"}).status_code == 200
     assert owner.post("/incidents/42/diagnose").json() == {"queued": True}
     assert owner.post("/incidents/42/diagnose").status_code == 200          # asking again is allowed
     queued = [json.loads(raw) for raw in app.redis.lrange(jobs.QUEUE, 0, -1)]
@@ -562,6 +593,7 @@ def test_hidden_diagnoses_stay_hidden_from_users_in_the_page_the_overview_and_no
 
 def test_chat_is_for_admins_unless_allowed_per_user(app, monkeypatch):
     monkeypatch.setattr(main, "send_agent_message", lambda *args, **kwargs: "ok")
+    monkeypatch.setattr(main, "get_provider", lambda db: object())
     monkeypatch.setattr(main, "is_agent_chat_enabled", lambda db: True)
     owner, viewer = signed_in(app, 1), signed_in(app, 3)
     viewer.post("/conversations", json={"conversation_id": "v1"})

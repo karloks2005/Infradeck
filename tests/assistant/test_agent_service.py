@@ -15,7 +15,7 @@ class FakeChat:
         self.responses = iter(responses)
         self.messages = []
 
-    def send_message(self, message):
+    def send_message(self, provider, message):
         self.messages.append(message)
         return FakeResponse(next(self.responses))
 
@@ -46,7 +46,7 @@ def test_predefined_health_check_runs_and_is_audited():
     service = make_service(chat, checks)
     events = []
 
-    result = service.send(1, "conversation", "Check the host.", events.append)
+    result = service.send(1, "conversation", "Check the host.", object(), events.append)
 
     assert result == "Server health is OK."
     assert checks.requested == ["server_health"]
@@ -59,7 +59,7 @@ def test_arbitrary_command_is_rejected_before_execution():
     service = make_service(chat)
 
     with pytest.raises(ValueError, match="outside the allow-list"):
-        service.send(1, "conversation", "Delete everything")
+        service.send(1, "conversation", "Delete everything", object())
 
 
 # --- the OpenAI provider ----------------------------------------------------------------------------------------
@@ -89,7 +89,7 @@ def fake_client(completions):
 
 def test_openai_provider_asks_for_the_reply_schema_and_reports_tokens():
     completions = FakeCompletions()
-    provider = OpenAIProvider(model="gpt-test", client=fake_client(completions))
+    provider = OpenAIProvider("sk-test", "gpt-test", client=fake_client(completions))
 
     result = provider.complete([{"role": "user", "content": "hi"}], agent_service.REPLY_SCHEMA, "agent_reply")
 
@@ -102,22 +102,15 @@ def test_openai_provider_asks_for_the_reply_schema_and_reports_tokens():
 
 
 def test_a_refusal_is_an_error_not_an_empty_reply():
-    provider = OpenAIProvider(model="gpt-test", client=fake_client(FakeCompletions(content=None, refusal="I can't help with that.")))
+    provider = OpenAIProvider("sk-test", "gpt-test", client=fake_client(FakeCompletions(content=None, refusal="I can't help with that.")))
 
     with pytest.raises(ValueError, match="refused"):
         provider.complete([], agent_service.REPLY_SCHEMA, "agent_reply")
 
 
-def test_the_provider_needs_a_key(monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-
-    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
-        OpenAIProvider()
-
-
 def test_test_connection_spends_no_tokens():
     completions = FakeCompletions()
-    provider = OpenAIProvider(model="gpt-test", client=fake_client(completions))
+    provider = OpenAIProvider("sk-test", "gpt-test", client=fake_client(completions))
 
     assert provider.check() == {"provider": "OpenAI", "model": "gpt-test"}
     assert completions.calls == []
@@ -125,10 +118,10 @@ def test_test_connection_spends_no_tokens():
 
 def test_a_conversation_sends_the_system_prompt_and_its_history():
     completions = FakeCompletions()
-    chat = agent_service.Chat(OpenAIProvider(model="gpt-test", client=fake_client(completions)))
+    provider, chat = OpenAIProvider("sk-test", "gpt-test", client=fake_client(completions)), agent_service.Chat()
 
-    chat.send_message("first")
-    chat.send_message("second")
+    chat.send_message(provider, "first")
+    chat.send_message(provider, "second")
 
     sent = completions.calls[-1]["messages"]
     assert sent[0]["role"] == "system" and [message["content"] for message in sent[1:] if message["role"] == "user"] == ["first", "second"]
@@ -138,19 +131,19 @@ def test_a_conversation_sends_the_system_prompt_and_its_history():
 def test_only_recent_turns_go_back_to_the_model(monkeypatch):
     monkeypatch.setattr(agent_service, "MAX_HISTORY_MESSAGES", 4)
     completions = FakeCompletions()
-    chat = agent_service.Chat(OpenAIProvider(model="gpt-test", client=fake_client(completions)))
+    provider, chat = OpenAIProvider("sk-test", "gpt-test", client=fake_client(completions)), agent_service.Chat()
 
     for number in range(6):
-        chat.send_message(f"message {number}")
+        chat.send_message(provider, f"message {number}")
 
     assert len(completions.calls[-1]["messages"]) == 1 + 4
 
 
 def test_a_failed_turn_is_not_kept_in_the_conversation():
     completions = FakeCompletions(fail=TimeoutError("timed out"))
-    chat = agent_service.Chat(OpenAIProvider(model="gpt-test", client=fake_client(completions)))
+    provider, chat = OpenAIProvider("sk-test", "gpt-test", client=fake_client(completions)), agent_service.Chat()
 
     with pytest.raises(TimeoutError):
-        chat.send_message("hello")
+        chat.send_message(provider, "hello")
 
     assert chat.history == []

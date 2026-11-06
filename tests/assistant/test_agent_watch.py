@@ -69,8 +69,8 @@ def test_the_worker_reuses_before_asking_the_model(db, monkeypatch):
     add_report(db, 31, created_at=NOW - timedelta(hours=1))
     monkeypatch.setattr(worker, "SessionLocal", lambda: db)
     monkeypatch.setattr(db, "close", lambda: None)
-    monkeypatch.setattr(worker, "configured_key", lambda: "sk-test")
-    monkeypatch.setattr(worker, "get_provider", lambda: pytest.fail("the model must not be asked"))
+    monkeypatch.setattr(worker, "key_configured", lambda db: True)
+    monkeypatch.setattr(worker, "get_provider", lambda db: pytest.fail("the model must not be asked"))
 
     assert worker.handle_incident({"incident_id": 42, "type": "incident.opened"}) == ("reused", "Same diagnosis as INC-0031; no tokens spent")
 
@@ -80,9 +80,9 @@ def test_getting_worse_or_asking_again_is_never_reused(db, monkeypatch):
     asked = []
     monkeypatch.setattr(worker, "SessionLocal", lambda: db)
     monkeypatch.setattr(db, "close", lambda: None)
-    monkeypatch.setattr(worker, "configured_key", lambda: "sk-test")
+    monkeypatch.setattr(worker, "key_configured", lambda db: True)
     monkeypatch.setattr(worker.diagnosis, "diagnose", lambda db, incident, provider, trigger: asked.append(trigger) or AgentReport(status="failed", error="x"))
-    monkeypatch.setattr(worker, "get_provider", lambda: object())
+    monkeypatch.setattr(worker, "get_provider", lambda db: object())
 
     worker.handle_incident({"incident_id": 42, "type": "incident.worsened"})
     worker.handle_incident({"incident_id": 42, "type": "incident.requested"})

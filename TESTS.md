@@ -4,7 +4,7 @@ Infradeck ships with an automated test suite. This page explains how to run it, 
 covers (and what it doesn't), and what every single test is for, so you can decide
 whether a failure matters before you upgrade or change your setup.
 
-- **1438 test cases** from 776 test functions, plus 38 small tests of the frontend helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
+- **1458 test cases** from 788 test functions, plus 38 small tests of the frontend helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
 - **About two minutes** to run. No Docker, PostgreSQL, Redis, network or root access needed.
 - **Safe to run next to a live install.** The tests use a throwaway in-memory database
   and fakes; they never touch your running containers or your data. (Two collector
@@ -134,7 +134,7 @@ side and the backend's side in one file, because the feature only works when bot
 | `tests/collectors/` | Adding and trusting collectors (enrollment, approval, pending servers, the dashboard's own machine), what they report and how it is validated, the filesystems they report, the read-only Docker proxy, and the version they report. |
 | `tests/monitoring/` | What is watched and how it turns into incidents: the alert engine and its rules, system, container and network checks, the system helper and the container details. |
 | `tests/history/` | Long-term history: rollups, the history API, statistics and the database indexes behind them. |
-| `tests/assistant/` | The AI assistant: its fixed health checks, error messages and conversations. |
+| `tests/assistant/` | The AI assistant: its providers, fixed health checks, error messages and conversations. |
 | `tests/security/` | Tests written from security reviews that cut across areas: request size limits, the second review's findings and the nginx security headers. |
 
 `tests/conftest.py` (settings every test shares) and `tests/fakes.py` (the fake Redis) stay at the top.
@@ -147,7 +147,8 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 | [`test_account_security.py`](#test_account_securitypy) | 146 | Two-factor sign-in, recovery codes, encrypted secrets, sessions you can review and end, password change, and the password check before turning two-factor on. |
 | [`test_admin.py`](#test_adminpy) | 18 | Who may do what: admin-only actions, roles, retention cleanup, the chat on/off switch. |
 | [`test_agent_errors.py`](#test_agent_errorspy) | 5 | Helpful, non-leaking error messages from the AI assistant. |
-| [`test_agent_service.py`](#test_agent_servicepy) | 9 | The assistant can only run the fixed read-only checks; the OpenAI provider and conversation history. |
+| [`test_agent_service.py`](#test_agent_servicepy) | 8 | The assistant can only run the fixed read-only checks; the OpenAI provider and conversation history. |
+| [`test_agent_providers.py`](#test_agent_providerspy) | 12 | The Claude provider, and how the chosen provider, model and encrypted API key are stored. |
 | [`test_agent_diagnosis.py`](#test_agent_diagnosispy) | 42 | The agent's diagnosis: the evidence pack, secret masking, dangerous commands, checking the model's answer, saving reports. |
 | [`test_agent_watch.py`](#test_agent_watchpy) | 10 | Reusing a recent diagnosis, and watching the fix until the agent resolves the incident. |
 | [`test_agent_worker.py`](#test_agent_workerpy) | 12 | The agent's job queue and worker: one job per opened or worsened incident after the commit, retries, time limit, restarts. |
@@ -311,8 +312,8 @@ shouldn't, or an admin might be locked out.
 | `test_overloaded_provider_error_is_explained_to_the_user` | When the AI provider reports it is overloaded, the user gets a readable explanation. |
 | `test_provider_error_redacts_api_keys` | Error text from the provider never leaks an API key to the chat or logs; it is replaced with `[redacted]`. |
 | `test_openai_keys_are_redacted_too` | An OpenAI key (`sk-…`) in an error is redacted, and a rejected key is explained as such. |
-| `test_a_missing_key_says_where_to_set_it` | Without a key the chat says to set `OPENAI_API_KEY`. |
-| `test_an_unknown_model_points_at_agent_model` | A model the key can't use points the admin at `AGENT_MODEL`. |
+| `test_a_missing_key_says_where_to_set_it` | Without a key the chat says to add one in Admin › Incident agent. |
+| `test_an_unknown_model_points_at_the_model_setting` | A model the key can't use points the admin at the model in Admin › Incident agent. |
 
 ### test_agent_service.py
 
@@ -322,11 +323,24 @@ shouldn't, or an admin might be locked out.
 | `test_arbitrary_command_is_rejected_before_execution` | If the assistant ever asks for anything outside the allow-list (such as `rm -rf /`), it is refused before anything runs. |
 | `test_openai_provider_asks_for_the_reply_schema_and_reports_tokens` | Requests use Structured Outputs in strict mode, the schema only allows the fixed checks, and token usage is read from the response. |
 | `test_a_refusal_is_an_error_not_an_empty_reply` | When the model refuses, the chat gets an error instead of an empty answer. |
-| `test_the_provider_needs_a_key` | Without `OPENAI_API_KEY` the provider is not created. |
 | `test_test_connection_spends_no_tokens` | Admin's Test connection only looks the model up; it sends no prompt. |
 | `test_a_conversation_sends_the_system_prompt_and_its_history` | Each request carries the system prompt and the conversation so far, in order. |
 | `test_only_recent_turns_go_back_to_the_model` | Long conversations send only the most recent turns. |
 | `test_a_failed_turn_is_not_kept_in_the_conversation` | A message that failed (timeout, provider error) is not remembered as part of the conversation. |
+
+### test_agent_providers.py
+
+| Test | What it checks |
+|---|---|
+| `test_claude_gets_the_system_prompt_apart_and_must_answer_in_the_schema` | Claude gets the system prompt separately, the turns in order, the JSON schema, adaptive thinking with the requested effort and prompt caching; cached input counts as input. |
+| `test_a_refused_or_cut_off_claude_answer_is_an_error` *(2 inputs)* | A refusal or an answer cut off at the token limit is an error, not a half answer. |
+| `test_claude_test_connection_spends_no_tokens` | Test connection only looks the Claude model up; it sends no prompt. |
+| `test_without_a_choice_the_agent_has_no_provider` | Until an admin picks a provider there is no key and no provider. |
+| `test_each_provider_starts_with_its_own_default_model` *(3 inputs)* | Anthropic, OpenAI and Gemini each get the right client and their own default model. |
+| `test_gemini_goes_to_googles_address` | Gemini requests go to Google's OpenAI-compatible endpoint. |
+| `test_the_key_is_stored_encrypted_and_each_provider_keeps_its_own` | No key is stored in plain text, each provider keeps its own key, and saving without a key keeps the stored one. |
+| `test_a_key_that_cant_be_decrypted_counts_as_no_key` | After `SECRETS_KEY` changes, an unreadable key turns the agent off instead of failing. |
+| `test_a_removed_key_turns_the_agent_off` | Removing the key leaves the provider chosen but turns the agent off. |
 
 ### test_agent_diagnosis.py
 

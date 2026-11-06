@@ -114,7 +114,7 @@ Rules for disk (with per-mount overrides), inodes, memory, swap, load per core, 
 
 <img src="docs/images/infradeck-agent.svg" alt="The incident agent reads masked evidence, diagnoses the incident and watches that the fix holds" width="100%">
 
-Set `OPENAI_API_KEY` and the agent diagnoses every warning and critical incident from **masked** evidence, ties each claim to the data, proposes a fix, watches whether it holds and adds the diagnosis to your notifications. You can also chat about any incident. Monthly budget, per-model prices and who sees what are set in Admin. **It reads; it never runs commands.** See [Incident agent](docs/assistant.md).
+Add an Anthropic, OpenAI or Gemini API key in Admin and the agent diagnoses every warning and critical incident from **masked** evidence, ties each claim to the data, proposes a fix, watches whether it holds and adds the diagnosis to your notifications. You can also chat about any incident. Monthly budget, per-model prices and who sees what are set in Admin. **It reads; it never runs commands.** See [Incident agent](docs/assistant.md).
 
 <img width="2879" height="1499" alt="Infradeck dashboard" src="https://github.com/user-attachments/assets/4331b563-9537-4393-882d-f0dbe5a1aedd" />
 

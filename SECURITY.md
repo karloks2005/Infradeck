@@ -72,7 +72,7 @@ rule. An admin can also switch a rule off entirely in Admin › Alert rules, whi
 and the facts Infradeck worked out (signals and recorded events, which contain container and host
 names) to the model provider. Turn Chat off in Admin › Incident agent if that must not happen.
 
-**The agent's diagnosis** (when `OPENAI_API_KEY` is set) sends an evidence pack to the model provider: the
+**The agent's diagnosis** (when an API key is saved in Admin › Incident agent) sends an evidence pack to the model provider: the
 incident, the server's name, OS, cores and memory, metrics around the incident, recorded events, image changes,
 the containers' names, images and figures, and similar incidents before it. Before it leaves, every text in it is
 masked for secrets (tokens, keys, passwords, credentials in URLs, private keys; `src/agent/masking.py`), and the
@@ -436,7 +436,7 @@ URL, a keyword or a value in a JSON reply, a TCP port, a TLS certificate, a DNS 
   a session for any user, administrator included, with no password or two-factor.
 - **Limits on what a signed-in user can run up.** Messages to the assistant (30 an hour per user), new
   conversations (30 an hour, 100 in total) and audit-log entries (120 an hour) are limited, since each can cost
-  the administrator's OpenAI quota or database space. Setting up two-factor from a normal session needs the
+  the administrator's AI provider quota or database space. Setting up two-factor from a normal session needs the
   password again, and every try counts toward the lockout, the right password included. A limited
   (set-up-only) session lasts 30 minutes, not a day.
 - **Sessions are stored hashed.** Redis holds only the SHA-256 of the cookie value, in the session key, the

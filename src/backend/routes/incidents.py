@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from .. import incidents, main
 from ...agent import jobs as agent_jobs, settings as agent_settings, usage as agent_usage, verify as agent_verify
 from ...agent.diagnosis import latest as latest_report, report_json
-from ...agent.providers import configured_key
+from ...agent.providers import key_configured
 from ..config import SESSION_COOKIE_NAME
 from ..db import get_db
 from ..models import IncidentAlert, Server, User
@@ -50,7 +50,7 @@ def get_incident(incident_id: main.PathId, session_id: Annotated[str | None, Coo
     if report and report["status"] == "ok" and alert.status == "active":
         report["watch"] = agent_verify.evaluate(db, alert, report["verify"])
     return {**incidents.summary(alert, server.hostname, datetime.now(timezone.utc), users), "diagnosis": incidents.diagnose(db, alert, server), "cpu_cores": server.cpu_cores,
-            "agent": {"report": report, "hidden": not visible, "key_configured": bool(configured_key()), "budget_paused": agent_usage.budget(db)["state"] == "paused"}}
+            "agent": {"report": report, "hidden": not visible, "key_configured": key_configured(db), "budget_paused": agent_usage.budget(db)["state"] == "paused"}}
 
 
 @router.post("/incidents/{incident_id}/diagnose")
@@ -59,8 +59,8 @@ def request_diagnosis(incident_id: main.PathId, session_id: Annotated[str | None
     on the incident when the worker gets to it."""
     user = main._require_operator(session_id, db)
     alert, _server = _incident_or_404(db, incident_id)
-    if not configured_key():
-        raise HTTPException(status_code=409, detail="The agent has no API key. An admin sets OPENAI_API_KEY in .env.")
+    if not key_configured(db):
+        raise HTTPException(status_code=409, detail="The agent has no API key. An admin adds one in Admin › Incident agent.")
     if agent_usage.budget(db)["state"] == "paused":
         raise HTTPException(status_code=429, detail="This month's budget for the agent is used up. An admin can raise it in Admin › Incident agent.")
     main.enforce_limit(main.redis_client, scope="diagnose-user", subject=user["id"], limit=10, window_seconds=600)

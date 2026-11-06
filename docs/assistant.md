@@ -8,19 +8,31 @@ change files on your servers. Everything about it is in `src/agent/` and in **Ad
 
 ## Setting it up
 
-1. Create an API key at <https://platform.openai.com/api-keys> and put it in `.env`:
-   ```
-   OPENAI_API_KEY=sk-…
-   AGENT_MODEL=gpt-5-mini        # optional; any OpenAI model with Structured Outputs
-   ```
-2. `docker compose up -d backend agent-worker` (Compose recreates both with the new values).
-3. **Admin → Incident agent → Test connection** checks the key and that the model exists, without spending tokens.
-4. Enter the model's price per million tokens under **Prices** (from the provider's pricing page), so its calls
+1. Make sure `SECRETS_KEY` is set in `.env` (see [Configuration](configuration.md)): the API key is stored
+   encrypted with it, so it can't be saved without one.
+2. Create an API key with one of the providers: Anthropic (Claude), OpenAI or Google Gemini.
+3. In **Admin → Incident agent**, pick the provider, keep or change the model, paste the key and click **Save**.
+   Models used when the field is left empty:
+
+   | Provider | Default model |
+   |---|---|
+   | Anthropic | `claude-haiku-5-5` |
+   | OpenAI | `gpt-6-luna` |
+   | Google Gemini | `gemini-3.1-flash-lite` |
+
+   Another model works if it supports structured (JSON schema) output.
+4. **Test connection** checks the key and that the model exists, without spending tokens.
+5. Enter the model's price per million tokens under **Prices** (from the provider's pricing page), so its calls
    count towards the budget, and set a **Monthly budget** if you want one.
 
+The key never comes back from the backend: the page only shows that one is saved. Each provider keeps its own
+key, so switching back and forth doesn't lose them; **Remove key** deletes the chosen provider's key. Every change
+is written to the audit log, without the key. The provider addresses are fixed in the code
+(`src/agent/providers/`), so the agent's data can only go to one of these three APIs.
+
 Without a key nothing is sent anywhere: incidents keep the rule-based diagnosis (worked out locally from the same
-data), notifications go out as before, and the chat is off. Change the model by changing `AGENT_MODEL` and running
-step 2 again.
+data), notifications go out as before, and the chat is off. If `SECRETS_KEY` changes and the stored key can no
+longer be decrypted, the agent behaves as if there were no key until it is saved again.
 
 ## Diagnoses
 
@@ -87,9 +99,10 @@ off, the budget used up, or the worker not running. Resolved notifications never
 ## Chat
 
 The chat answers questions about an incident or any server. Each message goes to the model with the incident's
-facts, and the conversation so far (its latest 40 turns). Every reply is held to a JSON schema with OpenAI's
-Structured Outputs: a message, and at most one check from a fixed list. The provider sits behind a small interface
-(`providers.py`), so other providers can be added later.
+facts, and the conversation so far (its latest 40 turns). Every reply is held to a JSON schema with the
+provider's structured output: a message, and at most one check from a fixed list. All three providers sit behind
+one small interface (`src/agent/providers/`). With Claude, the chat thinks briefly (effort `low`) and a diagnosis
+thinks harder (effort `high`); the other providers ignore the setting.
 
 The chat has no code path for running shell commands. It may request exactly one fixed, read-only check at a time:
 `server_health`, `container_health`, or `daily_checkup`, implemented with Python system APIs and Docker's Unix API

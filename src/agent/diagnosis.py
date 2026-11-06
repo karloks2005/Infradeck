@@ -144,7 +144,7 @@ def diagnose(db, incident: IncidentAlert, provider: Provider, trigger: str = "in
     for _attempt in range(MAX_ATTEMPTS):
         started = time.monotonic()
         try:
-            completion = provider.complete(_messages(pack, reason), SCHEMA, "incident_diagnosis")
+            completion = provider.complete(_messages(pack, reason), SCHEMA, "incident_diagnosis", effort="high")
         except Exception as exc:
             usage.record(db, kind="diagnosis", status="error", model=model, incident_id=incident.id, duration_ms=round((time.monotonic() - started) * 1000), error=f"{type(exc).__name__}: {exc}")
             raise

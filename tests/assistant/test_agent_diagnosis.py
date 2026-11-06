@@ -163,7 +163,7 @@ class FakeProvider:
         self.answers = list(answers)
         self.calls = []
 
-    def complete(self, messages, schema, schema_name):
+    def complete(self, messages, schema, schema_name, effort="medium"):
         self.calls.append(messages)
         reply = self.answers.pop(0)
         if isinstance(reply, Exception):
@@ -215,8 +215,8 @@ def test_a_provider_error_is_counted_and_raised_so_the_job_is_retried(db):
 def test_the_worker_diagnoses_and_reports_back(db, monkeypatch):
     monkeypatch.setattr(worker, "SessionLocal", lambda: db)
     monkeypatch.setattr(db, "close", lambda: None)
-    monkeypatch.setattr(worker, "configured_key", lambda: "sk-test")
-    monkeypatch.setattr(worker, "get_provider", lambda: FakeProvider(valid_answer()))
+    monkeypatch.setattr(worker, "key_configured", lambda db: True)
+    monkeypatch.setattr(worker, "get_provider", lambda db: FakeProvider(valid_answer()))
 
     assert worker.handle_incident({"incident_id": 42, "type": "incident.opened"}) == ("diagnosed", "high confidence · version 1")
 
@@ -224,10 +224,10 @@ def test_the_worker_diagnoses_and_reports_back(db, monkeypatch):
 def test_without_a_key_the_worker_leaves_the_rule_based_diagnosis(db, monkeypatch):
     monkeypatch.setattr(worker, "SessionLocal", lambda: db)
     monkeypatch.setattr(db, "close", lambda: None)
-    monkeypatch.setattr(worker, "configured_key", lambda: "")
+    monkeypatch.setattr(worker, "key_configured", lambda db: False)
 
     status, note = worker.handle_incident({"incident_id": 42, "type": "incident.opened"})
-    assert status == "skipped" and "OPENAI_API_KEY" in note
+    assert status == "skipped" and "no API key" in note
 
 
 def test_with_automatic_diagnosis_off_only_a_request_is_diagnosed(db, monkeypatch):
@@ -236,8 +236,8 @@ def test_with_automatic_diagnosis_off_only_a_request_is_diagnosed(db, monkeypatc
     db.commit()
     monkeypatch.setattr(worker, "SessionLocal", lambda: db)
     monkeypatch.setattr(db, "close", lambda: None)
-    monkeypatch.setattr(worker, "configured_key", lambda: "sk-test")
-    monkeypatch.setattr(worker, "get_provider", lambda: FakeProvider(valid_answer()))
+    monkeypatch.setattr(worker, "key_configured", lambda db: True)
+    monkeypatch.setattr(worker, "get_provider", lambda db: FakeProvider(valid_answer()))
 
     assert worker.handle_incident({"incident_id": 42, "type": "incident.opened"})[0] == "skipped"
     assert worker.handle_incident({"incident_id": 42, "type": "incident.requested"})[0] == "diagnosed"

@@ -35,7 +35,9 @@ All paths are relative to `/api` when going through the frontend/nginx.
 | `POST /incidents/{id}/diagnose` | admin | Queue a new diagnosis by the agent (409 without a key, 429 while the budget is used up). |
 | `GET /admin/agent/usage` | admin | This month's model calls, tokens and estimated cost against the budget, per model and per day, with the prices and limits. |
 | `GET /admin/agent/worker` | admin | Whether the agent worker is running, how many jobs wait, are running or wait to be retried, and the latest results. |
-| `POST /admin/agent/test` | admin | Checks the OpenAI key and that the configured model exists, without spending tokens. |
+| `PUT /admin/agent/provider` | admin (rate limited) | Choose the agent's provider (`anthropic`, `openai`, `gemini`) and model, and optionally save a new API key, stored encrypted (409 without `SECRETS_KEY`). Returns the choice and whether a key is saved, never the key. |
+| `DELETE /admin/agent/key` | admin | Remove the chosen provider's API key; the agent stops until a new one is saved. |
+| `POST /admin/agent/test` | admin | Checks the saved key and that the configured model exists, without spending tokens. |
 | `POST /monitoring/collectors/register` | join token (rate limited) | Collector asks to join; returns a poll secret and pairing code. |
 | `POST /monitoring/collectors/register/poll` | poll secret | Collector checks approval; returns its token once approved. |
 | `POST /monitoring/collectors/enroll` | enrollment key | Join without approval. |

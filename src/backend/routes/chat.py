@@ -10,7 +10,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Query
 from sqlalchemy import func
 
 from .. import main
-from ...agent import settings as agent_settings, usage as agent_usage
+from ...agent import providers as agent_providers, settings as agent_settings, usage as agent_usage
 from ..config import SESSION_COOKIE_NAME
 from ..db import get_db
 from ..models import AuditLog, ChatMessage, Conversation, User
@@ -137,6 +137,7 @@ def agent_chat(payload: main.AgentChatRequest, session_id: Annotated[str | None,
             user["id"],
             payload.conversation_id,
             main._incident_context(db, payload.incident_id) + message,
+            main.get_provider(db),
             usage_logger=log_usage,
             command_logger=lambda event: main.record_audit_log(
                 db,
@@ -152,7 +153,7 @@ def agent_chat(payload: main.AgentChatRequest, session_id: Annotated[str | None,
         )
     except Exception as exc:
         user_message = main.agent_error_message(exc)
-        agent_usage.record(db, kind="chat", status="error", model=main.AGENT_MODEL, user_id=user["id"], conversation_id=payload.conversation_id, incident_id=payload.incident_id, error=user_message)
+        agent_usage.record(db, kind="chat", status="error", model=agent_providers.current(db).model or "unknown", user_id=user["id"], conversation_id=payload.conversation_id, incident_id=payload.incident_id, error=user_message)
         main.record_audit_log(
             db,
             user_id=user["id"],
