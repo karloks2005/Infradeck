@@ -96,6 +96,9 @@ To update: `git pull && docker compose up -d --build`.
 <img width="2879" height="1499" alt="Infradeck screenshot" src="https://github.com/user-attachments/assets/a1541d08-5cb5-4926-b553-d1512159c265" />
 
 ### Availability checks
+
+<img src="docs/images/infradeck-checks.svg" alt="Uptime checks with heartbeat history per check and failures highlighted" width="100%">
+
 Like Uptime Kuma, but run from your own machines: **HTTP(s)** status, a **keyword** on a page, a **value in a JSON reply**, a **TCP port**, **TLS certificate** expiry, a **DNS** record or an **ICMP ping**.
 - Each check runs from the servers you pick, with "down when all fail" or "down when any fails".
 - Own interval and retries; a **Test** button tries it before you save.
