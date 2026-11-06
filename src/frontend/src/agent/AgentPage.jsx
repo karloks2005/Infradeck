@@ -113,7 +113,7 @@ function AgentLine({ incident, canAct, onChanged, compact = false }) {
   useEffect(() => { if (arrived) setWaiting(null) }, [arrived])
   const resolved = incident.status === 'resolved'
   const canAsk = canAct && agent.key_configured && !agent.budget_paused
-  const why = !agent.key_configured ? 'Set OPENAI_API_KEY in .env for the agent to diagnose incidents.' : agent.budget_paused ? 'This month\'s budget for the agent is used up.' : !canAct ? 'Only owners and admins can ask for a diagnosis.' : undefined
+  const why = !agent.key_configured ? 'The agent has no API key yet. An admin adds one in Admin › Incident agent.' : agent.budget_paused ? 'This month\'s budget for the agent is used up.' : !canAct ? 'Only owners and admins can ask for a diagnosis.' : undefined
   const ask = () => run(async () => { await post(`/incidents/${incident.id}/diagnose`); setWaiting({ version, at: Date.now(), late: false }) })
   let text
   if (slow) text = 'Still waiting for the agent. It is taking longer than usual; the worker may be busy or stopped (Admin › Incident agent › Worker).'
@@ -484,7 +484,7 @@ export default function AgentPage({ user, onLogout }) {
   // Why the chat can't be used right now, or null when it can.
   const chatOff = !config ? null : !config.chat_enabled ? 'Chat with the agent has been turned off by an admin.'
     : config.may_chat === false ? 'Chat with the agent is for admins. An admin can allow it for you in Admin › Users.'
-    : config.key_configured === false ? 'The agent has no API key yet. An admin sets OPENAI_API_KEY in .env.'
+    : config.key_configured === false ? 'The agent has no API key yet. An admin adds one in Admin › Incident agent.'
       : config.budget_paused ? 'This month\'s budget for the agent is used up. An admin can raise it in Admin › Incident agent.' : null
 
   if (phone) {

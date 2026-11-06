@@ -39,15 +39,14 @@ class Reply:
 class Chat:
     """One conversation's turns, sent in full (up to MAX_HISTORY_MESSAGES) with every new message."""
 
-    def __init__(self, provider: Provider):
-        self.provider = provider
+    def __init__(self):
         self.history: list[dict] = []
 
-    def send_message(self, message: str) -> Reply:
+    def send_message(self, provider: Provider, message: str) -> Reply:
         self.history.append({"role": "user", "content": message})
         messages = [{"role": "system", "content": SYSTEM_PROMPT}, *self.history[-MAX_HISTORY_MESSAGES:]]
         try:
-            completion = self.provider.complete(messages, REPLY_SCHEMA, "agent_reply")
+            completion = provider.complete(messages, REPLY_SCHEMA, "agent_reply", effort="low")
         except Exception:
             self.history.pop()   # a failed turn is not part of the conversation
             raise
@@ -58,8 +57,7 @@ class Chat:
 class AgentService:
     """LLM interface restricted to a small, fixed health-check capability set."""
 
-    def __init__(self, health_checks: HealthCheckRunner | None = None, provider: Provider | None = None):
-        self.provider = provider or get_provider()
+    def __init__(self, health_checks: HealthCheckRunner | None = None):
         self.health_checks = health_checks or HealthCheckRunner()
         # Least recently used first (a dict keeps insertion order). A chat only lives in memory so the assistant
         # remembers the conversation; the cache is bounded so endless new conversations can't grow it without limit.
@@ -67,7 +65,7 @@ class AgentService:
         self.lock = threading.Lock()
 
     def _new_chat(self) -> Chat:
-        return Chat(self.provider)
+        return Chat()
 
     def _get_chat(self, user_id: int, conversation_id: str):
         chat_key = (user_id, conversation_id)
@@ -81,19 +79,19 @@ class AgentService:
             return chat
 
     @staticmethod
-    def _ask(chat, message: str, usage_logger: Callable[[Completion, int], None] | None):
+    def _ask(chat, provider: Provider, message: str, usage_logger: Callable[[Completion, int], None] | None):
         """One call to the model; ``usage_logger`` gets its tokens and how long it took, in milliseconds."""
         started = time.monotonic()
-        reply = chat.send_message(message)
+        reply = chat.send_message(provider, message)
         completion = getattr(reply, "completion", None)
         if usage_logger and completion is not None:
             usage_logger(completion, round((time.monotonic() - started) * 1000))
         return reply
 
-    def send(self, user_id: int, conversation_id: str, message: str, command_logger: Callable[[dict], None] | None = None,
+    def send(self, user_id: int, conversation_id: str, message: str, provider: Provider, command_logger: Callable[[dict], None] | None = None,
              usage_logger: Callable[[Completion, int], None] | None = None) -> str:
         chat = self._get_chat(user_id, conversation_id)
-        response_text, action = self._parse_agent_response(self._response_text(self._ask(chat, message, usage_logger)))
+        response_text, action = self._parse_agent_response(self._response_text(self._ask(chat, provider, message, usage_logger)))
         if not action:
             return response_text
 
@@ -110,7 +108,7 @@ class AgentService:
             "check": check_name, "level": level,
             "steps": [f"Completed predefined check '{check_name}' with status {result['status']}."],
         })
-        final_text, final_action = self._parse_agent_response(self._response_text(self._ask(chat, "[HEALTH-CHECK-RESULT]\n" + json.dumps(result), usage_logger)))
+        final_text, final_action = self._parse_agent_response(self._response_text(self._ask(chat, provider, "[HEALTH-CHECK-RESULT]\n" + json.dumps(result), usage_logger)))
         if final_action:
             raise ValueError("Agent must summarize a health-check result without requesting another check.")
         return final_text
@@ -148,11 +146,11 @@ class AgentService:
 _agent_service = None
 
 
-def send_agent_message(user_id: int, conversation_id: str, message: str, command_logger=None, usage_logger=None) -> str:
+def send_agent_message(user_id: int, conversation_id: str, message: str, provider: Provider, command_logger=None, usage_logger=None) -> str:
     global _agent_service
     if _agent_service is None:
         _agent_service = AgentService()
-    return _agent_service.send(user_id, conversation_id, message, command_logger=command_logger, usage_logger=usage_logger)
+    return _agent_service.send(user_id, conversation_id, message, provider, command_logger=command_logger, usage_logger=usage_logger)
 
 
 def delete_agent_conversation(user_id: int, conversation_id: str) -> None:
@@ -160,6 +158,6 @@ def delete_agent_conversation(user_id: int, conversation_id: str) -> None:
         _agent_service.delete_conversation(user_id, conversation_id)
 
 
-def check_provider_connection() -> dict:
+def check_provider_connection(db) -> dict:
     """For Admin's "Test connection": the key works and the configured model exists. Spends no tokens."""
-    return get_provider().check()
+    return get_provider(db).check()

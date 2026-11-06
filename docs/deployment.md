@@ -39,8 +39,7 @@ Then set at least these:
 | `TRAEFIK_NETWORK` | `traefik_default` | Traefik only: the Docker network Traefik is attached to. |
 | `TRAEFIK_ROUTER` | `infradeck` | Traefik only: name of this dashboard's router and service; change it only if it clashes with another one. |
 | `COMPOSE_FILE` | `docker-compose.server.yml`, with Traefik `docker-compose.server.yml:deploy/traefik.yml` | Makes plain `docker compose ...` commands use the server file and your proxy's file (see below). |
-| `SECRETS_KEY` | *(strongly recommended)* | Encrypts two-factor secrets and notification addresses. Two-factor is required for admins by default and can't be set up without it. Generate with `docker compose run --rm backend python -m src.backend.secrets_box`. |
-| `OPENAI_API_KEY`, `AGENT_MODEL` | empty, `gpt-5-mini` | Optional: the incident agent's diagnoses and chat. See [Incident agent](assistant.md#setting-it-up). |
+| `SECRETS_KEY` | *(strongly recommended)* | Encrypts two-factor secrets, notification addresses and the incident agent's API key. Two-factor is required for admins by default and can't be set up without it. Generate with `docker compose run --rm backend python -m src.backend.secrets_box`. |
 
 With Traefik, find its network with `docker network ls` or
 `docker inspect <traefik-container> --format '{{json .NetworkSettings.Networks}}'`.
@@ -84,8 +83,8 @@ certificate configuration.
 The public address serves only the dashboard. Collectors don't use it; set up
 their route in the next step.
 
-The stack also starts **`agent-worker`**, which runs the incident agent's diagnoses. Without `OPENAI_API_KEY` it
-only notes that there is no key; with one, enter the model's price in **Admin → Incident agent** so its calls count
+The stack also starts **`agent-worker`**, which runs the incident agent's diagnoses. Until an admin saves an API key in
+**Admin → Incident agent** (see [Incident agent](assistant.md#setting-it-up)) it only notes that there is no key; with one, enter the model's price in **Admin → Incident agent** so its calls count
 towards the budget.
 
 ## 4. Let remote servers report over your VPN

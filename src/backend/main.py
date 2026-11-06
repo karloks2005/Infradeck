@@ -39,7 +39,6 @@ from .models import ApiToken, Invite, NotificationChannel, AppSetting, AuditLog,
 from .db import engine
 from .migrate import upgrade_database
 from .config import (
-    AGENT_MODEL,
     APP_VERSION,
     LOGIN_RATE_LIMIT,
     LOGIN_RATE_WINDOW_SECONDS,
@@ -67,7 +66,7 @@ from .rules import HELPER_EVENT_KINDS, DEFAULT_THRESHOLDS, HOST_RULE_PREFIX, con
 from .rate_limit import enforce_ip_limit, enforce_limit, enforce_login_limit, enforce_register_limit, refund_attempt, reset_limits
 from ..agent import jobs as agent_jobs, settings as agent_settings, usage as agent_usage, verify as agent_verify
 from ..agent.diagnosis import latest as latest_report, report_json
-from ..agent.providers import configured_key
+from ..agent.providers import NoApiKey, get_provider, key_configured
 from ..agent.chat import check_provider_connection, delete_agent_conversation, send_agent_message
 
 
@@ -210,22 +209,22 @@ class MetricsIngestRequest(BaseModel):
 
 def agent_error_message(exc: Exception) -> str:
     """Turn provider failures into useful, non-sensitive chat text."""
+    if isinstance(exc, NoApiKey):
+        return "The agent has no API key. An admin adds one in Admin › Incident agent."
     raw_message = str(exc).strip()
     normalized = raw_message.lower()
-    if "openai_api_key is not configured" in normalized:
-        return "The agent has no API key. An admin sets OPENAI_API_KEY in .env and restarts the backend."
-    if any(marker in normalized for marker in ("401", "invalid_api_key", "incorrect api key", "authentication")):
-        prefix = "OpenAI rejected the API key. Check OPENAI_API_KEY in .env."
-    elif any(marker in normalized for marker in ("model_not_found", "does not exist", "404")):
-        prefix = "OpenAI doesn't offer the configured model to this key. Check AGENT_MODEL in .env."
-    elif any(marker in normalized for marker in ("resourceexhausted", "overloaded", "capacity", " 503", "status 503", " 500", " 502")):
-        prefix = "OpenAI is currently overloaded or unavailable. Please try again shortly."
-    elif any(marker in normalized for marker in ("rate limit", "quota", " 429", "status 429", "insufficient_quota")):
-        prefix = "OpenAI rate limit or quota was reached. Please try again later."
+    if any(marker in normalized for marker in ("401", "invalid_api_key", "incorrect api key", "api key not valid", "api_key_invalid", "authentication")):
+        prefix = "The AI provider rejected the API key. Check it in Admin › Incident agent."
+    elif any(marker in normalized for marker in ("model_not_found", "does not exist", "not_found_error", "404")):
+        prefix = "The AI provider doesn't offer the configured model to this key. Check the model in Admin › Incident agent."
+    elif any(marker in normalized for marker in ("resourceexhausted", "overloaded", "capacity", " 503", "status 503", " 500", " 502", " 529")):
+        prefix = "The AI provider is currently overloaded or unavailable. Please try again shortly."
+    elif any(marker in normalized for marker in ("rate limit", "rate_limit", "quota", " 429", "status 429", "insufficient_quota")):
+        prefix = "The AI provider's rate limit or quota was reached. Please try again later."
     elif any(marker in normalized for marker in ("timeout", "timed out", "deadline exceeded")):
-        prefix = "OpenAI did not respond before the request timed out. Please try again."
+        prefix = "The AI provider did not respond before the request timed out. Please try again."
     else:
-        prefix = "OpenAI could not complete this request."
+        prefix = "The AI provider could not complete this request."
 
     if not raw_message:
         return prefix
@@ -712,7 +711,7 @@ def agent_config(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_N
     user = _current_user(session_id, db)
     spend = agent_usage.budget(db)
     account = db.get(User, user["id"])
-    return {"chat_enabled": is_agent_chat_enabled(db), "may_chat": bool(account) and agent_settings.may_chat(db, account), "key_configured": bool(configured_key()), "budget_paused": spend["state"] == "paused"}
+    return {"chat_enabled": is_agent_chat_enabled(db), "may_chat": bool(account) and agent_settings.may_chat(db, account), "key_configured": key_configured(db), "budget_paused": spend["state"] == "paused"}
 
 
 OVERVIEW_ALERT_LIMIT = 50
@@ -1607,7 +1606,7 @@ DIAGNOSIS_WAIT = timedelta(minutes=3)
 def _diagnosis_coming(db) -> bool:
     """Whether a diagnosis can be expected for a new incident: there is a key, automatic diagnosis is on, the budget
     isn't used up and a worker is running. When not, notifications don't wait for one."""
-    if not configured_key() or not agent_settings.auto_diagnose(db) or agent_usage.budget(db)["state"] == "paused":
+    if not key_configured(db) or not agent_settings.auto_diagnose(db) or agent_usage.budget(db)["state"] == "paused":
         return False
     try:
         return bool(redis_client.get(agent_jobs.HEARTBEAT))

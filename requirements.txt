@@ -1,4 +1,5 @@
 alembic
+anthropic
 bcrypt
 cryptography
 email-validator

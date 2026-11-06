@@ -12,6 +12,7 @@ import { Caret, Icon } from '../icons.jsx'
 import { refreshOverview, useOverview } from '../overviewStore.js'
 import { AppShell, serverLink } from '../shell.jsx'
 import { ADMIN_GROUPS } from '../more/groups.js'
+import AgentProvider from './AgentProvider.jsx'
 import { Field, Notice, Outcome, Row, Section, SettingsLayout, ShownOnce, Soon, Switch, ago, keptFor, useAction, useLoaded, usePhone } from '../ui.jsx'
 
 const REPOSITORY = 'https://github.com/karloks2005/Infradeck'
@@ -275,18 +276,11 @@ function MountOverrides({ settings, onSaved }) {
   )
 }
 
-function Agent({ settings, system, onSaved }) {
+function Agent({ settings, system, onSaved, onSystemChanged }) {
   const [state, run] = useAction()
-  const [test, runTestAction] = useAction()
-  const [tested, setTested] = useState(null)
-  const runTest = (work) => { setTested(null); return runTestAction(async () => setTested(await work())) }
-  const agent = system.agent
   return <>
     <div className="card divide-y divide-line">
-      <Row icon="AI" title="Model provider" detail={agent.key_configured ? `${agent.provider || 'OpenAI'} · ${agent.model} · key configured` : 'No API key configured. Set OPENAI_API_KEY in .env and restart the backend to turn the chat on.'} tone={agent.key_configured ? undefined : 'warn'}>
-        <button type="button" className="btn btn-sm" disabled={!agent.key_configured || test.busy} title={agent.key_configured ? 'Checks the key and the model without spending tokens.' : 'Set OPENAI_API_KEY first.'} onClick={() => runTest(() => apiRequest('/admin/agent/test', { method: 'POST' }))}>{test.busy ? 'Testing…' : 'Test connection'}</button>
-      </Row>
-      {(test.error || tested) && <div className="px-[18px] py-2.5">{test.error ? <p role="alert" className="m-0 text-xs text-warn">{test.error}</p> : <p role="status" className="m-0 text-xs text-ok">Connected. {tested.provider} accepts the key and offers {tested.model}.</p>}</div>}
+      <AgentProvider agent={system.agent} secretsConfigured={system.secrets_configured} onChanged={onSystemChanged} />
       <Row title="Diagnose new incidents automatically" detail="When a warning or critical incident opens or gets worse, the agent worker sends its evidence (masked) to the model and writes a diagnosis. Off: incidents keep the rule-based diagnosis, and anyone who may act on incidents can still ask for one."><Switch label="Diagnose automatically" checked={settings.agent_auto_diagnose !== false} disabled={state.busy} onChange={(on) => run(async () => onSaved(await put({ agent_auto_diagnose: on })))} /></Row>
       <Row title="Read container logs" detail="Not available: Infradeck's Docker proxy can't read logs. See SECURITY.md."><Switch label="Read container logs" checked={false} disabled onChange={() => {}} /></Row>
       <Row title="Chat" detail="The main switch for the chat; who may use it is set under Chat access. Questions and the incident's facts are sent to the provider."><Switch label="Chat with the agent" checked={settings.agent_chat_enabled} disabled={state.busy} onChange={(on) => run(async () => onSaved(await put({ agent_chat_enabled: on })))} /></Row>
@@ -544,7 +538,7 @@ export default function AdminPage({ user, onLogout }) {
           </Section>
           <Section id="users" title="Users" description="Who can sign in, what they may do, and whether they must use two-factor."><Users me={user} /></Section>
           <Section id="rules" title="Alert rules" description="What opens an incident. Rules apply to every server. The “Fired” column shows how noisy each rule has been."><Rules onCount={setRuleCount} /><MountOverrides settings={settings.data} onSaved={settings.setData} /></Section>
-          <Section id="agent" title="Incident agent" description="Diagnoses incidents and answers questions using the data Infradeck already has. It is read-only: it can't run commands, restart containers or change files on your servers."><Agent settings={settings.data} system={system.data} onSaved={settings.setData} /></Section>
+          <Section id="agent" title="Incident agent" description="Diagnoses incidents and answers questions using the data Infradeck already has. It is read-only: it can't run commands, restart containers or change files on your servers."><Agent settings={settings.data} system={system.data} onSaved={settings.setData} onSystemChanged={system.reload} /></Section>
           <Section id="retention" title="Data & retention" description="How long history is kept and how big it is."><Retention settings={settings.data} system={system.data} onSaved={settings.setData} /></Section>
           <Section id="about" title="About"><About settings={settings.data} system={system.data} onSaved={settings.setData} /></Section>
         </>}

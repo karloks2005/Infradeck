@@ -19,7 +19,7 @@ import threading
 import time
 
 from src.agent import diagnosis, jobs, settings, usage, verify
-from src.agent.providers import configured_key, get_provider
+from src.agent.providers import get_provider, key_configured
 from src.backend.config import REDIS_URL
 from src.backend.db import SessionLocal
 from src.backend.models import IncidentAlert
@@ -44,14 +44,14 @@ def handle_incident(job: dict) -> tuple[str, str]:
             return "skipped", "This month's budget for the agent is used up."
         if job.get("type") != jobs.REQUESTED and not settings.auto_diagnose(db):
             return "skipped", "Automatic diagnosis is switched off in Admin; it runs when someone asks."
-        if not configured_key():
-            return "skipped", "No OPENAI_API_KEY is configured; the incident keeps its rule-based diagnosis."
+        if not key_configured(db):
+            return "skipped", "The agent has no API key (Admin › Incident agent); the incident keeps its rule-based diagnosis."
         if job.get("type", jobs.OPENED) == jobs.OPENED:
             # The same problem again within a day: its diagnosis still applies, and asking again would cost tokens.
             reused = diagnosis.reuse_recent(db, incident)
             if reused is not None:
                 return "reused", f"Same diagnosis as INC-{json.loads(reused.body)['reused_from']['incident_id']:04d}; no tokens spent"
-        report = diagnosis.diagnose(db, incident, get_provider(), trigger=job.get("type", jobs.OPENED))
+        report = diagnosis.diagnose(db, incident, get_provider(db), trigger=job.get("type", jobs.OPENED))
         if report.status != "ok":
             return "failed", report.error or "The model's answer could not be used."
         return "diagnosed", f"{report.confidence} confidence · version {report.version}"

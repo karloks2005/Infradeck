@@ -107,7 +107,7 @@ through the gate); on the development stack the local collector talks to the bac
 - registering collectors and receiving their check-ins (`/monitoring/metrics/ingest`);
 - the alert rules, incidents and notification channels (email/webhook, quiet hours);
 - statistics, rollups (summarised history) and retention;
-- the optional incident agent chat, which talks to the OpenAI API when `OPENAI_API_KEY` is set.
+- the optional incident agent chat, which talks to the chosen AI provider (Anthropic, OpenAI or Google Gemini) once an admin saves an API key.
 
 **How it works.** A FastAPI app run by uvicorn on port 8000. At startup it creates any missing tables and
 columns in PostgreSQL, moves old Redis keys to the current prefix, and prints the first-run setup token

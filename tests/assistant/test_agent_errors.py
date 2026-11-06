@@ -1,3 +1,4 @@
+from src.agent.providers import NoApiKey
 from src.backend.main import agent_error_message
 
 
@@ -23,8 +24,8 @@ def test_openai_keys_are_redacted_too():
 
 
 def test_a_missing_key_says_where_to_set_it():
-    assert "OPENAI_API_KEY" in agent_error_message(RuntimeError("OPENAI_API_KEY is not configured."))
+    assert "Admin › Incident agent" in agent_error_message(NoApiKey("The agent has no API key."))
 
 
-def test_an_unknown_model_points_at_agent_model():
-    assert "AGENT_MODEL" in agent_error_message(Exception("Error code: 404 - The model `gpt-nope` does not exist"))
+def test_an_unknown_model_points_at_the_model_setting():
+    assert "Check the model in Admin" in agent_error_message(Exception("Error code: 404 - The model `gpt-nope` does not exist"))

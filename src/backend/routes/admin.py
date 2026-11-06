@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import func, text
 
 from .. import incidents, main, notify, secrets_box
 from ...agent import jobs as agent_jobs, settings as agent_settings, usage as agent_usage
-from ...agent.providers import configured_key
-from ..config import AGENT_MODEL, APP_VERSION, SESSION_COOKIE_NAME
+from ...agent import providers as agent_providers
+from ..config import APP_VERSION, SESSION_COOKIE_NAME
 from ..db import engine, get_db
 from ..models import ChatMessage, HostMetric, IncidentAlert, Invite, Server, User
 
@@ -117,6 +118,12 @@ def admin_rules(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NA
                        "fired": fired.get(row["kind"], 0), "noisy": fired.get(row["kind"], 0) >= main.NOISY_FIRED} for row in main.RULE_ROWS],
             "thresholds": thresholds}
 
+def _agent_provider(db) -> dict:
+    """The chosen provider and model, whether it has a key, and the choices. The key itself never leaves the backend."""
+    choice = agent_providers.current(db)
+    return {"provider": choice.provider, "model": choice.model, "key_configured": bool(choice.key),
+            "providers": [{"id": key, "name": name, "default_model": model} for key, (name, model) in agent_providers.PROVIDERS.items()]}
+
 @router.get("/admin/system")
 def admin_system(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     """Read-only facts about this install for the Admin page: version, database size, what the agent was used for."""
@@ -131,7 +138,7 @@ def admin_system(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_N
         "version": APP_VERSION, "database": {"engine": engine.dialect.name, "bytes": size,
                                              "host_rows": db.query(func.count(HostMetric.id)).scalar(), "host_rows_week": db.query(func.count(HostMetric.id)).filter(HostMetric.time >= week).scalar()},
         "history_retention_days": main.retention.history_days(db),
-        "agent": {"provider": "OpenAI", "model": AGENT_MODEL, "key_configured": bool(configured_key()), "budget": agent_usage.budget(db), "chat_enabled": main.is_agent_chat_enabled(db),
+        "agent": {**_agent_provider(db), "budget": agent_usage.budget(db), "chat_enabled": main.is_agent_chat_enabled(db),
                   "incidents_this_month": db.query(IncidentAlert).filter(IncidentAlert.created_at >= month).count(),
                   "chat_messages_this_month": db.query(ChatMessage).filter(ChatMessage.role == "user", ChatMessage.created_at >= month).count()},
         "smtp_configured": notify.smtp_configured(), "secrets_configured": secrets_box.available(),
@@ -141,7 +148,7 @@ def admin_system(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_N
 def admin_agent_usage(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     """This month's model calls, tokens and estimated cost against the budget, per model and per day."""
     main._require_admin(session_id, db)
-    return {**agent_usage.month_summary(db), "model": AGENT_MODEL}
+    return {**agent_usage.month_summary(db), "model": agent_providers.current(db).model}
 
 @router.get("/admin/agent/worker")
 def admin_agent_worker(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
@@ -158,7 +165,41 @@ def admin_agent_test(session_id: Annotated[str | None, Cookie(alias=SESSION_COOK
     admin = main._require_admin(session_id, db)
     main.enforce_limit(main.redis_client, scope="agent-test", subject=admin["id"], limit=10, window_seconds=600)
     try:
-        result = main.check_provider_connection()
+        result = main.check_provider_connection(db)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=main.agent_error_message(exc)) from exc
     return {"ok": True, **result}
+
+
+class AgentProviderRequest(BaseModel):
+    provider: Literal["anthropic", "openai", "gemini"]
+    # Empty: the provider's default model. Same names the price list accepts.
+    model: str | None = Field(default=None, max_length=100, pattern=r"^([A-Za-z0-9][A-Za-z0-9._:/-]{0,99})?$")
+    # Empty: keep the stored key. Keys are printable ASCII without spaces.
+    api_key: str | None = Field(default=None, max_length=512, pattern=r"^([\x21-\x7e]{8,512})?$")
+
+@router.put("/admin/agent/provider")
+def admin_agent_provider(payload: AgentProviderRequest, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    """Choose the agent's provider and model, and optionally store a new API key for it (encrypted with SECRETS_KEY)."""
+    admin = main._require_admin(session_id, db)
+    main.enforce_limit(main.redis_client, scope="agent-provider", subject=admin["id"], limit=20, window_seconds=600)
+    if payload.api_key and not secrets_box.available():
+        raise HTTPException(status_code=409, detail="Set SECRETS_KEY in .env first: the API key is stored encrypted with it.")
+    agent_providers.save(db, payload.provider, payload.model, payload.api_key)
+    db.commit()
+    choice = agent_providers.current(db)
+    name = agent_providers.PROVIDERS[payload.provider][0]
+    main.record_audit_log(db, user_id=admin["id"], level="WARNING" if payload.api_key else "INFO", source="admin",
+                          message=f"Agent provider set to {name} ({choice.model}){'; a new API key was saved' if payload.api_key else ''}")
+    return _agent_provider(db)
+
+@router.delete("/admin/agent/key")
+def admin_agent_remove_key(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    """Remove the stored API key of the chosen provider; the agent stops until a new one is saved."""
+    admin = main._require_admin(session_id, db)
+    provider = agent_providers.current(db).provider
+    if provider:
+        agent_providers.remove_key(db, provider)
+        db.commit()
+        main.record_audit_log(db, user_id=admin["id"], level="WARNING", source="admin", message=f"The agent's API key for {agent_providers.PROVIDERS[provider][0]} was removed")
+    return _agent_provider(db)
