@@ -14,7 +14,7 @@ export default function AgentProvider({ agent, secretsConfigured, onChanged }) {
   const [test, runTestAction] = useAction()
   const [tested, setTested] = useState(null)
   const chosen = providers.find((item) => item.id === agent.provider)
-  const switching = provider !== agent.provider
+  const switching = Boolean(agent.provider) && provider !== agent.provider
 
   const choose = (id) => { setProvider(id); setModel(defaultModel(id)) }
   const save = (event) => {
@@ -41,24 +41,24 @@ export default function AgentProvider({ agent, secretsConfigured, onChanged }) {
         <button type="button" className="btn btn-sm" disabled={!agent.key_configured || test.busy} title={agent.key_configured ? 'Checks the key and the model without spending tokens.' : 'Save an API key first.'} onClick={runTest}>{test.busy ? 'Testing…' : 'Test connection'}</button>
       </Row>
       {(test.error || tested) && <div className="px-[18px] py-2.5">{test.error ? <p role="alert" className="m-0 text-xs text-warn">{test.error}</p> : <p role="status" className="m-0 text-xs text-ok">Connected. {tested.provider} accepts the key and offers {tested.model}.</p>}</div>}
-      <form className="flex flex-wrap items-end gap-3 px-[18px] py-3.5" onSubmit={save}>
-        <Field label="Provider" className="basis-40">
-          <select className="select w-full" value={provider} disabled={state.busy} onChange={(event) => choose(event.target.value)}>
+      <form className="grid items-start gap-3 px-[18px] py-3.5 md:grid-cols-[10rem_minmax(0,1fr)_minmax(0,1.5fr)_auto]" onSubmit={save}>
+        <Field label="Provider">
+          <select className="select h-9 w-full" value={provider} disabled={state.busy} onChange={(event) => choose(event.target.value)}>
             {providers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
         </Field>
-        <Field label="Model" className="min-w-0 flex-1 basis-48" hint={`Empty: ${defaultModel(provider)}`}>
+        <Field label="Model" hint={`Empty: ${defaultModel(provider)}`}>
           <input className="field mono h-9 w-full" maxLength={100} value={model} disabled={state.busy} onChange={(event) => setModel(event.target.value)} />
         </Field>
-        <Field label="API key" className="min-w-0 flex-1 basis-60" hint={!secretsConfigured ? 'Set SECRETS_KEY in .env first: the key is stored encrypted with it.' : switching ? 'Each provider keeps its own key. Leave empty to keep a key saved earlier.' : agent.key_configured ? 'Saved. Paste a new key to replace it.' : 'Stored encrypted; never shown again.'}>
+        <Field label="API key" hint={!secretsConfigured ? 'Set SECRETS_KEY in .env first: the key is stored encrypted with it.' : switching ? 'Each provider keeps its own key. Leave empty to keep a key saved earlier.' : agent.key_configured ? 'Saved. Paste a new key to replace it.' : 'Stored encrypted; never shown again.'}>
           <input type="password" className="field mono h-9 w-full" autoComplete="off" spellCheck={false} maxLength={512} value={apiKey} disabled={state.busy || !secretsConfigured}
             placeholder={agent.key_configured && !switching ? '••••••••' : ''} onChange={(event) => setApiKey(event.target.value)} />
         </Field>
-        <div className="flex items-center gap-3">
-          <button type="submit" className="btn btn-sm btn-primary" disabled={state.busy}>Save</button>
+        <div className="flex h-9 items-center gap-3 md:mt-[22px]">
+          <button type="submit" className="btn btn-primary h-9" disabled={state.busy}>Save</button>
           {agent.key_configured && <button type="button" className="link text-xs" disabled={state.busy} onClick={removeKey}>Remove key</button>}
         </div>
-        <div className="basis-full empty:hidden"><Outcome state={state} /></div>
+        <div className="empty:hidden md:col-span-4"><Outcome state={state} /></div>
       </form>
     </>
   )
