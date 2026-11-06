@@ -32,6 +32,8 @@
 
 One machine runs the dashboard. Every other machine runs a small collector that reports host and Docker metrics and runs your uptime checks. It works the same on one LAN or across sites and VPSes.
 
+<img src="docs/images/infradeck-fleet.svg" alt="Collectors on many machines and sites report to one dashboard over a VPN" width="100%">
+
 - **Hosts, containers and uptime in one place.** No separate tools for server metrics, Docker and "is my service up".
 - **Checks run from your own machines.** Pick which servers run each check, so you can tell a broken service from a broken network path.
 - **Alerts that mean something.** One incident per problem, opened after a sustained breach, closed automatically when it clears.
@@ -82,6 +84,9 @@ To update: `git pull && docker compose up -d --build`.
 ## Features
 
 ### Monitoring
+
+<img src="docs/images/infradeck-metrics.svg" alt="Live metrics: CPU per core, memory, network traffic and container states" width="100%">
+
 - **Every machine**: CPU, RAM, load, swap, network totals and uptime per server, plus disk and inode usage for **every mounted filesystem** (root, data disks, NFS/SMB shares, ZFS pools).
 - **Containers**: a collapsible list per server, with problems (unhealthy, restarting, stopped) visible even when it's closed. Per container: CPU, memory used/limit, processes, network and disk I/O, ports, health and history. Stopped containers show how they ended (exit code or out of memory). **Recent changes** shows containers that appeared, disappeared or changed image.
 - **System health**: reboots, OOM kills, kernel fault flags, clock sync and pending reboots. With the optional system helper, also whether the last shutdown was clean and which process the OOM killer stopped.
@@ -103,6 +108,9 @@ Like Uptime Kuma, but run from your own machines: **HTTP(s)** status, a **keywor
 Rules for disk (with per-mount overrides), inodes, memory, swap, load per core, restart loops, failing healthchecks, reboots and crashes, OOM kills, kernel faults, clock drift, an unreachable Docker daemon, vanished or changed containers, possible memory leaks, newly opened ports, firewall changes, lost internet or DNS, and servers that stop reporting. Thresholds are editable by admins. Full list: [Alerts and incidents](docs/alerts.md).
 
 ### Incident agent (optional)
+
+<img src="docs/images/infradeck-agent.svg" alt="The incident agent reads masked evidence, diagnoses the incident and watches that the fix holds" width="100%">
+
 Set `OPENAI_API_KEY` and the agent diagnoses every warning and critical incident from **masked** evidence, ties each claim to the data, proposes a fix, watches whether it holds and adds the diagnosis to your notifications. You can also chat about any incident. Monthly budget, per-model prices and who sees what are set in Admin. **It reads; it never runs commands.** See [Incident agent](docs/assistant.md).
 
 <img width="2879" height="1499" alt="Infradeck dashboard" src="https://github.com/user-attachments/assets/4331b563-9537-4393-882d-f0dbe5a1aedd" />
