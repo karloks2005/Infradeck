@@ -187,3 +187,6 @@ Prvi dio milestonea: provjere HTTP(s), Keyword i TCP port, pokreću ih collector
 | New check: timeout fiksno 48 s | Timeout se sam smanji na 80 % intervala kad je interval kraći; greške se pokazuju uz polje i u podnožju | Zadani timeout inače blokira interval ispod 49 s | #141 |
 | New check: tagovi kao čipovi | Tekstno polje, tagovi odvojeni zarezom | Jednostavnije | #141 |
 | Mobitel: Availability kao zaseban tab | Availability je u More (s brojem palih provjera na tabu More); popis provjera je kompaktan, s trakom zadnjih 30 provjera | Tab bar ima mjesta za četiri stavke | #146 |
+| Agent confirm (`11-agent-confirm.pdf`): dizajn pokazuje samo „Diagnose new incidents automatically" | Isti popup pita i za Chat (Off → On), Chat access (Admins only → Per user, gumb „Verify and save") i spremanje providera (npr. OpenAI → Anthropic ili stari → novi model, gumb „Verify and save") | Sve te promjene šalju podatke vanjskom modelu, pa traže istu potvrdu | #184 |
+| Agent confirm: admin bez 2FA | Umjesto polja za lozinku popup kaže da prvo treba uključiti 2FA, s poveznicom na Account › Security | Dizajn ne pokazuje to stanje; bez 2FA promjena nije moguća | #184 |
+| Agent confirm: popup „centred on the content" | Popup je centriran na cijeli ekran, a ne na sadržaj desno od bočne trake | Karlova odluka nakon pregleda (7. 11. 2026) | #184 |

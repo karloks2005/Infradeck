@@ -11,6 +11,7 @@ All paths are relative to `/api` when going through the frontend/nginx.
 | `POST /auth/login/2fa` | pending login token | Second step of sign-in: authenticator or recovery code. |
 | `GET /auth/2fa/status`, `POST /auth/2fa/setup`, `POST /auth/2fa/enable` | session (also the limited setup session) | Two-factor status, start and confirm setup. Starting setup from a normal session needs `{"password": ...}`; the forced first enrolment doesn't. |
 | `POST /auth/2fa/disable`, `POST /auth/2fa/recovery-codes` | session + password + code | Turn two-factor off; replace the recovery codes. |
+| `POST /auth/reauth` | session with two-factor (rate limited) | Step 1 of confirming a change that sends data to the AI provider: checks the password and returns a `reauth_token` (5 minutes, this session only, 5 codes, single use). Step 2 sends `reauth_token` and `code` with the change. |
 | `POST /auth/password` | session + current password | Change password; signs out other sessions. |
 | `GET /auth/sessions`, `POST /auth/sessions/revoke-others`, `DELETE /auth/sessions/{id}` | session | List and end your own sessions. |
 | `GET /auth/config` | – | Whether registration is open and whether the first account still needs a setup token. |
@@ -27,7 +28,7 @@ All paths are relative to `/api` when going through the frontend/nginx.
 | `POST /monitoring/join-tokens` | admin | Create the single-use join token for **Connect a server** (shown once). |
 | `GET /monitoring/install-info` | admin | The collector address and images the panel uses. |
 | `GET` / `POST` / `DELETE /monitoring/enrollment-key` | admin | Show status / create or rotate / revoke the enrollment key. |
-| `GET` / `PUT /admin/settings` | admin | History retention (`history_retention_days`: 365, 730 or 0 for forever), chat on/off, require two-factor for admins, alert thresholds and per-mount disk thresholds; the agent's model prices, monthly budget, daily chat limit, automatic diagnosis, whether users see diagnoses, and chat access (`admins_only` or `per_user`). |
+| `GET` / `PUT /admin/settings` | admin | History retention (`history_retention_days`: 365, 730 or 0 for forever), chat on/off, require two-factor for admins, alert thresholds and per-mount disk thresholds; the agent's model prices, monthly budget, daily chat limit, automatic diagnosis, whether users see diagnoses, and chat access (`admins_only` or `per_user`). Turning the chat or automatic diagnosis on, and chat access to `per_user`, also need `reauth_token` and `code` (see `POST /auth/reauth`). |
 | `GET /admin/users`, `PATCH /admin/users/{id}` | admin | Users and invitations; change someone's role, switch them off, or (with per-user chat access) allow them the agent chat (`agent_chat_enabled`). |
 | `GET /agent/config` | session | Whether chat with the agent can be used: switched on, allowed for you (`may_chat`), a key configured, and the monthly budget not used up. |
 | `GET /incidents`, `GET /incidents/{id}` | session | The incident inbox; one incident with its rule-based diagnosis and, under `agent`, the agent's latest report (with `watch` progress while it is open, `reused_from` when it was reused). The report is left out (`hidden: true`) for users who aren't admins while diagnoses aren't shown to users. |
@@ -35,7 +36,7 @@ All paths are relative to `/api` when going through the frontend/nginx.
 | `POST /incidents/{id}/diagnose` | admin | Queue a new diagnosis by the agent (409 without a key, 429 while the budget is used up). |
 | `GET /admin/agent/usage` | admin | This month's model calls, tokens and estimated cost against the budget, per model and per day, with the prices and limits. |
 | `GET /admin/agent/worker` | admin | Whether the agent worker is running, how many jobs wait, are running or wait to be retried, and the latest results. |
-| `PUT /admin/agent/provider` | admin (rate limited) | Choose the agent's provider (`anthropic`, `openai`, `gemini`) and model, and optionally save a new API key, stored encrypted (409 without `SECRETS_KEY`). Returns the choice and whether a key is saved, never the key. |
+| `PUT /admin/agent/provider` | admin (rate limited) + `reauth_token` and `code` | Choose the agent's provider (`anthropic`, `openai`, `gemini`) and model, and optionally save a new API key, stored encrypted (409 without `SECRETS_KEY`). Returns the choice and whether a key is saved, never the key. |
 | `DELETE /admin/agent/key` | admin | Remove the chosen provider's API key; the agent stops until a new one is saved. |
 | `POST /admin/agent/test` | admin | Checks the saved key and that the configured model exists, without spending tokens. |
 | `POST /monitoring/collectors/register` | join token (rate limited) | Collector asks to join; returns a poll secret and pairing code. |

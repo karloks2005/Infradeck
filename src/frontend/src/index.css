@@ -619,3 +619,26 @@
 :root[data-density='compact'] body {
   zoom: 0.9;
 }
+
+/* A wrong two-factor code: the boxes shake once (#184). */
+@keyframes shake {
+  20%, 60% { transform: translateX(-6px); }
+  40%, 80% { transform: translateX(6px); }
+}
+.shake {
+  animation: shake 0.35s ease-in-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .shake { animation: none; }
+}
+
+/* Moving from the password to the code inside the confirm popup (#184). */
+@keyframes dialog-step {
+  from { opacity: 0; transform: translateX(8px); }
+}
+.dialog-step {
+  animation: dialog-step 0.18s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dialog-step { animation: none; }
+}

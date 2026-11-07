@@ -12,6 +12,8 @@ change files on your servers. Everything about it is in `src/agent/` and in **Ad
    encrypted with it, so it can't be saved without one.
 2. Create an API key with one of the providers: Anthropic (Claude), OpenAI or Google Gemini.
 3. In **Admin → Incident agent**, pick the provider, keep or change the model, paste the key and click **Save**.
+   Confirm with your password and a two-factor code: this decides where the agent's data goes. Turning the chat
+   or automatic diagnosis on, and setting Chat access to "Per user", ask for the same; turning things off doesn't.
    Models used when the field is left empty:
 
    | Provider | Default model |

@@ -13,6 +13,7 @@ import { refreshOverview, useOverview } from '../overviewStore.js'
 import { AppShell, serverLink } from '../shell.jsx'
 import { ADMIN_GROUPS } from '../more/groups.js'
 import AgentProvider from './AgentProvider.jsx'
+import ConfirmDialog from './ConfirmDialog.jsx'
 import { Field, Notice, Outcome, Row, Section, SettingsLayout, ShownOnce, Soon, Switch, ago, keptFor, useAction, useLoaded, usePhone } from '../ui.jsx'
 
 const REPOSITORY = 'https://github.com/karloks2005/Infradeck'
@@ -276,16 +277,38 @@ function MountOverrides({ settings, onSaved }) {
   )
 }
 
-function Agent({ settings, system, onSaved, onSystemChanged }) {
+// Turning the agent on, or letting more people use the chat, is confirmed with the password and a two-factor code
+// (#184); while the popup is open the switch stays as it was and says it is waiting. Turning things off is one click.
+function Waiting({ children }) {
+  return <span className="flex items-center gap-3"><span className="flex items-center gap-2 text-xs text-muted"><span className="spinner" />Waiting for confirmation</span>{children}</span>
+}
+
+function Agent({ settings, system, user, onSaved, onSystemChanged }) {
   const [state, run] = useAction()
+  const [confirming, setConfirming] = useState(null)
+  const agent = system.agent
+  const chosen = agent.providers.find((item) => item.id === agent.provider)
+  const where = chosen ? `${chosen.name} · ${agent.model}` : 'the AI provider once a key is saved'
+  const turnOn = 'Turning the agent on lets Infradeck send data from your servers to an outside model.'
+  const ask = (body, change) => setConfirming({ body, change: { from: 'Off', to: 'On', intro: turnOn, action: 'Verify and turn on', ...change } })
+  const toggle = (key, on, change) => (on ? ask({ [key]: true }, change) : run(async () => onSaved(await put({ [key]: false }))))
+  const waiting = (key) => confirming?.body[key] !== undefined
+  const autoSwitch = <Switch label="Diagnose automatically" checked={settings.agent_auto_diagnose !== false} disabled={state.busy || waiting('agent_auto_diagnose')}
+    onChange={(on) => toggle('agent_auto_diagnose', on, { title: 'Diagnose new incidents automatically', detail: 'Incident evidence will be sent to', target: where })} />
+  const chatSwitch = <Switch label="Chat with the agent" checked={settings.agent_chat_enabled} disabled={state.busy || waiting('agent_chat_enabled')}
+    onChange={(on) => toggle('agent_chat_enabled', on, { title: 'Chat', detail: "Questions and the incident's facts will be sent to", target: where })} />
+  const chooseAccess = (value) => (value === 'per_user'
+    ? ask({ agent_chat_access: 'per_user' }, { title: 'Chat access', from: 'Admins only', to: 'Per user', detail: 'People you allow in Users can send questions to', target: where,
+      intro: 'Letting more people use the chat lets them send data from your servers to an outside model.', action: 'Verify and save' })
+    : run(async () => onSaved(await put({ agent_chat_access: value }))))
   return <>
     <div className="card divide-y divide-line">
-      <AgentProvider agent={system.agent} secretsConfigured={system.secrets_configured} onChanged={onSystemChanged} />
-      <Row title="Diagnose new incidents automatically" detail="When a warning or critical incident opens or gets worse, the agent worker sends its evidence (masked) to the model and writes a diagnosis. Off: incidents keep the rule-based diagnosis, and anyone who may act on incidents can still ask for one."><Switch label="Diagnose automatically" checked={settings.agent_auto_diagnose !== false} disabled={state.busy} onChange={(on) => run(async () => onSaved(await put({ agent_auto_diagnose: on })))} /></Row>
+      <AgentProvider agent={agent} user={user} secretsConfigured={system.secrets_configured} onChanged={onSystemChanged} />
+      <Row title="Diagnose new incidents automatically" detail="When a warning or critical incident opens or gets worse, the agent worker sends its evidence (masked) to the model and writes a diagnosis. Off: incidents keep the rule-based diagnosis, and anyone who may act on incidents can still ask for one.">{waiting('agent_auto_diagnose') ? <Waiting>{autoSwitch}</Waiting> : autoSwitch}</Row>
       <Row title="Read container logs" detail="Not available: Infradeck's Docker proxy can't read logs. See SECURITY.md."><Switch label="Read container logs" checked={false} disabled onChange={() => {}} /></Row>
-      <Row title="Chat" detail="The main switch for the chat; who may use it is set under Chat access. Questions and the incident's facts are sent to the provider."><Switch label="Chat with the agent" checked={settings.agent_chat_enabled} disabled={state.busy} onChange={(on) => run(async () => onSaved(await put({ agent_chat_enabled: on })))} /></Row>
+      <Row title="Chat" detail="The main switch for the chat; who may use it is set under Chat access. Questions and the incident's facts are sent to the provider.">{waiting('agent_chat_enabled') ? <Waiting>{chatSwitch}</Waiting> : chatSwitch}</Row>
       <Row title="Chat access" detail={settings.agent_chat_access === 'per_user' ? 'Admins always; everyone else only with the Agent chat switch next to their name in Users.' : 'Only owners and admins can use the chat.'}>
-        <select className="select" aria-label="Chat access" value={settings.agent_chat_access || 'admins_only'} disabled={state.busy} onChange={(event) => run(async () => onSaved(await put({ agent_chat_access: event.target.value })))}><option value="admins_only">Admins only</option><option value="per_user">Per user</option></select>
+        <select className="select" aria-label="Chat access" value={settings.agent_chat_access || 'admins_only'} disabled={state.busy} onChange={(event) => chooseAccess(event.target.value)}><option value="admins_only">Admins only</option><option value="per_user">Per user</option></select>
       </Row>
       <Row title="Show diagnoses to users" detail="Off: only owners and admins see the agent's diagnoses and their summary in notifications; everyone else sees the rule-based diagnosis.">
         <Switch label="Show diagnoses to users" checked={settings.agent_show_diagnoses_to_users !== false} disabled={state.busy} onChange={(on) => run(async () => onSaved(await put({ agent_show_diagnoses_to_users: on })))} />
@@ -293,6 +316,7 @@ function Agent({ settings, system, onSaved, onSystemChanged }) {
       <Row title="Redact IPs and hostnames before sending" detail="Not available yet. Until then, turn Chat off if names must not leave this machine."><Switch label="Redact before sending" checked={false} disabled onChange={() => {}} /></Row>
     </div>
     <Outcome state={state} />
+    {confirming && <ConfirmDialog change={confirming.change} user={user} onConfirm={async (fields) => onSaved(await put({ ...confirming.body, ...fields }))} onClose={() => setConfirming(null)} />}
     <AgentWorker />
     <AgentSpending settings={settings} onSaved={onSaved} />
   </>
@@ -538,7 +562,7 @@ export default function AdminPage({ user, onLogout }) {
           </Section>
           <Section id="users" title="Users" description="Who can sign in, what they may do, and whether they must use two-factor."><Users me={user} /></Section>
           <Section id="rules" title="Alert rules" description="What opens an incident. Rules apply to every server. The “Fired” column shows how noisy each rule has been."><Rules onCount={setRuleCount} /><MountOverrides settings={settings.data} onSaved={settings.setData} /></Section>
-          <Section id="agent" title="Incident agent" description="Diagnoses incidents and answers questions using the data Infradeck already has. It is read-only: it can't run commands, restart containers or change files on your servers."><Agent settings={settings.data} system={system.data} onSaved={settings.setData} onSystemChanged={system.reload} /></Section>
+          <Section id="agent" title="Incident agent" description="Diagnoses incidents and answers questions using the data Infradeck already has. It is read-only: it can't run commands, restart containers or change files on your servers."><Agent settings={settings.data} system={system.data} user={user} onSaved={settings.setData} onSystemChanged={system.reload} /></Section>
           <Section id="retention" title="Data & retention" description="How long history is kept and how big it is."><Retention settings={settings.data} system={system.data} onSaved={settings.setData} /></Section>
           <Section id="about" title="About"><About settings={settings.data} system={system.data} onSaved={settings.setData} /></Section>
         </>}

@@ -1,10 +1,12 @@
 // Which AI provider and model the incident agent uses, and its API key. The key is sent once and stored encrypted;
-// the backend never sends it back, so the field only ever shows whether one is saved.
+// the backend never sends it back, so the field only ever shows whether one is saved. Saving decides where the
+// agent's data goes, so it is confirmed with the password and a two-factor code first (#184).
 import { useState } from 'react'
 import { apiRequest } from '../api.js'
 import { Field, Outcome, Row, useAction } from '../ui.jsx'
+import ConfirmDialog from './ConfirmDialog.jsx'
 
-export default function AgentProvider({ agent, secretsConfigured, onChanged }) {
+export default function AgentProvider({ agent, user, secretsConfigured, onChanged }) {
   const providers = agent.providers
   const defaultModel = (id) => providers.find((item) => item.id === id)?.default_model || ''
   const [provider, setProvider] = useState(agent.provider || providers[0].id)
@@ -13,6 +15,7 @@ export default function AgentProvider({ agent, secretsConfigured, onChanged }) {
   const [state, run] = useAction()
   const [test, runTestAction] = useAction()
   const [tested, setTested] = useState(null)
+  const [confirming, setConfirming] = useState(null)
   const chosen = providers.find((item) => item.id === agent.provider)
   const switching = Boolean(agent.provider) && provider !== agent.provider
 
@@ -20,11 +23,20 @@ export default function AgentProvider({ agent, secretsConfigured, onChanged }) {
   const save = (event) => {
     event.preventDefault()
     setTested(null)
-    run(async () => {
-      await apiRequest('/admin/agent/provider', { method: 'PUT', body: JSON.stringify({ provider, model: model.trim() || null, api_key: apiKey.trim() || null }) })
-      setApiKey('')
-      await onChanged()
-    }, 'Saved.')
+    const name = providers.find((item) => item.id === provider).name
+    const newModel = model.trim() || defaultModel(provider)
+    const [from, to] = provider !== agent.provider ? [chosen?.name || 'None', name]
+      : newModel !== agent.model ? [agent.model, newModel] : [agent.key_configured ? 'Saved key' : 'No key', 'New key']
+    setConfirming({
+      body: { provider, model: model.trim() || null, api_key: apiKey.trim() || null },
+      change: { title: 'Model provider', from, to, detail: 'Incident evidence and chat questions will be sent to', target: `${name} · ${newModel}`,
+        intro: 'The provider decides where Infradeck sends data from your servers.', action: 'Verify and save' },
+    })
+  }
+  const confirm = async (fields) => {
+    await apiRequest('/admin/agent/provider', { method: 'PUT', body: JSON.stringify({ ...confirming.body, ...fields }) })
+    setApiKey('')
+    await run(onChanged, 'Saved.')
   }
   const removeKey = () => {
     if (!window.confirm(`Remove the ${chosen.name} API key? The agent stops until a new key is saved.`)) return
@@ -60,6 +72,7 @@ export default function AgentProvider({ agent, secretsConfigured, onChanged }) {
         </div>
         <div className="empty:hidden md:col-span-4"><Outcome state={state} /></div>
       </form>
+      {confirming && <ConfirmDialog change={confirming.change} user={user} onConfirm={confirm} onClose={() => setConfirming(null)} />}
     </>
   )
 }

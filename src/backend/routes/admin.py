@@ -10,7 +10,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func, text
 
-from .. import incidents, main, notify, secrets_box
+from .. import incidents, main, notify, reauth, secrets_box
 from ...agent import jobs as agent_jobs, settings as agent_settings, usage as agent_usage
 from ...agent import providers as agent_providers
 from ..config import APP_VERSION, SESSION_COOKIE_NAME
@@ -177,6 +177,9 @@ class AgentProviderRequest(BaseModel):
     model: str | None = Field(default=None, max_length=100, pattern=r"^([A-Za-z0-9][A-Za-z0-9._:/-]{0,99})?$")
     # Empty: keep the stored key. Keys are printable ASCII without spaces.
     api_key: str | None = Field(default=None, max_length=512, pattern=r"^([\x21-\x7e]{8,512})?$")
+    # Where the agent's data goes is confirmed with the password and a two-factor code (reauth.py).
+    reauth_token: str | None = Field(default=None, max_length=100)
+    code: str | None = Field(default=None, max_length=64)
 
 @router.put("/admin/agent/provider")
 def admin_agent_provider(payload: AgentProviderRequest, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
@@ -185,6 +188,7 @@ def admin_agent_provider(payload: AgentProviderRequest, session_id: Annotated[st
     main.enforce_limit(main.redis_client, scope="agent-provider", subject=admin["id"], limit=20, window_seconds=600)
     if payload.api_key and not secrets_box.available():
         raise HTTPException(status_code=409, detail="Set SECRETS_KEY in .env first: the API key is stored encrypted with it.")
+    reauth.require(db, admin, payload.reauth_token, payload.code)
     agent_providers.save(db, payload.provider, payload.model, payload.api_key)
     db.commit()
     choice = agent_providers.current(db)
@@ -195,7 +199,8 @@ def admin_agent_provider(payload: AgentProviderRequest, session_id: Annotated[st
 
 @router.delete("/admin/agent/key")
 def admin_agent_remove_key(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
-    """Remove the stored API key of the chosen provider; the agent stops until a new one is saved."""
+    """Remove the stored API key of the chosen provider; the agent stops until a new one is saved. Stopping the agent
+    needs no confirmation, so it is never harder than starting it."""
     admin = main._require_admin(session_id, db)
     provider = agent_providers.current(db).provider
     if provider:
