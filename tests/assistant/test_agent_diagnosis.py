@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from src.agent import diagnosis, evidence, masking, safety, worker
+from src.agent import bounds, diagnosis, evidence, masking, safety, worker
 from src.agent.providers import Completion
 from src.backend.models import AgentReport, AgentRun, Base, ContainerMetric, HostMetric, IncidentAlert, Server, SystemEvent
 
@@ -83,7 +83,7 @@ def test_the_pack_has_an_id_on_every_fact_and_stays_small(db):
     labels = evidence.index(pack)
 
     assert {"incident:42", "metric:main", "metric:host.cpu", "metric:container.restarts", "event:812", "event:813", "check:1", "incident:31"} <= set(labels)
-    assert all(len(metric["points"]) <= evidence.SERIES_POINTS for metric in pack["metrics"])
+    assert all(len(metric["points"]) <= bounds.SERIES_POINTS for metric in pack["metrics"])
     main = next(metric for metric in pack["metrics"] if metric["id"] == "metric:main")
     assert main["limit"] == 4096 and main["stats"]["max"] >= 3900
     assert pack["similar_incidents"][0]["resolution"] == "Marked resolved by Karlo"

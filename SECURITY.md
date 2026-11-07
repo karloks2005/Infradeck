@@ -82,6 +82,13 @@ marked recommended (`src/agent/safety.py`). Nothing the model writes is run. Tur
 automatically" in Admin › Incident agent to send nothing unless someone asks; without a key nothing is sent
 and incidents keep the rule-based diagnosis, which is worked out locally.
 
+**The agent's tools** (`src/agent/tools/`, used from #157 on) let it look up more of the same stored data: metrics,
+containers, filesystems, events, earlier incidents, availability results, listening ports and the firewall, from
+the last 90 days. The list is closed and every call is checked against the tool's schema before anything is read.
+No tool writes, contacts a collector or runs a command. Results are bounded and masked like the evidence pack; a
+check's target is sent without its credentials and query string; IP addresses, users, the audit log and enrolment
+are never returned, so a tool answers everyone the same and shows nothing the dashboard doesn't.
+
 **Who sees the agent.** With "Show diagnoses to users" off, the backend leaves the agent's report out of every
 incident, Overview line and notification for users who aren't admins. Chat access is "Admins only" by default; with
 "Per user", only users an admin switched on in Admin › Users may chat, and the backend answers 403 to everyone
