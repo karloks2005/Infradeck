@@ -63,6 +63,15 @@ def signed_in(app, user_id):
     return client
 
 
+def confirmed(app, client, user_id=1):
+    """Both steps of confirming a change (#184): the password, then a recovery code as the second factor (a TOTP code
+    can't be used twice). Returns the fields the change itself sends."""
+    codes = auth.issue_recovery_codes(app.db, app.db.get(User, user_id))
+    app.db.commit()
+    token = client.post("/auth/reauth", json={"password": PASSWORD}).json()["reauth_token"]
+    return {"reauth_token": token, "code": codes[0]}
+
+
 # --- incidents ---------------------------------------------------------------------------------------
 
 def test_the_inbox_lists_open_incidents_most_severe_first_and_says_who_may_act(app):
@@ -344,7 +353,7 @@ def test_admin_tests_the_agent_connection_and_the_key_never_comes_back(app, monk
     owner = signed_in(app, 1)
     monkeypatch.setattr(main, "check_provider_connection", lambda db: {"provider": "Anthropic", "model": "claude-test"})
 
-    saved = owner.put("/admin/agent/provider", json={"provider": "anthropic", "model": "claude-test", "api_key": "sk-ant-test-secret-value"})
+    saved = owner.put("/admin/agent/provider", json={"provider": "anthropic", "model": "claude-test", "api_key": "sk-ant-test-secret-value", **confirmed(app, owner)})
     system = owner.get("/admin/system")
     assert system.json()["agent"]["key_configured"] is True and system.json()["agent"]["provider"] == "anthropic"
     result = owner.post("/admin/agent/test")
@@ -387,7 +396,7 @@ def test_without_secrets_key_no_api_key_is_stored(app, monkeypatch):
 
 def test_saving_and_removing_the_agent_key_is_audited_without_the_key(app):
     owner = signed_in(app, 1)
-    saved = owner.put("/admin/agent/provider", json={"provider": "gemini", "api_key": "AIza-test-secret-value"}).json()
+    saved = owner.put("/admin/agent/provider", json={"provider": "gemini", "api_key": "AIza-test-secret-value", **confirmed(app, owner)}).json()
     assert saved["provider"] == "gemini" and saved["model"] == "gemini-3.1-flash-lite" and saved["key_configured"] is True
 
     assert owner.delete("/admin/agent/key").json()["key_configured"] is False
@@ -528,7 +537,7 @@ def test_asking_for_a_new_diagnosis_queues_a_job(app, monkeypatch):
     owner = signed_in(app, 1)
     assert owner.post("/incidents/42/diagnose").status_code == 409          # no key configured
 
-    assert owner.put("/admin/agent/provider", json={"provider": "openai", "api_key": "sk-test-not-real"}).status_code == 200
+    assert owner.put("/admin/agent/provider", json={"provider": "openai", "api_key": "sk-test-not-real", **confirmed(app, owner)}).status_code == 200
     assert owner.post("/incidents/42/diagnose").json() == {"queued": True}
     assert owner.post("/incidents/42/diagnose").status_code == 200          # asking again is allowed
     queued = [json.loads(raw) for raw in app.redis.lrange(jobs.QUEUE, 0, -1)]
@@ -600,7 +609,7 @@ def test_chat_is_for_admins_unless_allowed_per_user(app, monkeypatch):
     ask = lambda: viewer.post("/agent/chat", json={"conversation_id": "v1", "message": "hi"})  # noqa: E731
 
     assert ask().status_code == 403 and viewer.get("/agent/config").json()["may_chat"] is False          # admins only, the default
-    owner.put("/admin/settings", json={"agent_chat_access": "per_user"})
+    assert owner.put("/admin/settings", json={"agent_chat_access": "per_user", **confirmed(app, owner)}).status_code == 200
     assert ask().status_code == 403                                                                       # per user, but not allowed yet
     users = owner.patch("/admin/users/3", json={"agent_chat_enabled": True}).json()
     assert next(user for user in users["users"] if user["id"] == 3)["agent_chat_enabled"] is True and users["agent_chat_access"] == "per_user"
@@ -617,3 +626,65 @@ def test_live_refresh_is_a_display_choice_from_a_fixed_list(app):
     assert viewer.put("/account/preferences", json={"display": {"live_refresh": 10}}).json()["display"]["live_refresh"] == 10
     for wrong in (7, 0, "10", True):
         assert viewer.put("/account/preferences", json={"display": {"live_refresh": wrong}}).json()["display"]["live_refresh"] == 10   # ignored
+
+
+# --- confirming changes that send data to the AI provider (#184) ---------------------------------------------------
+
+def test_turning_the_agent_on_needs_the_password_and_a_code(app):
+    owner = signed_in(app, 1)
+    owner.put("/admin/settings", json={"agent_auto_diagnose": False, "agent_chat_enabled": False})   # stopping needs nothing
+
+    for body in ({"agent_auto_diagnose": True}, {"agent_chat_enabled": True}, {"agent_chat_access": "per_user"}):
+        assert owner.put("/admin/settings", json=body).status_code == 403
+        assert owner.put("/admin/settings", json={**body, **confirmed(app, owner)}).status_code == 200
+    settings = owner.get("/admin/settings").json()
+    assert settings["agent_auto_diagnose"] and settings["agent_chat_enabled"] and settings["agent_chat_access"] == "per_user"
+
+
+def test_choosing_the_provider_needs_confirmation_but_removing_the_key_does_not(app):
+    owner = signed_in(app, 1)
+    assert owner.put("/admin/agent/provider", json={"provider": "openai", "api_key": "sk-test-not-real"}).status_code == 403
+    assert app.db.get(main.AppSetting, "agent_api_key_openai") is None
+
+    owner.put("/admin/agent/provider", json={"provider": "openai", "api_key": "sk-test-not-real", **confirmed(app, owner)})
+    assert owner.delete("/admin/agent/key").json()["key_configured"] is False
+
+
+def test_a_wrong_password_gives_no_token(app):
+    owner = signed_in(app, 1)
+    response = owner.post("/auth/reauth", json={"password": "wrong"})
+
+    assert response.status_code == 401 and "reauth_token" not in response.json()
+    assert any("wrong password" in entry.message for entry in app.db.query(AuditLog))
+
+
+def test_without_two_factor_the_agent_cant_be_turned_on(app):
+    app.db.get(User, 1).totp_enabled = False
+    app.db.commit()
+
+    response = signed_in(app, 1).post("/auth/reauth", json={"password": PASSWORD})
+    assert response.status_code == 403 and "two-factor" in response.json()["detail"]
+
+
+def test_a_wrong_code_says_how_many_tries_are_left_and_the_fifth_ends_it(app):
+    owner = signed_in(app, 1)
+    fields = confirmed(app, owner)
+    body = {"provider": "openai", "api_key": "sk-test-not-real", "reauth_token": fields["reauth_token"]}
+
+    details = [owner.put("/admin/agent/provider", json={**body, "code": "000000"}).json()["detail"] for _ in range(5)]
+    assert [detail.split(". ")[-1] for detail in details[:4]] == ["4 tries left.", "3 tries left.", "2 tries left.", "1 try left."]
+    assert details[4].startswith("Too many wrong codes")
+
+    late = owner.put("/admin/agent/provider", json={**body, "code": fields["code"]})   # the right code, too late
+    assert late.status_code == 401 and app.db.get(main.AppSetting, "agent_api_key_openai") is None
+
+
+def test_a_token_works_once_and_only_in_its_own_session(app):
+    owner = signed_in(app, 1)
+    fields = confirmed(app, owner)
+    other_session = signed_in(app, 1)
+    assert other_session.put("/admin/settings", json={"agent_chat_access": "per_user", **fields}).status_code == 401
+
+    assert owner.put("/admin/settings", json={"agent_chat_access": "per_user", **fields}).status_code == 200
+    owner.put("/admin/settings", json={"agent_chat_access": "admins_only"})
+    assert owner.put("/admin/settings", json={"agent_chat_access": "per_user", **fields}).status_code == 401

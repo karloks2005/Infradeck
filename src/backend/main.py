@@ -198,6 +198,16 @@ class AdminSettingsRequest(BaseModel):
     agent_auto_diagnose: bool | None = None
     agent_show_diagnoses_to_users: bool | None = None
     agent_chat_access: Literal["admins_only", "per_user"] | None = None
+    # Turning the agent on, or letting more people use it, is confirmed with the password and a code (reauth.py).
+    reauth_token: str | None = Field(default=None, max_length=100)
+    code: str | None = Field(default=None, max_length=64)
+
+
+def _starts_sending_data(db, payload: AdminSettingsRequest) -> bool:
+    """Whether the change turns something on that sends data to the AI provider, or lets more people do so."""
+    return ((payload.agent_chat_enabled is True and not is_agent_chat_enabled(db))
+            or (payload.agent_auto_diagnose is True and not agent_settings.auto_diagnose(db))
+            or (payload.agent_chat_access == "per_user" and agent_settings.chat_access(db) != "per_user"))
 
 
 class MetricsIngestRequest(BaseModel):
@@ -618,6 +628,8 @@ def get_admin_settings(session_id: Annotated[str | None, Cookie(alias=SESSION_CO
 @app.put("/admin/settings")
 def update_admin_settings(payload: AdminSettingsRequest, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
     user = _require_admin(session_id, db)
+    if _starts_sending_data(db, payload):
+        reauth.require(db, user, payload.reauth_token, payload.code)
     changes = []
     two_factor_tightened = False
     days = payload.history_retention_days
@@ -1769,6 +1781,7 @@ def root():
 
 
 # Routes split out of this file; imported last so they can reference this module's shared helpers (see routes/).
+from . import reauth  # noqa: E402  (uses main, so it is imported once main is defined)
 from .routes import account as account_routes, admin as admin_routes, auth as auth_routes, availability as availability_routes, chat as chat_routes, incidents as incidents_routes, monitoring as monitoring_routes, statistics as statistics_routes  # noqa: E402
 app.include_router(availability_routes.router)
 app.include_router(incidents_routes.router)

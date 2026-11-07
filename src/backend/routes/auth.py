@@ -8,7 +8,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response
 
-from .. import main, secrets_box, totp
+from pydantic import BaseModel, Field
+
+from .. import main, reauth, secrets_box, totp
 from ..config import SESSION_COOKIE_NAME
 from ..db import get_db
 from ..models import Invite, RecoveryCode, Server, User
@@ -132,19 +134,6 @@ def auth_login(payload: main.LoginRequest, request: Request, response: Response,
         return {"status": "two_factor_required", "pending_token": main.create_pending_two_factor(main.redis_client, user.id, payload.remember)}
     return _complete_login(db, request, response, user, remember=payload.remember)
 
-def _second_factor_or_error(db, user: User, code: str) -> str:
-    """Verify a code for the user, with the shared brute-force limit. Raises 401 (or 429/503); returns "totp" or "recovery"."""
-    limit_key = main.enforce_limit(main.redis_client, scope="2fa-user", subject=user.id, limit=main.TWO_FACTOR_ATTEMPTS, window_seconds=main.TWO_FACTOR_WINDOW_SECONDS)
-    try:
-        method = main.verify_second_factor(db, user, code)
-    except secrets_box.SecretsUnavailable as exc:
-        raise HTTPException(status_code=503, detail="Two-factor codes can't be checked on this server right now (a SECRETS_KEY problem). A recovery code still works.") from exc
-    if method is None:
-        main.record_audit_log(db, user_id=user.id, level="WARNING", message="A wrong two-factor code was entered", source="auth")
-        raise HTTPException(status_code=401, detail="Invalid code.")
-    main.reset_limits(main.redis_client, limit_key)
-    return method
-
 @router.post("/auth/login/2fa")
 def auth_login_two_factor(payload: main.TwoFactorLoginRequest, request: Request, response: Response, db=Depends(get_db)):
     main.enforce_ip_limit(main.redis_client, scope="2fa-ip", ip_address=main._client_ip(request), limit=20, window_seconds=main.TWO_FACTOR_WINDOW_SECONDS)
@@ -157,7 +146,7 @@ def auth_login_two_factor(payload: main.TwoFactorLoginRequest, request: Request,
     user = db.get(User, user_id)
     if not user or not user.is_active or not user.totp_enabled:
         raise expired
-    method = _second_factor_or_error(db, user, payload.code)
+    method = reauth.check_second_factor(db, user, payload.code)
     db.commit()  # the code that was just accepted is now spent
     remember = main.pending_two_factor_remember(main.redis_client, payload.pending_token)
     main.delete_pending_two_factor(main.redis_client, payload.pending_token)
@@ -258,7 +247,7 @@ def _reauthenticate(db, user: User, password: str, code: str) -> None:
         main.record_audit_log(db, user_id=user.id, level="WARNING", message="A wrong password was entered while changing two-factor", source="auth")
         raise wrong
     try:
-        _second_factor_or_error(db, user, code)
+        reauth.check_second_factor(db, user, code)
     except HTTPException as exc:
         if exc.status_code == 401:
             raise wrong from exc
@@ -337,3 +326,13 @@ def auth_revoke_session(public_id: str, response: Response, session_id: Annotate
     if public_id == session["public_id"]:
         response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
     return {"status": "ok"}
+
+
+class PasswordConfirmRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=1024)
+
+@router.post("/auth/reauth")
+def reauth_password(payload: PasswordConfirmRequest, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
+    """Step 1 of confirming a sensitive change: the password. Step 2 sends the token and a code with the change (reauth.py)."""
+    session, user = main._account_session(session_id, db)
+    return {"reauth_token": reauth.check_password(db, user, session, payload.password)}

@@ -1,14 +1,14 @@
 // Signing in, the two-factor step, registering and the first account on a new install. One frame for all of
 // them: the brand panel on the left (a band on top on a phone), the form on the right.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { apiRequest } from '../api.js'
 import { Icon } from '../icons.jsx'
+import { CODE_LENGTH, CodeBoxes } from '../ui.jsx'
 import { landingPath } from '../prefs.js'
 
 export const MIN_PASSWORD_LENGTH = 16
 const MAX_PASSWORD_BYTES = 72
-const CODE_LENGTH = 6
 const DOCS_URL = 'https://github.com/karloks2005/Infradeck#readme'
 const REPOSITORY_URL = 'https://github.com/karloks2005/Infradeck'
 const SETUP_TOKEN_COMMAND = 'docker compose logs backend | grep "setup token"'
@@ -140,44 +140,6 @@ function Quiet({ children }) {
 }
 
 const quietLink = 'font-medium text-paper underline decoration-muted underline-offset-4 hover:decoration-paper'
-
-// Six boxes, one digit each. Typing moves on, backspace moves back, pasting a code fills them all, and the
-// form sends itself after the sixth digit.
-function CodeBoxes({ value, onChange, onComplete, disabled }) {
-  const refs = useRef([])
-  const digits = Array.from({ length: CODE_LENGTH }, (_, index) => value[index] || '')
-  const focus = (index) => refs.current[Math.max(0, Math.min(CODE_LENGTH - 1, index))]?.focus()
-  const apply = (next, from) => {
-    const clean = next.replace(/\D/g, '').slice(0, CODE_LENGTH)
-    onChange(clean)
-    focus(Math.min(clean.length, from))
-    if (clean.length === CODE_LENGTH) onComplete(clean)
-  }
-  const onInput = (index, typed) => {
-    const added = typed.replace(/\D/g, '')
-    if (!added) return
-    // More than one character means a paste or an autofilled one-time code: it replaces from this box on.
-    apply(value.slice(0, index) + added + (added.length > 1 ? '' : value.slice(index + 1)), index + added.length)
-  }
-  const onKeyDown = (index, event) => {
-    if (event.key === 'Backspace') {
-      event.preventDefault()
-      const target = digits[index] ? index : index - 1
-      if (target >= 0) { onChange(value.slice(0, target) + value.slice(target + 1)); focus(target) }
-    } else if (event.key === 'ArrowLeft') { event.preventDefault(); focus(index - 1) } else if (event.key === 'ArrowRight') { event.preventDefault(); focus(index + 1) }
-  }
-  return (
-    <div className="flex justify-between gap-2" role="group" aria-label="6-digit code">
-      {digits.map((digit, index) => (
-        <input key={index} ref={(element) => { refs.current[index] = element }} value={digit} disabled={disabled} autoFocus={index === 0}
-          inputMode="numeric" pattern="[0-9]*" autoComplete={index === 0 ? 'one-time-code' : 'off'} aria-label={`Digit ${index + 1}`}
-          onChange={(event) => onInput(index, event.target.value)} onKeyDown={(event) => onKeyDown(index, event)}
-          onPaste={(event) => { event.preventDefault(); apply(value.slice(0, index) + event.clipboardData.getData('text'), CODE_LENGTH) }}
-          onFocus={(event) => event.target.select()} className="auth-digit" />
-      ))}
-    </div>
-  )
-}
 
 function TwoFactorStep({ instance, email, pendingToken, onDone, onBack }) {
   const [code, setCode] = useState('')

@@ -439,6 +439,13 @@ URL, a keyword or a value in a JSON reply, a TCP port, a TLS certificate, a DNS 
   the administrator's AI provider quota or database space. Setting up two-factor from a normal session needs the
   password again, and every try counts toward the lockout, the right password included. A limited
   (set-up-only) session lasts 30 minutes, not a day.
+- **Turning the agent on is confirmed with the password and a two-factor code.** Choosing the agent's provider,
+  model or API key, switching the chat or automatic diagnosis on, and opening the chat to other users all start
+  sending data from the servers to an outside model, so someone with a stolen admin session can't do it alone.
+  The password is checked first (`POST /auth/reauth`) and gives a token that lasts five minutes, belongs to that
+  session, allows five codes and is used up by the change; every try counts toward the two-factor lockout, and an
+  admin without two-factor can't make these changes. Turning things off and removing the key need no
+  confirmation, so stopping the agent is never harder than starting it (`src/backend/reauth.py`).
 - **Sessions are stored hashed.** Redis holds only the SHA-256 of the cookie value, in the session key, the
   per-user index and the pending-login token. Reading Redis (a backup, a leaked dump) doesn't hand out working
   sessions. Note what this does and doesn't do: hashing protects against *reading* Redis. It does not stop
