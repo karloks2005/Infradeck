@@ -4,7 +4,7 @@ Infradeck ships with an automated test suite. This page explains how to run it, 
 covers (and what it doesn't), and what every single test is for, so you can decide
 whether a failure matters before you upgrade or change your setup.
 
-- **1488 test cases** from 805 test functions, plus 38 small tests of the frontend helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
+- **1537 test cases** from 828 test functions, plus 38 small tests of the frontend helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
 - **About two minutes** to run. No Docker, PostgreSQL, Redis, network or root access needed.
 - **Safe to run next to a live install.** The tests use a throwaway in-memory database
   and fakes; they never touch your running containers or your data. (Two collector
@@ -134,7 +134,7 @@ side and the backend's side in one file, because the feature only works when bot
 | `tests/collectors/` | Adding and trusting collectors (enrollment, approval, pending servers, the dashboard's own machine), what they report and how it is validated, the filesystems they report, the read-only Docker proxy, and the version they report. |
 | `tests/monitoring/` | What is watched and how it turns into incidents: the alert engine and its rules, system, container and network checks, the system helper and the container details. |
 | `tests/history/` | Long-term history: rollups, the history API, statistics and the database indexes behind them. |
-| `tests/assistant/` | The AI assistant: its providers, fixed health checks, error messages and conversations. |
+| `tests/assistant/` | The AI assistant: its providers, read-only tools, fixed health checks, error messages and conversations. |
 | `tests/security/` | Tests written from security reviews that cut across areas: request size limits, the second review's findings and the nginx security headers. |
 
 `tests/conftest.py` (settings every test shares) and `tests/fakes.py` (the fake Redis) stay at the top.
@@ -151,6 +151,7 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 | [`test_agent_providers.py`](#test_agent_providerspy) | 12 | The Claude provider, and how the chosen provider, model and encrypted API key are stored. |
 | [`test_agent_tool_calls.py`](#test_agent_tool_callspy) | 24 | Tool calling with Claude, OpenAI and Gemini: calls, several at once, errors, masking, append-only history, forcing an answer. |
 | [`test_agent_diagnosis.py`](#test_agent_diagnosispy) | 42 | The agent's diagnosis: the evidence pack, secret masking, dangerous commands, checking the model's answer, saving reports. |
+| [`test_agent_tools.py`](#test_agent_toolspy) | 49 | The agent's read-only tools: a closed list with strict schemas, checked arguments, bounded and masked results with fact IDs, no secrets or IP addresses, nothing written. |
 | [`test_agent_watch.py`](#test_agent_watchpy) | 10 | Reusing a recent diagnosis, and watching the fix until the agent resolves the incident. |
 | [`test_agent_worker.py`](#test_agent_workerpy) | 12 | The agent's job queue and worker: one job per opened or worsened incident after the commit, retries, time limit, restarts. |
 | [`test_alerts.py`](#test_alertspy) | 10 | The incident engine: one incident per problem, resolve, container rules. |
@@ -384,6 +385,38 @@ Most tests run once per provider (Claude, OpenAI, Gemini), with fake clients.
 | `test_the_worker_diagnoses_and_reports_back` | The worker's job ends as "diagnosed" with the confidence and version. |
 | `test_without_a_key_the_worker_leaves_the_rule_based_diagnosis` | Without an API key the job is skipped and says why. |
 | `test_with_automatic_diagnosis_off_only_a_request_is_diagnosed` | With automatic diagnosis off, only a requested diagnosis runs. |
+
+### test_agent_tools.py
+
+The tools run on a small database with a fixed clock: two days of check-ins, hourly summaries before the last week,
+a container killed for memory, events, incidents, an availability check with a password and token in its URL, ports
+and a firewall.
+
+| Test | What it checks |
+|---|---|
+| `test_every_tool_is_listed_once_with_a_strict_schema` | The eleven tools are each listed once, every schema is strict (all fields required, nothing extra allowed), and every host metric offered can be read. |
+| `test_an_unknown_tool_is_refused` | A call to a tool that isn't on the list (`run_shell`) is refused. |
+| `test_bad_arguments_are_refused_with_a_reason_the_model_can_act_on` *(17 inputs)* | Missing or extra arguments, wrong types, values outside a list, oversized text, bad or reversed times, windows older than 90 days, container snapshots older than 7 days, and unknown checks or containers are refused before anything is read, with a reason (and the names that do exist). |
+| `test_an_unknown_server_is_answered_with_the_known_ones` | An unknown hostname is answered with the servers that exist; a different letter case still finds the server. |
+| `test_host_metrics_reads_every_check_in_of_the_last_week_and_keeps_the_peak` | A window inside the last week is read from every check-in, a one-sample spike survives cutting the series to 40 points, and the label names the window. |
+| `test_the_window_defaults_to_the_last_24_hours_and_empty_metrics_to_the_usual_five` | Without `from` and `to` the window is the last 24 hours; without metrics, CPU, memory, swap, load and disk. |
+| `test_older_windows_are_read_from_the_hourly_summaries` | A window older than a week comes from the hourly summaries, with their averages and peaks. |
+| `test_no_data_in_the_window_says_so` | A server with no check-ins in the window gets a note and no facts. |
+| `test_server_info_has_the_machine_facts_and_no_ip_address` | Machine facts come back; the server's IP address does not. |
+| `test_list_containers_puts_the_ones_not_running_first` | Stopped containers come before running ones; an OOM kill is shown. |
+| `test_container_history_reports_restarts_and_oom_kills` | A restart with exit code 137 and an OOM kill show as one change at the right time, with the container's series and fact IDs. |
+| `test_disk_usage_estimates_growth_and_when_it_fills_up` | A disk growing 1 GB a day with 40 GB free is estimated to fill in about 40 days; an unknown mount is refused. |
+| `test_events_show_the_newest_thirty_oldest_first_and_filter_by_kind` | Of 42 events the newest 30 come back, oldest first, each labelled; filtering by kind works. |
+| `test_compare_to_baseline_sets_an_hour_against_the_same_hour_before` | An hour is compared with the same hour yesterday and over the previous 4 weeks, for a past hour and for the current one. |
+| `test_find_incidents_filters_by_server_and_kind` | Incidents filter by server and kind, newest first, with how long they lasted and how they were resolved. |
+| `test_fleet_snapshot_shows_every_server_now_and_at_an_earlier_moment` | Every server's online state, open incidents and failing checks, now and at an earlier moment; check results older than a week are reported as unknown. |
+| `test_check_results_show_downtime_and_errors_without_the_targets_secrets` | Down periods, error counts and response times come back; the target's password and token never do. |
+| `test_network_state_lists_ports_firewall_and_recent_changes` | Listening ports with who can reach them, the firewall state and the last week's port changes. |
+| `test_every_result_is_bounded_masked_free_of_ip_addresses_and_labelled` *(11 inputs)* | For every tool: the result fits the size limit, a password in the data is masked, no IP address appears, and the labels are exactly the fact IDs in the result. |
+| `test_a_result_too_large_is_shortened_and_loses_the_labels_of_what_was_cut` | A result over the limit drops its oldest entries, says it was truncated, and the dropped facts can't be cited. |
+| `test_a_long_series_is_thinned_keeping_its_peak` | A series over the limit is thinned by joining neighbours, and its peak survives. |
+| `test_the_same_question_gives_the_same_ids_and_a_second_window_joins_the_label` | The same call gives the same result and IDs; the same series read for another window keeps one ID whose label lists both windows. |
+| `test_tools_never_write_to_the_database` | After every tool, the database session has nothing new, changed or deleted. |
 
 ### test_agent_watch.py
 

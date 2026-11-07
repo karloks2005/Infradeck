@@ -113,6 +113,69 @@ container checks, point `DOCKER_SOCKET_PATH` at a hardened Docker API proxy that
 endpoints. `daily_checkup` combines host and container checks; on a critical finding it POSTs an alert only to
 `ADMIN_ALERT_WEBHOOK_URL`, and without it the result says `not_configured` and no request is made.
 
+## What the agent can look up
+
+Besides the evidence pack, the agent has eleven **read-only tools** (`src/agent/tools/`): questions it can ask
+Infradeck's database while it investigates, such as "how did CPU change on 3 November between 10:00 and 12:00" or
+"has this disk filled up before". The tools are ready; diagnoses and the chat start calling them, within a budget of
+calls, in the next step of the agent upgrade (#157). Until then the agent works from the evidence pack alone.
+
+| Tool | What it answers |
+|---|---|
+| `server_info` | What the machine is and how it is now: OS, kernel, CPU, memory, collector and Docker versions, last check-in, online, pending updates, uptime, reboot needed, clock sync, Docker and internet reachability. |
+| `host_metrics` | CPU, memory, swap, load, root disk, inodes, Docker API and collector timing over a window: min, max, average, first, last and up to 40 points per metric. |
+| `list_containers` | Every container at one check-in (last 7 days): status, health, CPU, memory and limit, restarts, exit code, OOM kill, image. Not running and largest first. |
+| `container_history` | One container over a window: CPU, memory and restart count, how much of the time it was not running, its memory limit, and (last 7 days) each change of status, health, exit code, OOM kill or image. |
+| `disk_usage` | Every filesystem (or one): used space and inodes now, usage over the last N days, growth in GB per day and in about how many days it fills up. |
+| `events` | What the machine recorded: reboots, OOM kills, kernel faults, image changes, containers added or removed, ports opened or closed, firewall changes, package updates. The newest 30. |
+| `compare_to_baseline` | A metric's average over one hour next to the same hour yesterday and that hour of the day over the previous 4 weeks, with the difference. |
+| `find_incidents` | Earlier incidents on one server or all of them, of one kind or any: how long they lasted and how they were resolved. |
+| `fleet_snapshot` | Every server at one moment: online, open incidents and the worst of them, failing availability checks. Tells one machine's problem from everyone's. |
+| `check_results` | Availability checks over a window: uptime, when they were down, the errors they got, response times. |
+| `network_state` | Listening ports (and whether other machines can reach them), the firewall, and port and firewall changes in the last 7 days. |
+
+**What they may read.** Only what Infradeck already stores. No tool writes anything, contacts a collector or runs a
+command, and the list is closed: a call to any other name, or with arguments that don't match the tool's schema
+(an unknown field, a wrong type, a value outside its list), is refused before anything is read. The agent names a
+server by its hostname and a container or check by its name; an unknown one is answered with the names it may use.
+
+**How far back.** Any window in the last **90 days**, given as `from` and `to` (UTC); without them, the last 24
+hours. The last 7 days come from every check-in; older windows from the hourly summaries, the same data as the
+charts on Statistics, so two hours from last month are two points. The agent is told to start wide and narrow down.
+
+**How much comes back.** Each series is cut to 40 points, each the highest value of its stretch, so a short peak
+is never averaged away; lists keep their newest 30 entries; text is clipped; a whole result stays under about
+12 KB. If it would be larger, the longest list is halved (a series by joining neighbouring points, keeping the
+higher one) and the result says `"truncated": true`.
+
+**What never comes back.** Every result is masked for secrets like the evidence pack (`masking.py`), and the
+interface masks it again before it is sent (`add_tool_results`). A check's target is always shown as non-admins
+see it, without credentials or query string, because it goes to the model provider. IP addresses, users, the audit
+log and enrolment are not readable by any tool. So a tool gives the same answer whoever asked, and a user who
+may chat learns nothing through it that the dashboard doesn't show them.
+
+**Fact IDs.** Every fact a tool returns has an ID that a diagnosis cites, as with the evidence pack. The ID says
+what the fact is, not when it was read, so the same question always gives the same ID; the window is in the label
+shown next to it ("CPU · web1 · 2026-11-03 10:00–12:00 UTC"). When the agent reads the same series twice with
+different windows, the label keeps both.
+
+| Fact | ID |
+|---|---|
+| a recorded event, an incident | `event:812`, `incident:31` (as in the evidence pack) |
+| a host metric, a filesystem | `metric:web1.cpu`, `metric:web1.disk:/var` |
+| a container, its metrics | `container:web1/nginx`, `metric:web1/nginx.memory_mb` |
+| a machine, its ports and firewall | `server:web1`, `network:web1` |
+| an hour against its usual level | `baseline:web1.cpu` |
+| an availability check | `uptime:7` (`check:N` in the evidence pack means the alert rule's own checks) |
+| a server in the fleet snapshot | `fleet:web1` |
+
+**Adding a tool.** Write the function in the module for its area (`servers.py`, `containers.py`, `activity.py`):
+it gets the database session, the checked arguments, the time and a `Facts` collector, and returns a dict whose
+facts each carry an `id` added with `facts.add`. Register it in `tools/__init__.py` with a description and a
+strict schema (every property required, `additionalProperties: false`, null for "not given"), and add tests to
+`tests/assistant/test_agent_tools.py`: the shared tests then check that it stays bounded, masked, labelled and
+read-only.
+
 ## What it costs
 
 Every call to the model is recorded with the tokens the provider reports for it (see `agent_runs` in

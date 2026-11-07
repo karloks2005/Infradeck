@@ -8,53 +8,20 @@ before the pack is stored or sent anywhere.
 """
 from __future__ import annotations
 
-import math
 from datetime import datetime, timedelta, timezone
 
 from src.backend import incidents
 from src.backend.models import ContainerMetric, HostMetric, IncidentAlert, MountMetric, Server, SystemEvent
 
+from .bounds import clip as _clip, series as _series, utc as _utc
 from .masking import mask
 
 LEAD = timedelta(minutes=60)
-SERIES_POINTS = 40
 MAX_EVENTS = 30
 MAX_IMAGE_CHANGES = 10
 MAX_SIMILAR = 5
-MAX_TEXT = 300
 SIMILAR_DAYS = 90
 IMAGE_HISTORY_DAYS = 30
-
-
-def _utc(moment: datetime | None) -> datetime | None:
-    return None if moment is None else moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
-
-
-def _clip(text: str | None, limit: int = MAX_TEXT) -> str:
-    text = (text or "").strip()
-    return text if len(text) <= limit else text[: limit - 1] + "…"
-
-
-def _points(rows: list[tuple[datetime, float | None]], limit: int = SERIES_POINTS) -> list[list]:
-    """[[time, value], …] with at most ``limit`` points, keeping each group's highest value (peaks matter)."""
-    rows = [(moment, value) for moment, value in rows if value is not None]
-    if len(rows) > limit:
-        size = math.ceil(len(rows) / limit)
-        rows = [(rows[start][0], max(value for _, value in rows[start:start + size])) for start in range(0, len(rows), size)]
-    return [[_utc(moment).isoformat(timespec="minutes"), round(value, 2)] for moment, value in rows]
-
-
-def _stats(values: list[float]) -> dict | None:
-    if not values:
-        return None
-    return {"min": round(min(values), 2), "max": round(max(values), 2), "avg": round(sum(values) / len(values), 2), "first": round(values[0], 2), "last": round(values[-1], 2)}
-
-
-def _series(fact_id: str, label: str, unit: str, rows: list[tuple[datetime, float | None]], limit: float | None = None) -> dict | None:
-    values = [value for _, value in rows if value is not None]
-    if not values:
-        return None
-    return {"id": fact_id, "label": label, "unit": unit, "limit": limit, "stats": _stats(values), "points": _points(rows)}
 
 
 def build(db, incident: IncidentAlert, now: datetime | None = None) -> dict:
