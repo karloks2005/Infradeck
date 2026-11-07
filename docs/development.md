@@ -104,7 +104,7 @@ src/
     secrets_box.py          encrypts stored secrets with SECRETS_KEY; also prints a new key
     reset_2fa.py            command-line two-factor reset for a locked-out account
   agent/                    the incident agent; runs in the backend (chat) and the agent-worker container
-    providers/              the language model behind one interface: Claude, OpenAI, Gemini; the choice and its encrypted key
+    providers/              the language model behind one interface (answers and tool calls): Claude, OpenAI, Gemini; the choice and its encrypted key
     chat.py, prompts.py, SYSTEM_PROMPT.md  the incident chat and its instructions
     health_checks.py        the fixed, read-only checks the agent may ask for
     jobs.py                 job queue in Redis: published after an incident opens or worsens
