@@ -1,4 +1,4 @@
-FROM node:20-alpine AS build
+FROM node:20.20.2-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS build
 
 WORKDIR /app
 
@@ -12,7 +12,7 @@ ARG VITE_LIVE_GRAPH_REFRESH_INTERVAL_SECONDS=3
 ENV VITE_LIVE_GRAPH_REFRESH_INTERVAL_SECONDS=$VITE_LIVE_GRAPH_REFRESH_INTERVAL_SECONDS
 RUN npm run build
 
-FROM nginx:alpine
+FROM nginx:1.31.8-alpine@sha256:713fc2ebfd92e8217db451477182ee91944b123d2b1ee9fd5a8c6e91ca6c3a11
 
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 # Writes trusted-proxies/trusted-proxies.conf from TRUSTED_PROXIES before nginx starts.

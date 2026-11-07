@@ -1,6 +1,6 @@
 # Optional system helper: reads the kernel log and wtmp, publishes a sanitized summary.
 # Standard library only. Run it with only CAP_SYSLOG, no network and a read-only filesystem.
-FROM python:3.12-alpine
+FROM python:3.12.16-alpine@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7
 
 WORKDIR /app
 COPY src/collector/system_helper.py ./system_helper.py

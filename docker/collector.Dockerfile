@@ -1,5 +1,5 @@
 # Standalone collector image: the collector uses only the Python standard library.
-FROM python:3.12-alpine
+FROM python:3.12.16-alpine@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7
 
 WORKDIR /app
 COPY src/collector/collector.py ./collector.py

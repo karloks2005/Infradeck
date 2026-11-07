@@ -1,0 +1,13 @@
+# The app's direct dependencies, unpinned. requirements.txt is compiled from this file (docs/development.md).
+alembic
+anthropic
+bcrypt
+cryptography
+email-validator
+fastapi
+openai
+psycopg[binary]
+python-dotenv
+redis
+sqlalchemy
+uvicorn[standard]
