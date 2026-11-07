@@ -9,7 +9,7 @@
 # prefers compose.yml (the development stack) when two default-named files exist.
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16.15-alpine@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139
     container_name: infradeck-postgres
     restart: unless-stopped
     # The image's entrypoint prepares the data folder as root (owner and 0700 mode), then runs PostgreSQL as the
@@ -36,7 +36,7 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.12-alpine@sha256:c5d34a98396a4775e223c74e929162c35c5a2182901ba26b50ade939941ce14b
     container_name: infradeck-redis
     restart: unless-stopped
     networks: [data]
@@ -214,7 +214,7 @@ services:
   # apps can't register collectors. Publish its VPN listener on your VPN address only: Docker's
   # published ports bypass ufw and similar firewalls, so never bind it to 0.0.0.0 and rely on those.
   collector-gate:
-    image: nginx:alpine
+    image: nginx:1.31.8-alpine@sha256:713fc2ebfd92e8217db451477182ee91944b123d2b1ee9fd5a8c6e91ca6c3a11
     container_name: infradeck-collector-gate
     restart: unless-stopped
     networks: [front, collector]

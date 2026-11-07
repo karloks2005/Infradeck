@@ -26,7 +26,7 @@
 </p>
 
 <!-- TODO: make this first screenshot the Overview page with several servers -->
-<img width="2879" height="1499" alt="Infradeck screenshot" src="https://github.com/user-attachments/assets/a1541d08-5cb5-4926-b553-d1512159c265" />
+<img alt="Infradeck screenshot" src="docs/images/infradeck-overview.png" />
 
 ## Why Infradeck
 
@@ -93,7 +93,7 @@ To update: `git pull && docker compose up -d --build`.
 - **Network**: listening ports (and which are reachable from other machines), firewall changes and, optionally, internet reachability.
 - **Statistics for any range**, from the last hour to all time, per server, per container and for the whole fleet, including a "disk full in about N days" estimate. Long ranges stay fast because history is rolled up into hourly, daily, weekly and monthly rows.
 
-<img width="2879" height="1499" alt="Infradeck screenshot" src="https://github.com/user-attachments/assets/a1541d08-5cb5-4926-b553-d1512159c265" />
+<img alt="Infradeck screenshot" src="docs/images/infradeck-overview.png" />
 
 ### Availability checks
 
@@ -105,7 +105,7 @@ Like Uptime Kuma, but run from your own machines: **HTTP(s)** status, a **keywor
 - One page for every check, grouped by tag, with a heartbeat strip, 24 h / 30 d / 1 y uptime and response times.
 - The collector runs checks itself: no shell, no extra permissions.
 
-<img width="2879" height="1499" alt="Infradeck incident agent" src="https://github.com/user-attachments/assets/ed90a777-6b28-404c-94d6-34c2b465cc0e" />
+<img alt="Infradeck availability" src="docs/images/infradeck-availability.png" />
 
 ### Incidents and alerts
 Rules for disk (with per-mount overrides), inodes, memory, swap, load per core, restart loops, failing healthchecks, reboots and crashes, OOM kills, kernel faults, clock drift, an unreachable Docker daemon, vanished or changed containers, possible memory leaks, newly opened ports, firewall changes, lost internet or DNS, and servers that stop reporting. Thresholds are editable by admins. Full list: [Alerts and incidents](docs/alerts.md).
@@ -116,7 +116,7 @@ Rules for disk (with per-mount overrides), inodes, memory, swap, load per core, 
 
 Add an Anthropic, OpenAI or Gemini API key in Admin and the agent diagnoses every warning and critical incident from **masked** evidence, ties each claim to the data, proposes a fix, watches whether it holds and adds the diagnosis to your notifications. You can also chat about any incident. Monthly budget, per-model prices and who sees what are set in Admin. **It reads; it never runs commands.** See [Incident agent](docs/assistant.md).
 
-<img width="2879" height="1499" alt="Infradeck dashboard" src="https://github.com/user-attachments/assets/4331b563-9537-4393-882d-f0dbe5a1aedd" />
+<img alt="Infradeck incident agent" src="docs/images/infradeck-agent.png" />
 
 ### Accounts and everyday use
 - Roles: the first account is the admin; others get a read-only view.

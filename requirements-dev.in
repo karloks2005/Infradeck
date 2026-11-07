@@ -1,0 +1,4 @@
+# Everything needed to run the test suite, on the same versions as the app (requirements.txt).
+-c requirements.txt
+-r requirements.in
+pytest

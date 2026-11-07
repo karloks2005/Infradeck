@@ -1,7 +1,7 @@
 # Development / laptop stack. For the server behind Traefik use docker-compose.server.yml.
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16.15-alpine@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139
     container_name: infradeck-postgres
     restart: unless-stopped
     # The image's entrypoint prepares the data folder as root (owner and 0700 mode), then runs PostgreSQL as the
@@ -28,7 +28,7 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.12-alpine@sha256:c5d34a98396a4775e223c74e929162c35c5a2182901ba26b50ade939941ce14b
     container_name: infradeck-redis
     restart: unless-stopped
     networks: [data]
@@ -299,7 +299,7 @@ services:
 
   # Optional public HTTPS entry point: docker compose --profile https up -d
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2.11.9-alpine@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee
     container_name: infradeck-caddy
     profiles: ["https"]
     restart: unless-stopped
