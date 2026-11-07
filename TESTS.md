@@ -4,7 +4,7 @@ Infradeck ships with an automated test suite. This page explains how to run it, 
 covers (and what it doesn't), and what every single test is for, so you can decide
 whether a failure matters before you upgrade or change your setup.
 
-- **1458 test cases** from 788 test functions, plus 38 small tests of the frontend helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
+- **1482 test cases** from 799 test functions, plus 38 small tests of the frontend helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
 - **About two minutes** to run. No Docker, PostgreSQL, Redis, network or root access needed.
 - **Safe to run next to a live install.** The tests use a throwaway in-memory database
   and fakes; they never touch your running containers or your data. (Two collector
@@ -149,6 +149,7 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 | [`test_agent_errors.py`](#test_agent_errorspy) | 5 | Helpful, non-leaking error messages from the AI assistant. |
 | [`test_agent_service.py`](#test_agent_servicepy) | 8 | The assistant can only run the fixed read-only checks; the OpenAI provider and conversation history. |
 | [`test_agent_providers.py`](#test_agent_providerspy) | 12 | The Claude provider, and how the chosen provider, model and encrypted API key are stored. |
+| [`test_agent_tool_calls.py`](#test_agent_tool_callspy) | 24 | Tool calling with Claude, OpenAI and Gemini: calls, several at once, errors, masking, append-only history, forcing an answer. |
 | [`test_agent_diagnosis.py`](#test_agent_diagnosispy) | 42 | The agent's diagnosis: the evidence pack, secret masking, dangerous commands, checking the model's answer, saving reports. |
 | [`test_agent_watch.py`](#test_agent_watchpy) | 10 | Reusing a recent diagnosis, and watching the fix until the agent resolves the incident. |
 | [`test_agent_worker.py`](#test_agent_workerpy) | 12 | The agent's job queue and worker: one job per opened or worsened incident after the commit, retries, time limit, restarts. |
@@ -341,6 +342,24 @@ shouldn't, or an admin might be locked out.
 | `test_the_key_is_stored_encrypted_and_each_provider_keeps_its_own` | No key is stored in plain text, each provider keeps its own key, and saving without a key keeps the stored one. |
 | `test_a_key_that_cant_be_decrypted_counts_as_no_key` | After `SECRETS_KEY` changes, an unreadable key turns the agent off instead of failing. |
 | `test_a_removed_key_turns_the_agent_off` | Removing the key leaves the provider chosen but turns the agent off. |
+
+### test_agent_tool_calls.py
+
+Most tests run once per provider (Claude, OpenAI, Gemini), with fake clients.
+
+| Test | What it checks |
+|---|---|
+| `test_with_tools_the_model_can_still_answer_at_once` *(3 inputs)* | With tools offered, a model that answers straight away gives the final answer and its token usage. |
+| `test_a_tool_call_is_answered_and_the_history_goes_back_unchanged` *(3 inputs)* | A tool call comes back parsed; after its result, the next request repeats every earlier turn exactly as sent and adds the result. |
+| `test_claude_gets_its_own_answer_back_untouched_thinking_included` | Claude's own turn, thinking included, goes back unchanged; its tools are strict and the system prompt is sent apart. |
+| `test_several_tool_calls_in_one_turn_get_all_their_results` *(3 inputs)* | Several calls in one turn are all answered: in one message for Claude, one tool message each for OpenAI and Gemini. |
+| `test_a_failed_tool_is_reported_as_an_error` *(3 inputs)* | A failed tool is marked as an error for the model. |
+| `test_tool_results_are_masked_before_they_leave` *(3 inputs)* | A password in a tool result is masked before it is sent to the provider. |
+| `test_without_tools_allowed_the_model_must_answer_but_the_tools_stay_listed` *(3 inputs)* | When the budget is used up the model is told to answer (`tool_choice` none), while the tool list stays the same. |
+| `test_claude_refusing_midway_is_an_error` | A refusal from Claude in the middle of an investigation is an error. |
+| `test_openai_refusing_is_an_error` | A refusal from OpenAI with tools offered is an error. |
+| `test_openai_tool_arguments_must_be_a_json_object` *(2 inputs)* | Tool arguments that aren't valid JSON, or aren't an object, are refused. |
+| `test_openai_tools_are_strict_functions` | OpenAI and Gemini get strict function tools and a strict answer schema. |
 
 ### test_agent_diagnosis.py
 

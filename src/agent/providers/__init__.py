@@ -12,11 +12,11 @@ from dataclasses import dataclass
 from src.backend import secrets_box
 from src.backend.models import AppSetting
 
-from .base import Completion, Provider
+from .base import Completion, Conversation, Provider, Tool, ToolCall, ToolResult, Turn
 from .claude import ClaudeProvider
 from .openai_compatible import GEMINI_BASE_URL, OpenAIProvider
 
-__all__ = ["Completion", "Provider", "PROVIDERS", "NoApiKey", "current", "get_provider", "key_configured", "save", "remove_key"]
+__all__ = ["Completion", "Conversation", "Provider", "Tool", "ToolCall", "ToolResult", "Turn", "PROVIDERS", "NoApiKey", "current", "get_provider", "key_configured", "save", "remove_key"]
 
 logger = logging.getLogger(__name__)
 
