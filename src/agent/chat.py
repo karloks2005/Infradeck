@@ -127,14 +127,16 @@ TRIAL_MESSAGES = [{"role": "system", "content": "This is a connection test. Do n
 
 def check_provider_connection(db, user_id: int | None = None) -> dict:
     """For Admin's "Test connection": the key works, the configured model exists, and the provider accepts a
-    request shaped like a diagnosis: every tool and the diagnosis schema, tools not allowed (#196). That one request
+    request shaped like a diagnosis: every tool and the diagnosis schema, calls allowed (#196, #199). That one request
     is the only thing here that costs tokens (a few thousand, mostly the tools' definitions), and it is
     counted in the usage like any other (kind ``test``). Raises the provider's error when it is refused."""
     provider = get_provider(db)
     found = provider.check()
     started = time.monotonic()
     try:
-        completion = provider.start(TRIAL_MESSAGES, tools.TOOLS, diagnosis.SCHEMA, "incident_diagnosis", effort="low").step(allow_tools=False).completion
+        # Calls allowed, as in a diagnosis: Anthropic only compiles the tools' grammar then (#199). A call the model
+        # makes anyway is not run.
+        completion = provider.start(TRIAL_MESSAGES, tools.TOOLS, diagnosis.SCHEMA, "incident_diagnosis", effort="low").step(allow_tools=True).completion
     except Exception as exc:
         usage.record(db, kind="test", status="error", model=provider.model, user_id=user_id, duration_ms=round((time.monotonic() - started) * 1000), error=f"{type(exc).__name__}: {exc}")
         raise

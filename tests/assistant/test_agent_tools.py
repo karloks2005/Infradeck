@@ -135,8 +135,12 @@ def test_an_optional_argument_left_empty_or_null_means_not_given(db):
     null = run(db, "host_metrics", {"server": "web1", "metrics": ["cpu"], "from": None, "to": None}, now=NOW)
 
     assert empty.content == null.content and json.loads(empty.content)["to"] == "2026-11-07T12:00+00:00"
+    left_out = run(db, "host_metrics", {"server": "web1", "metrics": ["cpu"]}, now=NOW)   # a model without strict tools may omit them
+    assert left_out.content == null.content
     with pytest.raises(tools.ToolError, match="non-empty"):
         run(db, "server_info", {"server": ""}, now=NOW)   # a required one may not be empty
+    with pytest.raises(tools.ToolError, match="Give exactly"):
+        run(db, "host_metrics", {"server": "web1", "from": None, "to": None}, now=NOW)   # nor left out
 
 
 def test_an_unknown_tool_is_refused(db):

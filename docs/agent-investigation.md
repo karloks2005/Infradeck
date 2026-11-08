@@ -77,7 +77,8 @@ In more detail:
    `SYSTEM_PROMPT.md`), the message, the list of tools, and the JSON schema the final answer must follow. With
    tools offered the model thinks harder (effort `high`; Claude and OpenAI use it). Optional arguments are plain
    strings where empty means "not given", because providers limit nullable parameters in strict schemas (#196);
-   **Test connection** in Admin sends one request of this shape, so a provider that refuses it says so at once.
+   **Test connection** in Admin sends one request of exactly this shape (calls allowed), so a provider that refuses
+   it says so at once (#199).
 3. **The model takes a step.** It either answers, or asks for one or more tool calls. Each call is a tool name and
    arguments that follow the tool's schema, including `reason`: one sentence saying what the call should find out,
    written before any result exists.
@@ -160,7 +161,8 @@ server's data (its history, ports, firewall) to the provider. Every change is in
 
 ## What is checked
 
-**Before a call runs** (`tools.run`): the tool exists; the arguments match its schema exactly; strings are
+**Before a call runs** (`tools.run`): the tool exists; the arguments match its schema exactly (an optional
+argument left out counts as empty, since Claude gets the tools without `strict`, see [Incident agent](assistant.md#chat)); strings are
 non-empty and at most 200 characters, lists at most 12 items; the server, container or check exists (otherwise the
 model is told the names it may use); windows lie within the last 90 days.
 

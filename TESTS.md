@@ -325,7 +325,7 @@ shouldn't, or an admin might be locked out.
 |---|---|
 | `test_without_a_tool_budget_the_chat_is_one_call_without_tools` | With the chat's look-up budget at 0, a message is one call to the model, with no tools and effort `low`. |
 | `test_a_reply_without_a_message_is_an_error` | A reply whose message is missing or empty is an error, not a blank answer. |
-| `test_test_connection_tries_one_request_shaped_like_a_diagnosis_and_counts_it` | Test connection checks the key, then sends one request with every tool and the diagnosis schema (tools not allowed), counts it as a `test` call, and raises the provider's refusal (#196). |
+| `test_test_connection_tries_one_request_shaped_like_a_diagnosis_and_counts_it` | Test connection checks the key, then sends one request exactly as a diagnosis does (every tool, calls allowed, the diagnosis schema), counts it as a `test` call, and raises the provider's refusal (#196, #199). |
 | `test_the_reply_can_only_be_a_message` | The reply schema has one field, the message, and nothing else is allowed. |
 | `test_the_chat_completions_provider_asks_for_the_reply_schema_and_reports_tokens` | Requests to the Chat Completions provider (Gemini) use Structured Outputs in strict mode with the reply schema, and token usage is read from the response. |
 | `test_a_refusal_is_an_error_not_an_empty_reply` | When the model refuses, the chat gets an error instead of an empty answer. |
@@ -358,7 +358,7 @@ request.
 |---|---|
 | `test_with_tools_the_model_can_still_answer_at_once` *(3 inputs)* | With tools offered, a model that answers straight away gives the final answer and its token usage. |
 | `test_a_tool_call_is_answered_and_the_history_goes_back_unchanged` *(3 inputs)* | A tool call comes back parsed; after its result, the next request repeats every earlier turn exactly as sent and adds the result. |
-| `test_claude_gets_its_own_answer_back_untouched_thinking_included` | Claude's own turn, thinking included, goes back unchanged; its tools are strict and the system prompt is sent apart. |
+| `test_claude_gets_its_own_answer_back_untouched_thinking_included` | Claude's own turn, thinking included, goes back unchanged; its tools are sent without `strict` (#199) and the system prompt apart. |
 | `test_several_tool_calls_in_one_turn_get_all_their_results` *(3 inputs)* | Several calls in one turn are all answered: in one message for Claude, one `function_call_output` item each for OpenAI, one tool message each for Gemini. |
 | `test_a_failed_tool_is_reported_as_an_error` *(3 inputs)* | A failed tool is marked as an error for the model. |
 | `test_tool_results_are_masked_before_they_leave` *(3 inputs)* | A password in a tool result is masked before it is sent to the provider. |
@@ -453,7 +453,7 @@ and a firewall.
 | Test | What it checks |
 |---|---|
 | `test_no_request_has_more_union_typed_parameters_than_the_provider_accepts` *(2 inputs)* | The tools have no nullable or union-typed parameter, and with the diagnosis or chat schema a request stays within Anthropic's limit of 16 (#196). |
-| `test_an_optional_argument_left_empty_or_null_means_not_given` | An optional argument sent as an empty string or null gives the same result (not given); a required one may not be empty. |
+| `test_an_optional_argument_left_empty_or_null_means_not_given` | An optional argument sent as an empty string, null or left out gives the same result (not given); a required one may not be empty or left out. |
 | `test_every_tool_is_listed_once_with_a_strict_schema` | The eleven tools are each listed once, every schema is strict (all fields required, nothing extra allowed), and every host metric offered can be read. |
 | `test_an_unknown_tool_is_refused` | A call to a tool that isn't on the list (`run_shell`) is refused. |
 | `test_bad_arguments_are_refused_with_a_reason_the_model_can_act_on` *(17 inputs)* | Missing or extra arguments, wrong types, values outside a list, oversized text, bad or reversed times, windows older than 90 days, container snapshots older than 7 days, and unknown checks or containers are refused before anything is read, with a reason (and the names that do exist). |

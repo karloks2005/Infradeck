@@ -33,7 +33,10 @@ class ClaudeConversation(Conversation):
         self.provider, self.schema, self.effort = provider, schema, effort
         self.system = "\n\n".join(message["content"] for message in messages if message["role"] == "system")
         self.history = [{"role": message["role"], "content": message["content"]} for message in messages if message["role"] != "system"]
-        self.tools = [{"name": tool.name, "description": tool.description, "input_schema": tool.schema, "strict": True} for tool in tools]
+        # Not strict: Anthropic compiles strict tools and the strict answer schema into one grammar with an unpublished
+        # size limit, and the agent's tools with the diagnosis schema are over it (#199). The answer stays strict, and
+        # the backend checks every call's arguments itself (tools._check), so a malformed call goes back as an error.
+        self.tools = [{"name": tool.name, "description": tool.description, "input_schema": tool.schema} for tool in tools]
 
     def step(self, allow_tools: bool = True) -> Turn:
         extra = {"tools": self.tools, "tool_choice": {"type": "auto" if allow_tools else "none"}} if self.tools else {}

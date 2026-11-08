@@ -26,6 +26,7 @@ def test_a_reply_without_a_message_is_an_error():
 
 
 def test_test_connection_tries_one_request_shaped_like_a_diagnosis_and_counts_it(monkeypatch):
+    # A call the model makes anyway is not run: the result comes from the first step only.
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy.pool import StaticPool
@@ -43,7 +44,7 @@ def test_test_connection_tries_one_request_shaped_like_a_diagnosis_and_counts_it
 
     assert result == {"provider": "Anthropic", "model": "claude-test", "tokens": 3140}
     assert provider.started[0]["tools"] == [tool.name for tool in tools.TOOLS] and provider.started[0]["schema_name"] == "incident_diagnosis"
-    assert provider.allowed == [False]   # the tools are listed, as in a diagnosis, but not called
+    assert provider.allowed == [True]   # exactly as a diagnosis sends it: Anthropic only checks the tools' grammar then (#199)
     run = db.query(AgentRun).one()
     assert (run.kind, run.status, run.input_tokens, run.user_id) == ("test", "ok", 3100, 1)
 
