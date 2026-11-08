@@ -131,6 +131,7 @@ su anotacije dizajna i namjerno nisu ugrađeni.
 | „Diagnose new incidents automatically" prekidač | Uvijek uključeno i onemogućeno | Dijagnoza je lokalna i ne može se isključiti | #93 |
 | „Read container logs" s iznimkama | Onemogućeno | Proxy ne čita logove | #100 |
 | „Redact IPs and hostnames" | Onemogućeno | Nije napravljeno | – |
+| Incident agent: nema retka za broj pretraga | Redak „Look-ups": koliko alata agent smije pozvati po dijagnozi (8) i po poruci u chatu (4) | Budžet poziva alata, podizanje s 0 traži lozinku i 2FA | #157 |
 | „$1.84 estimated provider cost · cap $10" | „— · not tracked" | Potrošnja se ne mjeri | #91 |
 | Retention: tri zasebna roka | Jedan rok za sažetke; javljanja se čuvaju tjedan dana | Tako radi postojeće zadržavanje | #58 |
 | Database: putanja, rast po tjednu, „Last backup", „Export", „Back up now" | Veličina baze i broj zapisa; gumbi su onemogućeni, s oznakom „Coming soon" | Backup ne postoji | – |

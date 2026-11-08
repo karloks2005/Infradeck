@@ -11,7 +11,6 @@ Every setting below is listed, with no values, in [`example.env`](../example.env
 | `POSTGRES_PASSWORD` | *(required)* | PostgreSQL password. |
 | `POSTGRES_DB` / `POSTGRES_USER` | `infradeck` / `infradeck` | Name of the database and its user. Installs from before the rename can keep `homelab` (see [SETUP_DATABASES.md](../SETUP_DATABASES.md)). |
 | `REDIS_PASSWORD` | *(required)* | Redis password. Redis holds the login sessions, so nothing that can merely reach it may use it. Use letters and digits only (`openssl rand -hex 24`) because it is put into a URL. |
-| `ADMIN_ALERT_WEBHOOK_URL` | empty | Receives JSON alerts for critical `daily_checkup` findings. |
 | `SESSION_COOKIE_SECURE` | `false` (dev), `true` (server file) | Send the login cookie over HTTPS only. |
 | `SESSION_TTL_SECONDS` | `86400` | Session lifetime without *Remember me*. |
 | `SESSION_COOKIE_NAME` | `homie_session` | Name of the sign-in cookie. Change it only if it clashes with another app on the same domain. |

@@ -82,12 +82,16 @@ marked recommended (`src/agent/safety.py`). Nothing the model writes is run. Tur
 automatically" in Admin › Incident agent to send nothing unless someone asks; without a key nothing is sent
 and incidents keep the rule-based diagnosis, which is worked out locally.
 
-**The agent's tools** (`src/agent/tools/`, used from #157 on) let it look up more of the same stored data: metrics,
+**The agent's tools** (`src/agent/tools/`) let a diagnosis or a chat message look up more of the same stored data: metrics,
 containers, filesystems, events, earlier incidents, availability results, listening ports and the firewall, from
 the last 90 days. The list is closed and every call is checked against the tool's schema before anything is read.
 No tool writes, contacts a collector or runs a command. Results are bounded and masked like the evidence pack; a
 check's target is sent without its credentials and query string; IP addresses, users, the audit log and enrolment
-are never returned, so a tool answers everyone the same and shows nothing the dashboard doesn't.
+are never returned, so a tool answers everyone the same and shows nothing the dashboard doesn't. The model may make
+a set number of calls per answer (Admin › Incident agent › Look-ups, 8 per diagnosis and 4 per chat message by
+default, 0 for none); a call past it isn't run and the model then has to answer (`src/agent/investigate.py`). Every
+call, run or refused, is written to the audit log with its masked arguments, and users can't forge or delete these
+entries.
 
 **Who sees the agent.** With "Show diagnoses to users" off, the backend leaves the agent's report out of every
 incident, Overview line and notification for users who aren't admins. Chat access is "Admins only" by default; with
@@ -447,7 +451,8 @@ URL, a keyword or a value in a JSON reply, a TCP port, a TLS certificate, a DNS 
   password again, and every try counts toward the lockout, the right password included. A limited
   (set-up-only) session lasts 30 minutes, not a day.
 - **Turning the agent on is confirmed with the password and a two-factor code.** Choosing the agent's provider,
-  model or API key, switching the chat or automatic diagnosis on, and opening the chat to other users all start
+  model or API key, switching the chat or automatic diagnosis on, opening the chat to other users and raising a
+  look-up budget from 0 all start
   sending data from the servers to an outside model, so someone with a stolen admin session can't do it alone.
   The password is checked first (`POST /auth/reauth`) and gives a token that lasts five minutes, belongs to that
   session, allows five codes and is used up by the change; every try counts toward the two-factor lockout, and an

@@ -78,8 +78,7 @@ and are recorded in the audit log.
 **Notifications.** Each person chooses their channels (ntfy, Discord, any webhook, email when SMTP is set up) and
 which severities go where in **Account → Notifications**, with quiet hours for warnings. When the incident agent is
 set up, a notification about a new warning or critical incident waits up to 3 minutes for its diagnosis and carries
-a short summary of it; see [Incident agent](assistant.md#notifications). (`ADMIN_ALERT_WEBHOOK_URL` is used by the
-chat's `daily_checkup` only.)
+a short summary of it; see [Incident agent](assistant.md#notifications).
 
 **Resolved by the agent.** Besides resolving when the rule stops firing, an incident the agent diagnosed can be
 resolved by the agent once the condition from its diagnosis holds (a container runs N minutes without a restart, a

@@ -4,7 +4,7 @@ Infradeck ships with an automated test suite. This page explains how to run it, 
 covers (and what it doesn't), and what every single test is for, so you can decide
 whether a failure matters before you upgrade or change your setup.
 
-- **1537 test cases** from 828 test functions, plus 38 small tests of the frontend helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
+- **1563 test cases** from 849 test functions, plus 38 small tests of the frontend helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
 - **About two minutes** to run. No Docker, PostgreSQL, Redis, network or root access needed.
 - **Safe to run next to a live install.** The tests use a throwaway in-memory database
   and fakes; they never touch your running containers or your data. (Two collector
@@ -147,10 +147,11 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 | [`test_account_security.py`](#test_account_securitypy) | 146 | Two-factor sign-in, recovery codes, encrypted secrets, sessions you can review and end, password change, and the password check before turning two-factor on. |
 | [`test_admin.py`](#test_adminpy) | 18 | Who may do what: admin-only actions, roles, retention cleanup, the chat on/off switch. |
 | [`test_agent_errors.py`](#test_agent_errorspy) | 5 | Helpful, non-leaking error messages from the AI assistant. |
-| [`test_agent_service.py`](#test_agent_servicepy) | 8 | The assistant can only run the fixed read-only checks; the OpenAI provider and conversation history. |
+| [`test_agent_service.py`](#test_agent_servicepy) | 9 | The chat's reply is one message; the OpenAI provider and conversation history. |
 | [`test_agent_providers.py`](#test_agent_providerspy) | 12 | The Claude provider, and how the chosen provider, model and encrypted API key are stored. |
 | [`test_agent_tool_calls.py`](#test_agent_tool_callspy) | 24 | Tool calling with Claude, OpenAI and Gemini: calls, several at once, errors, masking, append-only history, forcing an answer. |
 | [`test_agent_diagnosis.py`](#test_agent_diagnosispy) | 42 | The agent's diagnosis: the evidence pack, secret masking, dangerous commands, checking the model's answer, saving reports. |
+| [`test_agent_investigation.py`](#test_agent_investigationpy) | 27 | The agent looking things up: the budget of tool calls per diagnosis and chat message, forced final answers, errors, the audit log, citations from tool results. |
 | [`test_agent_tools.py`](#test_agent_toolspy) | 49 | The agent's read-only tools: a closed list with strict schemas, checked arguments, bounded and masked results with fact IDs, no secrets or IP addresses, nothing written. |
 | [`test_agent_watch.py`](#test_agent_watchpy) | 10 | Reusing a recent diagnosis, and watching the fix until the agent resolves the incident. |
 | [`test_agent_worker.py`](#test_agent_workerpy) | 12 | The agent's job queue and worker: one job per opened or worsened incident after the commit, retries, time limit, restarts. |
@@ -164,7 +165,6 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 | [`test_docker_proxy.py`](#test_docker_proxypy) | 119 | The read-only Docker proxy: what it allows, refuses and hides, and how it limits its own clients. |
 | [`test_enrollment.py`](#test_enrollmentpy) | 10 | Enrollment keys, collector credentials and offline-server detection. |
 | [`test_enrollment_limits.py`](#test_enrollment_limitspy) | 12 | Limits on the enrollment key: rate limits, the server cap, and a warning when credentials are replaced. |
-| [`test_health_checks.py`](#test_health_checkspy) | 4 | The assistant's fixed health checks and the critical-only webhook. |
 | [`test_history.py`](#test_historypy) | 36 | The history API behind long-range charts: which level of detail answers each range, point limits, gaps, and agreement with the raw samples. |
 | [`test_indexes.py`](#test_indexespy) | 9 | The database indexes on the metrics tables: only the ones queries use, none duplicated. |
 | [`test_migrations.py`](#test_migrationspy) | 5 | Database migrations: new and pre-migration databases both end at the latest revision with the models' schema. |
@@ -321,9 +321,10 @@ shouldn't, or an admin might be locked out.
 
 | Test | What it checks |
 |---|---|
-| `test_predefined_health_check_runs_and_is_audited` | When the assistant asks for one of the fixed checks (such as `server_health`), the check runs, the result is fed back to it, and both the request and the result are written to the audit log. |
-| `test_arbitrary_command_is_rejected_before_execution` | If the assistant ever asks for anything outside the allow-list (such as `rm -rf /`), it is refused before anything runs. |
-| `test_openai_provider_asks_for_the_reply_schema_and_reports_tokens` | Requests use Structured Outputs in strict mode, the schema only allows the fixed checks, and token usage is read from the response. |
+| `test_without_a_tool_budget_the_chat_is_one_call_without_tools` | With the chat's look-up budget at 0, a message is one call to the model, with no tools and effort `low`. |
+| `test_a_reply_without_a_message_is_an_error` | A reply whose message is missing or empty is an error, not a blank answer. |
+| `test_the_reply_can_only_be_a_message` | The reply schema has one field, the message, and nothing else is allowed. |
+| `test_openai_provider_asks_for_the_reply_schema_and_reports_tokens` | Requests use Structured Outputs in strict mode with the reply schema, and token usage is read from the response. |
 | `test_a_refusal_is_an_error_not_an_empty_reply` | When the model refuses, the chat gets an error instead of an empty answer. |
 | `test_test_connection_spends_no_tokens` | Admin's Test connection only looks the model up; it sends no prompt. |
 | `test_a_conversation_sends_the_system_prompt_and_its_history` | Each request carries the system prompt and the conversation so far, in order. |
@@ -385,6 +386,36 @@ Most tests run once per provider (Claude, OpenAI, Gemini), with fake clients.
 | `test_the_worker_diagnoses_and_reports_back` | The worker's job ends as "diagnosed" with the confidence and version. |
 | `test_without_a_key_the_worker_leaves_the_rule_based_diagnosis` | Without an API key the job is skipped and says why. |
 | `test_with_automatic_diagnosis_off_only_a_request_is_diagnosed` | With automatic diagnosis off, only a requested diagnosis runs. |
+
+### test_agent_investigation.py
+
+The model is a scripted fake (`ScriptedProvider` in `tests/fakes.py`): each test lists the turns it plays (tool
+calls, then the answer) and checks what the loop did with them, on a small database with one server.
+
+| Test | What it checks |
+|---|---|
+| `test_the_budgets_default_to_8_per_diagnosis_and_4_per_chat_message` | Without a setting, a diagnosis may make 8 tool calls and a chat message 4. |
+| `test_a_stored_budget_is_used_and_a_broken_one_falls_back` | A stored 0 is kept (no tools); an unreadable value falls back to the default. |
+| `test_a_budget_outside_its_range_is_refused` | Budgets above 20 (diagnosis) or 10 (chat), negative, fractional, true/false or text are refused. |
+| `test_a_tool_call_runs_and_its_result_goes_back_to_the_model` | A call runs the tool and its result goes back; every tool is listed, effort is `high`, and the result's fact IDs and the call are kept. |
+| `test_without_a_budget_no_tools_are_offered_and_effort_stays_as_asked` | With a budget of 0 no tools are listed and the model answers in one call. |
+| `test_calls_past_the_budget_are_refused_and_the_model_must_answer` | A third call with a budget of 2 isn't run and gets "Tool budget used up"; the next step allows no tools, and the tool list stays the same. |
+| `test_the_budget_counts_across_turns` | Calls in separate turns count toward the same budget. |
+| `test_a_model_that_keeps_calling_tools_when_told_to_answer_is_stopped` | A model that keeps asking for tools after being told to answer is stopped with an error, so the loop can't run on. |
+| `test_bad_arguments_go_back_to_the_model_as_an_error_it_can_correct` | Missing arguments, an unknown tool and an unknown server each go back as an error saying what was wrong. |
+| `test_a_failing_tool_tells_the_model_nothing_about_why` | A tool that crashes gives the model only "The look-up failed"; the details (here a password) go to the server log. |
+| `test_reaching_the_spending_cap_stops_the_look_ups` | With the monthly budget used up, the model gets no tools and has to answer. |
+| `test_after_the_deadline_the_model_must_answer` | Once the deadline has passed, the model gets no tools and has to answer. |
+| `test_every_tool_call_is_written_to_the_audit_log` | Each call, run, failed or refused, is an `agent_tool_call` entry with its user, conversation, question and arguments. |
+| `test_secrets_in_the_arguments_are_masked_in_the_trail` | A password in a tool's arguments is masked in the kept arguments and in the error that repeats them. |
+| `test_a_diagnosis_may_cite_what_a_tool_found_and_keeps_the_trail` | A signal citing a fact from a tool result is kept; the report stores the look-ups, each model call is counted, the audit entry names the incident, and the model is told its budget. |
+| `test_a_cited_id_no_tool_returned_is_still_dropped` | A signal citing an ID neither the pack nor a tool returned is dropped. |
+| `test_a_fix_cannot_be_verified_on_a_metric_only_a_tool_returned` | A "metric stays below" condition on a metric found by a tool becomes manual, because only the pack's metrics can be watched. |
+| `test_an_unusable_answer_is_asked_for_again_without_tools_in_the_same_conversation` | An answer that doesn't parse is asked for again in the same conversation with tools not allowed, so the look-ups aren't repeated. |
+| `test_with_the_diagnosis_budget_at_0_the_agent_gets_no_tools` | With the diagnosis budget at 0 no tools are offered and the model is told so. |
+| `test_a_provider_error_midway_is_counted_once_and_raised` | A provider error after a look-up is recorded once as an error and raised, so the job is retried; no report is saved. |
+| `test_a_chat_message_can_look_things_up_within_the_chat_budget` | A chat message runs a tool, every model call is counted, and the call is audited. |
+| `test_the_chat_remembers_questions_and_replies_but_not_earlier_look_ups` | The next message sends the earlier question and reply, not its look-ups. |
 
 ### test_agent_tools.py
 
@@ -705,15 +736,6 @@ The enrollment key can re-issue a server's credentials, so its use is limited an
 | `test_a_redis_outage_does_not_block_enrolling` | With Redis down, enrolling still works. |
 | `test_a_full_install_refuses_new_servers_but_still_serves_the_ones_it_has` | At the server limit new machines are refused (409) but existing ones can re-enroll. |
 | `test_the_cap_applies_to_adding_by_hand_and_to_approving_requests` | The server limit also applies to adding a server by hand and to approving a request. |
-
-### test_health_checks.py
-
-| Test | What it checks |
-|---|---|
-| `test_server_health_uses_python_system_interfaces` | The assistant's server check reads memory and other facts through Python system interfaces, not shell commands. |
-| `test_container_health_reports_unhealthy_container` | The container check marks the result critical and names an unhealthy container. |
-| `test_unknown_check_is_rejected` | Asking for any check that isn't one of the fixed ones raises an error. |
-| `test_daily_checkup_alerts_only_for_critical_findings` | The daily check-up notifies the webhook only when something is critical. |
 
 ### test_history.py
 
@@ -1085,7 +1107,7 @@ Findings of the second security review (S2-01 to S2-07) and its smaller points: 
 | `test_ids_must_fit_what_the_database_holds` *(5 inputs)* | Server IDs of 0, negative or beyond the database range, and conversation IDs over 64 characters, give 422. |
 | `test_server_ids_in_the_address_must_fit_too` *(3 inputs)* | The same for server IDs in the address of history and statistics routes. |
 | `test_the_assistants_memory_of_chats_is_bounded_and_forgets_the_least_recently_used` | The assistant's in-memory chats are bounded and the least recently used is dropped. |
-| `test_a_user_cannot_write_the_log_entries_the_system_counts` | `/logs` refuses reserved event types such as `health_check_completed`. |
+| `test_a_user_cannot_write_the_log_entries_the_system_counts` | `/logs` refuses reserved event types such as `health_check_completed` and `agent_tool_call`. |
 | `test_a_limited_session_expires_sooner_than_a_full_one` | A set-up-only session lasts at most 30 minutes, a full one a day. |
 | `test_collector_credentials_are_created_private_from_the_start` | The collector's credentials file is created with mode 0600 and no temporary file is left. |
 | `test_the_enrollment_limit_is_configurable` | `ENROLL_RATE_LIMIT` is read from the settings. |
