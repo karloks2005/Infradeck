@@ -14,7 +14,7 @@ from src.backend.models import AgentReport, AgentRun, AppSetting, AuditLog, Base
 from tests.fakes import ScriptedProvider
 
 NOW = datetime.now(timezone.utc)
-CPU = ("host_metrics", {"server": "web1", "metrics": ["cpu"], "from": None, "to": None})
+CPU = ("host_metrics", {"server": "web1", "metrics": ["cpu"], "from": None, "to": None, "reason": "Was CPU high?"})
 SCHEMA = chat.REPLY_SCHEMA
 ANSWER = '{"message":"CPU is fine."}'
 
@@ -114,7 +114,7 @@ def test_a_model_that_keeps_calling_tools_when_told_to_answer_is_stopped(db):
 
 
 def test_bad_arguments_go_back_to_the_model_as_an_error_it_can_correct(db):
-    provider = ScriptedProvider([("host_metrics", {"server": "web1"}), ("rm_rf", {}), ("server_info", {"server": "nope"})], ANSWER)
+    provider = ScriptedProvider([("host_metrics", {"server": "web1"}), ("rm_rf", {}), ("server_info", {"server": "nope", "reason": "What is it?"})], ANSWER)
 
     found = run(db, provider, budget=4)
 
@@ -128,7 +128,7 @@ def test_a_failing_tool_tells_the_model_nothing_about_why(db, monkeypatch, caplo
     def broken(*args):
         raise RuntimeError("password=hunter2 in a stack trace")
     monkeypatch.setitem(tools._REGISTRY, "server_info", (tools._REGISTRY["server_info"][0], broken))
-    provider = ScriptedProvider([("server_info", {"server": "web1"})], ANSWER)
+    provider = ScriptedProvider([("server_info", {"server": "web1", "reason": "What is it?"})], ANSWER)
 
     run(db, provider, budget=2)
 
@@ -154,23 +154,25 @@ def test_after_the_deadline_the_model_must_answer(db):
 
 
 def test_every_tool_call_is_written_to_the_audit_log(db):
-    provider = ScriptedProvider([CPU, ("server_info", {"server": "nope"})], [CPU], ANSWER)
+    provider = ScriptedProvider([CPU, ("server_info", {"server": "nope", "reason": "What is it?"})], [CPU], ANSWER)
 
     run(db, provider, budget=2, audit=investigate.audit_log(db, title="Why is web1 slow?", user_id=1, conversation_id="c1"))
 
     rows = audited(db)
     assert [(row.level, row.source, row.user_id, row.conversation_id, row.task_title) for row in rows] == [("INFO", "agent", 1, "c1", "Why is web1 slow?"), ("WARN", "agent", 1, "c1", "Why is web1 slow?"),
                                                                                                          ("WARN", "agent", 1, "c1", "Why is web1 slow?")]
-    assert rows[0].message == "The agent looked up host_metrics" and '"server":"web1"' in json.loads(rows[0].steps)[0]
+    steps = json.loads(rows[0].steps)
+    assert rows[0].message == "The agent looked up host_metrics" and steps[0] == "Reason: Was CPU high?" and '"server":"web1"' in steps[1] and "reason" not in steps[1]
     assert rows[2].message.endswith("(refused)")
 
 
 def test_secrets_in_the_arguments_are_masked_in_the_trail(db):
-    provider = ScriptedProvider([("server_info", {"server": "password=hunter2"})], ANSWER)
+    provider = ScriptedProvider([("server_info", {"server": "password=hunter2", "reason": "Is password=hunter2 set?"})], ANSWER)
 
     found = run(db, provider, budget=1)
 
-    assert "hunter2" not in found.trail[0]["arguments"] and "hunter2" not in found.trail[0]["result"]
+    entry = found.trail[0]
+    assert "hunter2" not in entry["arguments"] and "hunter2" not in entry["result"] and "hunter2" not in entry["reason"]
 
 
 # --- the diagnosis --------------------------------------------------------------------------------------------
@@ -189,6 +191,8 @@ def test_a_diagnosis_may_cite_what_a_tool_found_and_keeps_the_trail(db):
     assert report.status == "ok" and shown["signals"][0]["evidence"][0]["id"] == "metric:web1.cpu" and shown["dropped_signals"] == 0
     trail = json.loads(report.body)["investigation"]
     assert [entry["tool"] for entry in trail] == ["host_metrics"] and json.loads(trail[0]["result"])["server"] == "web1"
+    step = shown["steps"][0]   # the page gets the look-up in plain words, never its raw result
+    assert (step["reason"], step["asked"]) == ("Was CPU high?", "CPU on web1") and step["found"].startswith("CPU ") and "points" not in json.dumps(shown)
     assert db.query(AgentRun).count() == 2 and all(run.kind == "diagnosis" for run in db.query(AgentRun))
     assert audited(db)[0].task_title == "Diagnosis of INC-0042" and audited(db)[0].user_id is None
     assert "up to 8 tool calls" in provider.calls[0][-1]["content"]
@@ -242,7 +246,8 @@ def test_a_chat_message_can_look_things_up_within_the_chat_budget(db):
     reply = chat.AgentService().send(1, "c1", "Is web1 busy?", provider, db=db, budget=4, usage_logger=lambda completion, ms: logged.append(completion.output_tokens),
                                      audit=investigate.audit_log(db, title="Is web1 busy?", user_id=1, conversation_id="c1"))
 
-    assert reply == "CPU is fine." and logged == [300, 300] and len(audited(db)) == 1
+    assert reply.message == "CPU is fine." and logged == [300, 300] and len(audited(db)) == 1
+    assert [(step["tool"], step["reason"], step["asked"]) for step in reply.steps] == [("host_metrics", "Was CPU high?", "CPU on web1")]
     assert provider.started[0]["effort"] == "high"
 
 

@@ -16,7 +16,7 @@ def make_service():
 def test_without_a_tool_budget_the_chat_is_one_call_without_tools():
     provider = ScriptedProvider('{"message":"All quiet."}')
 
-    assert make_service().send(1, "conversation", "Anything wrong?", provider, budget=0) == "All quiet."
+    assert make_service().send(1, "conversation", "Anything wrong?", provider, budget=0) == agent_service.Answer("All quiet.", [])
     assert provider.started == [{"tools": [], "effort": "low", "schema_name": "agent_reply"}] and len(provider.calls) == 1
 
 

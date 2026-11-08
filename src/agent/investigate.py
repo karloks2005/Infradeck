@@ -63,13 +63,18 @@ def _step(conversation: Conversation, allow_tools: bool, record: Recorder) -> Tu
     return turn
 
 
-def _arguments(call: ToolCall) -> str:
-    return clip(json.dumps(mask(call.arguments), ensure_ascii=False, separators=(",", ":")), 500)
+def _entry(call: ToolCall) -> dict:
+    """The start of a trail entry: the tool, its arguments and, apart, the reason the model gave (steps.py), all
+    masked. The arguments are kept whole up to 1000 characters, so steps.py can read them back."""
+    arguments = {key: value for key, value in call.arguments.items() if key != "reason"} if isinstance(call.arguments, dict) else {}
+    reason = call.arguments.get("reason") if isinstance(call.arguments, dict) else None
+    return {"tool": clip(str(call.name), 60), "arguments": clip(json.dumps(mask(arguments), ensure_ascii=False, separators=(",", ":")), 1000),
+            "reason": clip(mask_text(reason), 200) if isinstance(reason, str) and reason.strip() else None}
 
 
 def _run(db, call: ToolCall) -> tuple[ToolResult, dict, dict[str, str]]:
     """One allowed call: its result for the model, its trail entry and the facts it found."""
-    entry = {"tool": clip(str(call.name), 60), "arguments": _arguments(call)}
+    entry = _entry(call)
     try:
         output = tools.run(db, call.name, call.arguments)
     except tools.ToolError as exc:
@@ -103,7 +108,7 @@ def investigate(db, provider: Provider, messages: list[dict], schema: dict, sche
                 labels = tools.merge_labels(labels, found)
             else:
                 result = ToolResult(call.id, BUDGET_USED_UP, True)
-                entry = {"tool": clip(str(call.name), 60), "arguments": _arguments(call), "status": "refused", "result": BUDGET_USED_UP}
+                entry = {**_entry(call), "status": "refused", "result": BUDGET_USED_UP}
             trail.append(entry)
             audit(entry)
             results.append(result)
@@ -117,5 +122,5 @@ def audit_log(db, *, title: str, user_id: int | None = None, conversation_id: st
         record_audit_log(db, user_id=user_id, level="INFO" if entry["status"] == "ok" else "WARN", source="agent", event_type=EVENT_TYPE,
                          message=f"The agent looked up {entry['tool']}" + ("" if entry["status"] == "ok" else f" ({entry['status']})"),
                          task_title=clip(title, 255), conversation_id=conversation_id,
-                         steps=[f"Arguments: {entry['arguments']}", f"Result: {entry['status']}" + ("" if entry["status"] == "ok" else f": {clip(entry['result'], 200)}")])
+                         steps=[*([f"Reason: {entry['reason']}"] if entry.get("reason") else []), f"Arguments: {entry['arguments']}", f"Result: {entry['status']}" + ("" if entry["status"] == "ok" else f": {clip(entry['result'], 200)}")])
     return write

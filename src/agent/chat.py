@@ -1,14 +1,16 @@
 """Chat with the agent. Each message is one investigation (investigate.py): the model may make up to the chat tool
 budget's look-ups with the read-only tools before it replies. Only the questions and the final replies stay in the
-conversation's memory; the look-ups of earlier messages are not sent again."""
+conversation's memory; the look-ups of earlier messages are not sent again. A reply comes back with its look-ups in
+plain words (steps.py), which the chat route saves next to it."""
 from __future__ import annotations
 
 import json
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass, field
 
-from . import diagnosis, tools, usage
+from . import diagnosis, steps as investigation_steps, tools, usage
 from .investigate import Auditor, Recorder, investigate
 from .prompts import SYSTEM_PROMPT
 from .providers import Completion, Provider, get_provider
@@ -30,9 +32,17 @@ REPLY_SCHEMA = {
 
 
 class Reply:
-    def __init__(self, text: str, completion: Completion | None = None):
+    def __init__(self, text: str, completion: Completion | None = None, trail: list[dict] | None = None):
         self.text = text
         self.completion = completion
+        self.trail = trail or []
+
+
+@dataclass
+class Answer:
+    """What the person gets: the reply, and the look-ups behind it in plain words."""
+    message: str
+    steps: list[dict] = field(default_factory=list)
 
 
 class Chat:
@@ -51,7 +61,7 @@ class Chat:
             self.history.pop()   # a failed turn is not part of the conversation
             raise
         self.history.append({"role": "assistant", "content": found.completion.text})
-        return Reply(found.completion.text, found.completion)
+        return Reply(found.completion.text, found.completion, found.trail)
 
 
 def parse_reply(text: str) -> str:
@@ -85,9 +95,10 @@ class AgentService:
             return chat
 
     def send(self, user_id: int, conversation_id: str, message: str, provider: Provider, *, db=None, budget: int = 0,
-             usage_logger: Callable[[Completion, int], None] | None = None, audit: Auditor | None = None) -> str:
+             usage_logger: Callable[[Completion, int], None] | None = None, audit: Auditor | None = None) -> Answer:
         chat = self._get_chat(user_id, conversation_id)
-        return parse_reply(chat.send_message(provider, message, db, budget, usage_logger, audit).text)
+        reply = chat.send_message(provider, message, db, budget, usage_logger, audit)
+        return Answer(parse_reply(reply.text), investigation_steps.describe_all(reply.trail))
 
     def delete_conversation(self, user_id: int, conversation_id: str) -> None:
         """Discard the in-memory context after its persisted chat is deleted."""
@@ -98,7 +109,7 @@ class AgentService:
 _agent_service = None
 
 
-def send_agent_message(user_id: int, conversation_id: str, message: str, provider: Provider, *, db=None, budget: int = 0, usage_logger=None, audit=None) -> str:
+def send_agent_message(user_id: int, conversation_id: str, message: str, provider: Provider, *, db=None, budget: int = 0, usage_logger=None, audit=None) -> Answer:
     global _agent_service
     if _agent_service is None:
         _agent_service = AgentService()

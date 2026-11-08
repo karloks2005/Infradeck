@@ -12,6 +12,7 @@ The [README](../README.md) is the short version: what the project is, how to sta
 | [Alerts and incidents](alerts.md) | Every rule, its default thresholds, and how incidents open and resolve. |
 | [Accounts, roles and two-factor sign-in](accounts.md) | Passwords, roles, the Account page, authenticator codes, recovery codes, locked-out accounts. |
 | [Incident agent](assistant.md) | The optional agent: diagnoses, watching the fix, notifications, chat, who sees what, and what it costs. |
+| [How the agent investigates](agent-investigation.md) | The agent's look-ups end to end: what the model sees, who writes each part of what you see, the budget, what is checked and stored, and the limits. |
 
 ## Installing and running
 

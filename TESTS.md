@@ -4,7 +4,7 @@ Infradeck ships with an automated test suite. This page explains how to run it, 
 covers (and what it doesn't), and what every single test is for, so you can decide
 whether a failure matters before you upgrade or change your setup.
 
-- **1574 test cases** from 857 test functions, plus 38 small tests of the frontend helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
+- **1608 test cases** from 867 test functions, plus 45 small tests of the frontend helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
 - **About two minutes** to run. No Docker, PostgreSQL, Redis, network or root access needed.
 - **Safe to run next to a live install.** The tests use a throwaway in-memory database
   and fakes; they never touch your running containers or your data. (Two collector
@@ -152,6 +152,7 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 | [`test_agent_tool_calls.py`](#test_agent_tool_callspy) | 30 | Tool calling with Claude, OpenAI (Responses API) and Gemini: calls, several at once, errors, masking, append-only history, forcing an answer, reasoning carried over, nothing stored at OpenAI. |
 | [`test_agent_diagnosis.py`](#test_agent_diagnosispy) | 42 | The agent's diagnosis: the evidence pack, secret masking, dangerous commands, checking the model's answer, saving reports. |
 | [`test_agent_investigation.py`](#test_agent_investigationpy) | 27 | The agent looking things up: the budget of tool calls per diagnosis and chat message, forced final answers, errors, the audit log, citations from tool results. |
+| [`test_agent_steps.py`](#test_agent_stepspy) | 34 | The agent's look-ups in plain words: what each tool asked and found, no raw results or secrets, windows left for the page, odd entries never failing. |
 | [`test_agent_tools.py`](#test_agent_toolspy) | 52 | The agent's read-only tools: a closed list with strict schemas, checked arguments, bounded and masked results with fact IDs, no secrets or IP addresses, nothing written. |
 | [`test_agent_watch.py`](#test_agent_watchpy) | 10 | Reusing a recent diagnosis, and watching the fix until the agent resolves the incident. |
 | [`test_agent_worker.py`](#test_agent_workerpy) | 12 | The agent's job queue and worker: one job per opened or worsened incident after the commit, retries, time limit, restarts. |
@@ -414,16 +415,34 @@ calls, then the answer) and checks what the loop did with them, on a small datab
 | `test_a_failing_tool_tells_the_model_nothing_about_why` | A tool that crashes gives the model only "The look-up failed"; the details (here a password) go to the server log. |
 | `test_reaching_the_spending_cap_stops_the_look_ups` | With the monthly budget used up, the model gets no tools and has to answer. |
 | `test_after_the_deadline_the_model_must_answer` | Once the deadline has passed, the model gets no tools and has to answer. |
-| `test_every_tool_call_is_written_to_the_audit_log` | Each call, run, failed or refused, is an `agent_tool_call` entry with its user, conversation, question and arguments. |
-| `test_secrets_in_the_arguments_are_masked_in_the_trail` | A password in a tool's arguments is masked in the kept arguments and in the error that repeats them. |
-| `test_a_diagnosis_may_cite_what_a_tool_found_and_keeps_the_trail` | A signal citing a fact from a tool result is kept; the report stores the look-ups, each model call is counted, the audit entry names the incident, and the model is told its budget. |
+| `test_every_tool_call_is_written_to_the_audit_log` | Each call, run, failed or refused, is an `agent_tool_call` entry with its user, conversation, question, the agent's reason and the arguments (without the reason). |
+| `test_secrets_in_the_arguments_are_masked_in_the_trail` | A password in a tool's arguments or its reason is masked in the kept arguments, the reason and the error that repeats them. |
+| `test_a_diagnosis_may_cite_what_a_tool_found_and_keeps_the_trail` | A signal citing a fact from a tool result is kept; the report stores the look-ups, each model call is counted, the audit entry names the incident, and the model is told its budget. The page gets the look-ups as steps in plain words, without any raw result. |
 | `test_a_cited_id_no_tool_returned_is_still_dropped` | A signal citing an ID neither the pack nor a tool returned is dropped. |
 | `test_a_fix_cannot_be_verified_on_a_metric_only_a_tool_returned` | A "metric stays below" condition on a metric found by a tool becomes manual, because only the pack's metrics can be watched. |
 | `test_an_unusable_answer_is_asked_for_again_without_tools_in_the_same_conversation` | An answer that doesn't parse is asked for again in the same conversation with tools not allowed, so the look-ups aren't repeated. |
 | `test_with_the_diagnosis_budget_at_0_the_agent_gets_no_tools` | With the diagnosis budget at 0 no tools are offered and the model is told so. |
 | `test_a_provider_error_midway_is_counted_once_and_raised` | A provider error after a look-up is recorded once as an error and raised, so the job is retried; no report is saved. |
-| `test_a_chat_message_can_look_things_up_within_the_chat_budget` | A chat message runs a tool, every model call is counted, and the call is audited. |
+| `test_a_chat_message_can_look_things_up_within_the_chat_budget` | A chat message runs a tool, every model call is counted, the call is audited, and the reply comes back with the step described. |
 | `test_the_chat_remembers_questions_and_replies_but_not_earlier_look_ups` | The next message sends the earlier question and reply, not its look-ups. |
+
+### test_agent_steps.py
+
+Each look-up as people see it (`src/agent/steps.py`), from real results of the tools' own test database (the
+fixture of `test_agent_tools.py`). No model is involved.
+
+| Test | What it checks |
+|---|---|
+| `test_each_tool_is_told_in_plain_words` | For each tool (and events filtered by kind), what it looked up and the line of facts it found, word for word. |
+| `test_every_tool_has_a_way_to_say_what_it_asked_and_found` | Every tool in the list has both descriptions, so a new tool can't be added without them. |
+| `test_a_step_carries_no_raw_result_and_no_secrets` | For every tool, a step has only its eight fields, no password or IP address, and a short line. |
+| `test_the_window_is_left_for_the_page_to_show_in_the_viewers_clock` | The window or moment comes as separate UTC times (a null window as the last 24 hours it resolved to), not inside the text. |
+| `test_a_failed_or_refused_call_says_why` | A failed call shows the reason it failed; a refused one "Not run: the look-up budget was used up."; an empty window counts as none. |
+| `test_an_odd_entry_gives_a_plain_step_instead_of_failing` | Cut-off arguments, unreadable or oddly shaped results, an unknown tool and an empty entry each give a plain step. |
+| `test_an_unusable_result_says_done_rather_than_guessing` | Where a number belongs but isn't one, the line is "Done." rather than a made-up figure. |
+| `test_a_disk_that_barely_changes_is_not_growing` | A filesystem changing by less than 0.05 GB a day is "not growing"; one shrinking shows its negative growth. |
+| `test_a_shortened_result_says_so` | A result cut to fit says "(the result was shortened to fit)". |
+| `test_only_so_many_steps_are_described` | At most 30 steps are described; no trail gives none. |
 
 ### test_agent_tools.py
 
@@ -1249,6 +1268,7 @@ cd src/frontend && node --test        # Node 20 or newer; nothing to install
 |---|---|---|
 | `tests/chartMath.test.js` | 9 | Histogram bins and weights, the hour-by-weekday grid, donut fractions, the disk-full estimate (clear trends only), axis ticks, gaps staying gaps, weighted summaries, time labels and forecast wording. |
 | `tests/fleetLogic.test.js` | 7 | Container states, top-N rankings, disk ranking and colours, online detection, availability rows, readable durations, and incident columns that fill quiet days with zeros. |
+| `tests/stepsLogic.test.js` | 7 | The window of an agent's look-up in the viewer's clock (one day, several days, up to now, one moment, a time without a zone read as UTC, none or unreadable), and the look-up count leaving out refused calls. |
 
 The React components themselves (the page layout, tooltips, selection) have no automated tests;
 they were checked by hand in a real browser.

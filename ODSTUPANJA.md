@@ -91,7 +91,8 @@ su anotacije dizajna i namjerno nisu ugrađeni.
 | „Confidence: high · 3 of 3 signals agree" | „3 of 3 checks against the data hold" | Nema modela koji bi procijenio pouzdanost | #93 |
 | Koraci s točnom putanjom (`/opt/gitlab/docker-compose.yml`) i brojkama iz povijesti verzija | Koraci iz fiksnog priručnika po vrsti pravila, s imenom kontejnera i izračunatim limitom | Infradeck ne zna gdje je compose datoteka ni koju verziju slike je kontejner imao prije | – |
 | „Notified ntfy, email" | „sent to the channels people chose" ili „nobody yet" | Ne bilježi se po kanalu | – |
-| Chat: odgovori s oznakama izvora („memory 12:30–13:55", „docker events") | Običan tekst odgovora | Model ne vraća izvore | #93 |
+| Chat: odgovori s oznakama izvora („memory 12:30–13:55", „docker events") | Običan tekst odgovora; ispod njega sklopljeni „Looked up": pretrage koje je agent napravio, s njegovim pitanjem, što je tražio i redak činjenica iz rezultata | Izvori su pretrage alata, a ne oznake u tekstu; retke činjenica piše Infradeck, ne model | #158 |
+| Nema prikaza kako je agent došao do dijagnoze | Ispod signala sklopljeni „How the agent got there · N look-ups" | Prikaz koraka istrage | #158 |
 | Chat: prijedlozi pitanja vezani uz incident | Tri općenita prijedloga | Isto | – |
 | „Resolved 14" po tjednima, s opisom kako je riješeno | Zadnjih 200 riješenih; opis je „Marked resolved by …" ili „Cleared on its own" | Nitko ne upisuje kako je riješeno | – |
 | „Mark resolved" trajno zatvara | Ako je uzrok još tu, na sljedećem javljanju otvara se novi incident | Pravilo i dalje vrijedi | – |

@@ -24,7 +24,7 @@ from sqlalchemy import func
 
 from src.backend.models import AgentReport, IncidentAlert
 
-from . import evidence as evidence_pack, safety, settings, usage
+from . import evidence as evidence_pack, safety, settings, steps as investigation_steps, usage
 from .investigate import audit_log, investigate
 from .prompts import load_prompt
 from .providers import Provider
@@ -204,14 +204,15 @@ def _iso(moment: datetime) -> str:
 
 
 def report_json(report: AgentReport | None) -> dict | None:
-    """What the incident page gets: the latest report, without the evidence pack."""
+    """What the incident page gets: the latest report, without the evidence pack. The look-ups come as ``steps`` in
+    plain words (steps.py); their raw results never leave the backend."""
     if report is None:
         return None
     body = json.loads(report.body) if report.body else {}
     reused = body.get("reused_from")
     return {"version": report.version, "status": report.status, "model": report.model, "trigger": report.trigger, "created_at": _iso(report.created_at),
             "summary": report.summary, "confidence": report.confidence, "signals": body.get("signals", []), "fix_steps": body.get("fix_steps", []), "verify": body.get("verify"),
-            "dropped_signals": body.get("dropped_signals", 0), "error": report.error,
+            "dropped_signals": body.get("dropped_signals", 0), "error": report.error, "steps": investigation_steps.describe_all(body.get("investigation")),
             "reused_from": {**reused, "reference": f"INC-{reused['incident_id']:04d}"} if reused else None}
 
 

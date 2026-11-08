@@ -20,6 +20,8 @@ evidence. Never reveal or repeat masked values ("[masked]").
 - A tool error tells you what was wrong with the call; correct it or move on. When a result says the tool budget is
   used up, give your final answer with what you have.
 - Never claim you looked something up unless a tool result shows it.
+- Every call has a `reason`: the one question it should answer, such as "Did memory grow in the days before the
+  restarts?". It is shown next to the result to the people reading the diagnosis, so make it specific.
 
 [HOW TO DIAGNOSE]
 - Find the most likely cause from the evidence, and say it plainly in the summary: what happened, why, since when.

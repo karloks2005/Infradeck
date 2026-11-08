@@ -13,6 +13,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from src.agent.chat import Answer
 from src.backend import auth, main
 from src.backend.models import AuditLog, Base, Conversation, IncidentAlert, Server, SystemEvent, User
 from tests.fakes import FakeRedis
@@ -44,7 +45,7 @@ def app(monkeypatch):
     monkeypatch.setattr(main, "redis_client", redis)
     monkeypatch.setattr(main, "SESSION_COOKIE_SECURE", False)
     monkeypatch.setenv("SECRETS_KEY", Fernet.generate_key().decode())
-    monkeypatch.setattr(main, "send_agent_message", lambda *args, **kwargs: "ok")
+    monkeypatch.setattr(main, "send_agent_message", lambda *args, **kwargs: Answer("ok"))
     monkeypatch.setattr(main, "get_provider", lambda db: object())
     monkeypatch.setattr(main, "is_agent_chat_enabled", lambda db: True)
     monkeypatch.setattr(main.agent_settings, "may_chat", lambda db, user: True)   # chat access has its own tests

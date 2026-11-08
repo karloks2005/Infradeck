@@ -93,7 +93,9 @@ are never returned, so a tool answers everyone the same and shows nothing the da
 a set number of calls per answer (Admin › Incident agent › Look-ups, 8 per diagnosis and 4 per chat message by
 default, 0 for none); a call past it isn't run and the model then has to answer (`src/agent/investigate.py`). Every
 call, run or refused, is written to the audit log with its masked arguments, and users can't forge or delete these
-entries.
+entries. The page shows each look-up only as a line of facts Infradeck writes from the result, never the raw result,
+next to the reason the model gave for the call (masked like everything else it writes); see
+[How the agent investigates](docs/agent-investigation.md).
 
 **Who sees the agent.** With "Show diagnoses to users" off, the backend leaves the agent's report out of every
 incident, Overview line and notification for users who aren't admins. Chat access is "Admins only" by default; with

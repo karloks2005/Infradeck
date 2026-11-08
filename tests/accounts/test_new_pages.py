@@ -406,6 +406,7 @@ def test_saving_and_removing_the_agent_key_is_audited_without_the_key(app):
 
 # --- the agent's spending (#112) ---------------------------------------------------------------------------------
 
+from src.agent.chat import Answer
 from src.agent.providers import Completion
 from src.backend.models import AgentRun
 
@@ -416,7 +417,7 @@ def _fake_agent(monkeypatch, tokens=(1000, 200), fail=None):
             raise fail
         # A dated model name, as the API reports it: it must still use the price set for "gpt-test".
         usage_logger(Completion(text="{}", model="gpt-test-2026-01-01", input_tokens=tokens[0], output_tokens=tokens[1]), 1500)
-        return "Here is the answer."
+        return Answer("Here is the answer.")
     monkeypatch.setattr(main, "send_agent_message", fake)
     monkeypatch.setattr(main, "get_provider", lambda db: object())
     monkeypatch.setattr(main, "is_agent_chat_enabled", lambda db: True)
@@ -601,7 +602,7 @@ def test_hidden_diagnoses_stay_hidden_from_users_in_the_page_the_overview_and_no
 
 
 def test_chat_is_for_admins_unless_allowed_per_user(app, monkeypatch):
-    monkeypatch.setattr(main, "send_agent_message", lambda *args, **kwargs: "ok")
+    monkeypatch.setattr(main, "send_agent_message", lambda *args, **kwargs: Answer("ok"))
     monkeypatch.setattr(main, "get_provider", lambda db: object())
     monkeypatch.setattr(main, "is_agent_chat_enabled", lambda db: True)
     owner, viewer = signed_in(app, 1), signed_in(app, 3)
@@ -659,14 +660,18 @@ def test_the_look_up_budgets_are_checked_audited_and_raising_one_from_0_is_confi
 
 def test_a_chat_message_looks_things_up_and_the_look_ups_outlive_the_conversation(app, monkeypatch):
     from tests.fakes import ScriptedProvider
-    provider = ScriptedProvider([("server_info", {"server": "alpha"})], '{"message":"alpha is online."}')
+    provider = ScriptedProvider([("server_info", {"server": "alpha", "reason": "Is alpha up?"})], '{"message":"alpha is online."}')
     monkeypatch.setattr(main, "get_provider", lambda db: provider)
     monkeypatch.setattr(main, "is_agent_chat_enabled", lambda db: True)
     owner = signed_in(app, 1)
 
     response = _ask(owner)
 
-    assert response.status_code == 200 and response.json() == {"message": "alpha is online."}
+    assert response.status_code == 200 and response.json()["message"] == "alpha is online."
+    step = response.json()["steps"][0]
+    assert (step["tool"], step["reason"], step["asked"], step["status"]) == ("server_info", "Is alpha up?", "Machine facts for alpha", "ok") and "result" not in step
+    saved = owner.get("/conversations").json()["conversations"][0]["messages"]
+    assert [message["steps"] for message in saved] == [[], [step]]   # kept with the reply, so a reload shows it
     assert provider.started[0]["tools"] and json.loads(provider.results[0][0].content)["hostname"] == "alpha"
     assert app.db.query(AgentRun).count() == 2
     looked = app.db.query(AuditLog).filter(AuditLog.event_type == "agent_tool_call").one()
