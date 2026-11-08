@@ -19,6 +19,11 @@ NOW = datetime(2026, 11, 7, 12, 0, tzinfo=timezone.utc)
 SPIKE = NOW - timedelta(hours=5)
 
 
+def run(db, name, arguments, now):
+    """tools.run with the ``reason`` every call carries (the tools ignore it)."""
+    return tools.run(db, name, {**arguments, "reason": "Test question?"} if isinstance(arguments, dict) else arguments, now=now)
+
+
 @pytest.fixture
 def db():
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
@@ -69,7 +74,7 @@ def db():
 
 
 def call(db, name, **arguments):
-    output = tools.run(db, name, arguments, now=NOW)
+    output = run(db, name, arguments, now=NOW)
     return json.loads(output.content), output.labels
 
 
@@ -126,17 +131,17 @@ def test_no_request_has_more_union_typed_parameters_than_the_provider_accepts(an
 
 
 def test_an_optional_argument_left_empty_or_null_means_not_given(db):
-    empty = tools.run(db, "host_metrics", {"server": "web1", "metrics": ["cpu"], "from": "", "to": " "}, now=NOW)
-    null = tools.run(db, "host_metrics", {"server": "web1", "metrics": ["cpu"], "from": None, "to": None}, now=NOW)
+    empty = run(db, "host_metrics", {"server": "web1", "metrics": ["cpu"], "from": "", "to": " "}, now=NOW)
+    null = run(db, "host_metrics", {"server": "web1", "metrics": ["cpu"], "from": None, "to": None}, now=NOW)
 
     assert empty.content == null.content and json.loads(empty.content)["to"] == "2026-11-07T12:00+00:00"
     with pytest.raises(tools.ToolError, match="non-empty"):
-        tools.run(db, "server_info", {"server": ""}, now=NOW)   # a required one may not be empty
+        run(db, "server_info", {"server": ""}, now=NOW)   # a required one may not be empty
 
 
 def test_an_unknown_tool_is_refused(db):
     with pytest.raises(tools.ToolError, match="no tool named"):
-        tools.run(db, "run_shell", {"command": "rm -rf /"}, now=NOW)
+        run(db, "run_shell", {"command": "rm -rf /"}, now=NOW)
 
 
 @pytest.mark.parametrize("name, arguments, message", [
@@ -160,12 +165,12 @@ def test_an_unknown_tool_is_refused(db):
 ])
 def test_bad_arguments_are_refused_with_a_reason_the_model_can_act_on(db, name, arguments, message):
     with pytest.raises(tools.ToolError, match=message):
-        tools.run(db, name, arguments, now=NOW)
+        run(db, name, arguments, now=NOW)
 
 
 def test_an_unknown_server_is_answered_with_the_known_ones(db):
     with pytest.raises(tools.ToolError, match="Servers: db1, web1"):
-        tools.run(db, "server_info", {"server": "mail"}, now=NOW)
+        run(db, "server_info", {"server": "mail"}, now=NOW)
     assert call(db, "server_info", server="WEB1")[0]["hostname"] == "web1"
 
 
@@ -225,7 +230,7 @@ def test_disk_usage_estimates_growth_and_when_it_fills_up(db):
     assert root["full_in_days"] == pytest.approx(40, abs=2)
     assert "metric:web1.disk:/" in labels
     with pytest.raises(tools.ToolError, match="no mount '/data'"):
-        tools.run(db, "disk_usage", {"server": "web1", "mount": "/data", "days": 2}, now=NOW)
+        run(db, "disk_usage", {"server": "web1", "mount": "/data", "days": 2}, now=NOW)
 
 
 def test_events_show_the_newest_thirty_oldest_first_and_filter_by_kind(db):
@@ -292,7 +297,7 @@ def test_network_state_lists_ports_firewall_and_recent_changes(db):
 
 @pytest.mark.parametrize("name, arguments", EVERY_CALL)
 def test_every_result_is_bounded_masked_free_of_ip_addresses_and_labelled(db, name, arguments):
-    output = tools.run(db, name, arguments, now=NOW)
+    output = run(db, name, arguments, now=NOW)
     assert len(output.content) <= tools.MAX_RESULT_CHARS
     assert "hunter2" not in output.content and "10.0.0." not in output.content
     cited = set()
@@ -326,9 +331,9 @@ def test_a_long_series_is_thinned_keeping_its_peak(db, monkeypatch):
 
 
 def test_the_same_question_gives_the_same_ids_and_a_second_window_joins_the_label(db):
-    first = tools.run(db, "host_metrics", {"server": "web1", "metrics": ["cpu"], "from": "2026-11-07T00:00", "to": "2026-11-07T06:00"}, now=NOW)
-    again = tools.run(db, "host_metrics", {"server": "web1", "metrics": ["cpu"], "from": "2026-11-07T00:00", "to": "2026-11-07T06:00"}, now=NOW)
-    later = tools.run(db, "host_metrics", {"server": "web1", "metrics": ["cpu"], "from": "2026-11-07T06:00", "to": "2026-11-07T12:00"}, now=NOW)
+    first = run(db, "host_metrics", {"server": "web1", "metrics": ["cpu"], "from": "2026-11-07T00:00", "to": "2026-11-07T06:00"}, now=NOW)
+    again = run(db, "host_metrics", {"server": "web1", "metrics": ["cpu"], "from": "2026-11-07T00:00", "to": "2026-11-07T06:00"}, now=NOW)
+    later = run(db, "host_metrics", {"server": "web1", "metrics": ["cpu"], "from": "2026-11-07T06:00", "to": "2026-11-07T12:00"}, now=NOW)
     assert first.content == again.content and set(first.labels) == set(later.labels) == {"metric:web1.cpu"}
     merged = common.merge_labels(tools.merge_labels({}, first.labels), later.labels)
     assert merged["metric:web1.cpu"] == "CPU · web1 · 2026-11-07 00:00–06:00 UTC; CPU · web1 · 2026-11-07 06:00–12:00 UTC"
@@ -337,5 +342,5 @@ def test_the_same_question_gives_the_same_ids_and_a_second_window_joins_the_labe
 
 def test_tools_never_write_to_the_database(db):
     for name, arguments in EVERY_CALL:
-        tools.run(db, name, arguments, now=NOW)
+        run(db, name, arguments, now=NOW)
         assert not db.new and not db.dirty and not db.deleted, name

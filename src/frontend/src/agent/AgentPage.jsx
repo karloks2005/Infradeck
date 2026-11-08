@@ -9,6 +9,7 @@ import { Icon } from '../icons.jsx'
 import { refreshOverview } from '../overviewStore.js'
 import { serverLink, AppShell, PhoneHeader, RoundButton } from '../shell.jsx'
 import { Notice, Outcome, Sheet, useAction, useCopy, usePhone } from '../ui.jsx'
+import { Steps } from './Steps.jsx'
 
 const SEVERITY = { CRITICAL: ['Critical', 'chip-signal', 'var(--color-signal)'], WARNING: ['Warning', 'chip-warn', 'var(--color-warn)'], INFO: ['Info', '', 'var(--color-edge)'] }
 const TONE = { signal: 'bg-signal', warn: 'bg-warn', ok: 'bg-ok', plain: 'bg-dim' }
@@ -78,7 +79,7 @@ function withReport(found, agent) {
   const report = agent?.report
   if (!report || report.status !== 'ok') return { ...found, byAgent: false }
   const signals = report.signals.map((signal) => ({ text: signal.text, ok: signal.holds, source: signal.evidence.map((ref) => ref.label).join(' · '), evidence: signal.evidence }))
-  return { ...found, byAgent: true, summary: report.summary, confidence: report.confidence, signals, agreeing: signals.filter((signal) => signal.ok).length,
+  return { ...found, byAgent: true, summary: report.summary, confidence: report.confidence, signals, agreeing: signals.filter((signal) => signal.ok).length, lookups: report.steps || [],
     steps: report.fix_steps.length ? report.fix_steps.map((step) => ({ ...step, label: null })) : found.steps }
 }
 
@@ -213,7 +214,9 @@ function Incident({ incident, canAct, onChanged }) {
         <ul className="card m-0 list-none divide-y divide-line p-0">
           {found.signals.map((signal) => <li key={signal.text} className="flex items-start gap-3.5 px-[18px] py-3 text-[13px] leading-5"><Icon name={signal.ok ? 'check' : 'close'} size={14} className={`mt-[3px] shrink-0 ${signal.ok ? 'text-ok' : 'text-muted'}`} /><span className="min-w-0 flex-1"><span className="block text-paper">{signal.text}</span><SignalSources signal={signal} /></span></li>)}
         </ul>
+        <Steps steps={found.lookups} className="mt-3" />
       </section>}
+      {!found.signals.length && <Steps steps={found.lookups} className={section} />}
 
       {found.steps.length > 0 && <section className={section} aria-label="How to fix it">
         <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-2"><h2 className="m-0 text-sm font-semibold text-paper">How to fix it</h2><span className="text-xs text-muted">You run these yourself. Infradeck can't change your servers.</span></div>
@@ -268,7 +271,7 @@ function Chat({ user, incident, enabled, offReason, phone = false, back }) {
     try {
       if (!exists.current) { await post('/conversations', { conversation_id: conversationId, title: incident ? `${incident.reference} · ${incident.title}`.slice(0, 250) : 'New chat' }); exists.current = true }
       const reply = await post('/agent/chat', { conversation_id: conversationId, message, incident_id: incident?.id })
-      setMessages((current) => [...current, { id: `reply-${Date.now()}`, role: 'agent', text: reply.message }])
+      setMessages((current) => [...current, { id: `reply-${Date.now()}`, role: 'agent', text: reply.message, steps: reply.steps || [] }])
     } catch (requestError) { setError(requestError.message || 'The agent could not answer.') } finally { setBusy(false) }
   }
   const restart = async () => {
@@ -287,7 +290,7 @@ function Chat({ user, incident, enabled, offReason, phone = false, back }) {
         {enabled && messages?.length === 0 && <p className="m-0 text-[13px] leading-5 text-muted">{incident ? 'The agent is given this incident\'s facts with your question.' : 'Ask about any server.'}</p>}
         {enabled && (messages || []).map((message) => (message.role === 'user'
           ? <div key={message.id} className="ml-10 rounded-lg border border-line bg-ink px-4 py-3 text-sm leading-[21px] text-paper">{message.text}</div>
-          : <div key={message.id}><div className="mb-2 flex items-center gap-2 text-xs text-muted">{agentMark}Agent</div><p className="m-0 whitespace-pre-wrap text-sm leading-[23px] text-paper">{message.text}</p></div>))}
+          : <div key={message.id}><div className="mb-2 flex items-center gap-2 text-xs text-muted">{agentMark}Agent</div><p className="m-0 whitespace-pre-wrap text-sm leading-[23px] text-paper">{message.text}</p><Steps steps={message.steps} title="Looked up" className="mt-2" /></div>))}
         {busy && <p className="m-0 flex items-center gap-2.5 text-xs text-muted"><span className="spinner" />Thinking…</p>}
         {error && <Notice>{error}</Notice>}
         <div ref={end} />
@@ -318,7 +321,7 @@ function Chat({ user, incident, enabled, offReason, phone = false, back }) {
         </div>}
         {enabled && (messages || []).map((message) => (message.role === 'user'
           ? <div key={message.id} className="ml-8 rounded-md border border-line bg-ink px-3.5 py-2.5 text-[13px] leading-5 text-paper">{message.text}</div>
-          : <div key={message.id}><div className="mb-1.5 flex items-center gap-2 text-xs text-muted"><span aria-hidden="true" className="inline-flex flex-col gap-[2px]"><i className="block h-[3px] w-[5px] bg-paper" /><i className="ml-[2px] block h-[3px] w-[5px] bg-signal" /><i className="block h-[3px] w-[5px] bg-paper" /></span>Agent</div><p className="m-0 whitespace-pre-wrap text-[13px] leading-[21px] text-paper">{message.text}</p></div>))}
+          : <div key={message.id}><div className="mb-1.5 flex items-center gap-2 text-xs text-muted"><span aria-hidden="true" className="inline-flex flex-col gap-[2px]"><i className="block h-[3px] w-[5px] bg-paper" /><i className="ml-[2px] block h-[3px] w-[5px] bg-signal" /><i className="block h-[3px] w-[5px] bg-paper" /></span>Agent</div><p className="m-0 whitespace-pre-wrap text-[13px] leading-[21px] text-paper">{message.text}</p><Steps steps={message.steps} title="Looked up" className="mt-2" /></div>))}
         {busy && <p className="m-0 flex items-center gap-2.5 text-xs text-muted"><span className="spinner" />Thinking…</p>}
         {error && <Notice>{error}</Notice>}
         <div ref={end} />
@@ -376,7 +379,9 @@ function PhoneIncident({ incident, canAct, onChanged, onAsk }) {
         <ul className="m-0 list-none divide-y divide-line overflow-hidden rounded-md border border-line bg-ink p-0">
           {found.signals.map((signal) => <li key={signal.text} className="flex items-start gap-3 px-4 py-3 text-[13px] leading-5"><Icon name={signal.ok ? 'check' : 'close'} size={14} className={`mt-[3px] shrink-0 ${signal.ok ? 'text-ok' : 'text-muted'}`} /><span className="min-w-0 flex-1"><span className="block text-paper">{signal.text}</span><SignalSources signal={signal} /></span></li>)}
         </ul>
+        <Steps steps={found.lookups} className="mt-3" />
       </section>}
+      {!found.signals.length && <Steps steps={found.lookups} />}
 
       {found.steps.length > 0 && <section aria-label="How to fix it">
         <h2 className="m-0 mb-1 text-[15px] font-semibold text-paper">How to fix it</h2>

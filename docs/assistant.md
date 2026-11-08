@@ -62,7 +62,9 @@ When a warning or critical incident opens, or gets worse, the backend queues a j
    tools (so the look-ups aren't paid for twice), then saved as a failed report.
 
 Each diagnosis is a new version in `agent_reports`, with the evidence pack and every look-up it made (tool,
-arguments, result) kept next to it. The incident page (Agent) says which model wrote it, when, and
+arguments, result) kept next to it. Under the signals, **How the agent got there** (folded away) lists the
+look-ups: the question the agent gave for each, what it looked up, and one line of what it found, taken from the
+data by Infradeck, not written by the model ([details](agent-investigation.md#who-writes-what)). The incident page (Agent) says which model wrote it, when, and
 how sure it is, and shows its summary, signals with the facts they rest on, and fix steps; with no diagnosis it
 shows the rule-based one and says so. The evidence chart, recorded events and timeline always come from stored
 data, never from the model. The Overview shows the first sentence next to the incident.
@@ -114,7 +116,8 @@ off, the budget used up, or the worker not running. Resolved notifications never
 The chat answers questions about an incident or any server. Each message goes to the model with the incident's
 facts and the conversation so far (its latest 40 turns), and the model may look things up with the same
 [read-only tools](#what-the-agent-can-look-up) as a diagnosis, up to 4 calls per message by default. Only the
-questions and replies stay in the conversation; the look-ups of an earlier message aren't sent again. Every reply
+questions and replies stay in the conversation; the look-ups of an earlier message aren't sent again. Under a reply
+that used tools, **Looked up** (folded away) shows them the same way as in a diagnosis, and stays after a reload. Every reply
 is held to a JSON schema with the provider's structured output: one message. All three providers sit behind one
 small interface (`src/agent/providers/`): Claude through Anthropic's Messages API; OpenAI through its Responses API
 (the only one where its reasoning models can use tools), sent with `store: false` so nothing is kept at OpenAI, with
@@ -129,6 +132,9 @@ back before the web server stops waiting (120 seconds). The chat has no code pat
 only read Infradeck's database, and the reply is text.
 
 ## What the agent can look up
+
+> How an investigation runs end to end, who writes each part of what you see, and what is checked and stored:
+> [How the agent investigates](agent-investigation.md).
 
 Besides the evidence pack, the agent has eleven **read-only tools** (`src/agent/tools/`): questions it can ask
 Infradeck's database while it investigates, such as "how did CPU change on 3 November between 10:00 and 12:00" or

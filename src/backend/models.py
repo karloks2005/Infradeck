@@ -107,6 +107,8 @@ class ChatMessage(Base):
     conversation_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    # An agent reply's look-ups in plain words (src/agent/steps.py), as JSON; none for questions and older replies.
+    steps: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
     

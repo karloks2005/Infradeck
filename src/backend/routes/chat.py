@@ -4,6 +4,7 @@ tune them) and the shared helpers (`_incident_context`, `send_agent_message`, `_
 this module is the HTTP layer."""
 from __future__ import annotations
 
+import json
 import logging
 from typing import Annotated
 
@@ -32,13 +33,20 @@ def list_logs(
 
     return {"logs": main.get_recent_logs(db, limit=100, user_id=user["id"], conversation_id=conversation_id)}
 
+def _steps(message: ChatMessage) -> list[dict]:
+    try:
+        return json.loads(message.steps) if message.steps else []
+    except ValueError:
+        return []
+
+
 def _conversation_payload(conversation: Conversation, messages: list[ChatMessage]) -> dict:
     return {
         "id": conversation.id,
         "title": conversation.title,
         "created_at": conversation.created_at.isoformat(),
         "updated_at": conversation.updated_at.isoformat(),
-        "messages": [{"id": item.id, "role": item.role, "text": item.content, "created_at": item.created_at.isoformat()} for item in messages],
+        "messages": [{"id": item.id, "role": item.role, "text": item.content, "created_at": item.created_at.isoformat(), "steps": _steps(item)} for item in messages],
     }
 
 @router.get("/conversations")
@@ -138,7 +146,7 @@ def agent_chat(payload: main.AgentChatRequest, session_id: Annotated[str | None,
                            user_id=user["id"], conversation_id=payload.conversation_id, incident_id=payload.incident_id)
 
     try:
-        response_text = main.send_agent_message(
+        answer = main.send_agent_message(
             user["id"],
             payload.conversation_id,
             main._incident_context(db, payload.incident_id) + message,
@@ -173,6 +181,7 @@ def agent_chat(payload: main.AgentChatRequest, session_id: Annotated[str | None,
     steps = ["Received the task and evaluated the request.", "Generated a structured response for the requested task."]
     main._warn_about_budget(db, spend)
 
+    response_text = answer.message
     main.record_audit_log(
         db,
         user_id=user["id"],
@@ -183,6 +192,6 @@ def agent_chat(payload: main.AgentChatRequest, session_id: Annotated[str | None,
         steps=steps,
         conversation_id=conversation.id,
     )
-    db.add(ChatMessage(conversation_id=conversation.id, role="agent", content=response_text))
+    db.add(ChatMessage(conversation_id=conversation.id, role="agent", content=response_text, steps=json.dumps(answer.steps, ensure_ascii=False) if answer.steps else None))
     db.commit()
-    return {"message": response_text}
+    return {"message": response_text, "steps": answer.steps}

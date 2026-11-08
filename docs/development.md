@@ -137,6 +137,7 @@ src/
     chat.py, prompts.py, SYSTEM_PROMPT.md  the incident chat and its instructions
     investigate.py          the look-up loop of a diagnosis or chat message: tools within a budget, each call audited
     tools/                  the read-only look-ups the agent may make (metrics, containers, events, checks, network)
+    steps.py                each look-up in plain words for the page (no model involved)
     jobs.py                 job queue in Redis: published after an incident opens or worsens
     worker.py               the agent-worker container: runs the queued jobs
     usage.py                tokens, cost per model, monthly budget, daily chat limit

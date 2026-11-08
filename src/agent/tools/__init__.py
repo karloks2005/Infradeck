@@ -6,7 +6,8 @@ before anything is read. What comes back is bounded (a few dozen points per seri
 clipped text, about 12 KB in all), masked (masking.py), and carries fact IDs that a diagnosis can cite; ``labels``
 says what each ID is. Check targets are always shown without credentials or query string, as non-admins see them,
 because the result goes to the model provider; nothing that only admins can see (IP addresses, users, the audit log,
-enrolment) is returned, so a tool gives the same answer whoever is asking.
+enrolment) is returned, so a tool gives the same answer whoever is asking. Every call also carries a ``reason``, the
+question the model wants answered, which only steps.py uses.
 
 The loop that offers these to the model, with its budget and audit log, is investigate.py. See docs/assistant.md.
 """
@@ -29,7 +30,13 @@ MAX_STRING = 200
 MAX_ITEMS = 12
 
 
+REASON = {"type": "string", "description": "One sentence: the question this call should answer, such as \"Did memory grow in the days before "
+           "the restarts?\". Write it before you see the result. It is shown to the people reading your answer."}
+
+
 def _object(**properties) -> dict:
+    """A tool's arguments. Every tool also takes ``reason``, which the tool itself ignores (steps.py shows it)."""
+    properties = {**properties, "reason": REASON}
     return {"type": "object", "properties": properties, "required": list(properties), "additionalProperties": False}
 
 
