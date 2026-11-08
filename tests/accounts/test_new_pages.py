@@ -351,7 +351,7 @@ def test_a_server_is_renamed_and_keeps_the_name_and_the_install_describes_itself
 
 def test_admin_tests_the_agent_connection_and_the_key_never_comes_back(app, monkeypatch):
     owner = signed_in(app, 1)
-    monkeypatch.setattr(main, "check_provider_connection", lambda db: {"provider": "Anthropic", "model": "claude-test"})
+    monkeypatch.setattr(main, "check_provider_connection", lambda db, user_id=None: {"provider": "Anthropic", "model": "claude-test"})
 
     saved = owner.put("/admin/agent/provider", json={"provider": "anthropic", "model": "claude-test", "api_key": "sk-ant-test-secret-value", **confirmed(app, owner)})
     system = owner.get("/admin/system")
@@ -365,7 +365,7 @@ def test_admin_tests_the_agent_connection_and_the_key_never_comes_back(app, monk
 def test_a_failed_agent_connection_test_explains_itself_without_the_key(app, monkeypatch):
     owner = signed_in(app, 1)
 
-    def rejected(db):
+    def rejected(db, user_id=None):
         raise RuntimeError("Error code: 401 - Incorrect API key provided: sk-test-secret-value")
     monkeypatch.setattr(main, "check_provider_connection", rejected)
 

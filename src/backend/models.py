@@ -509,7 +509,7 @@ class AgentRun(Base):
     __table_args__ = (Index("ix_agent_runs_created", "created_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    kind: Mapped[str] = mapped_column(String(16), nullable=False)  # chat | diagnosis
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)  # chat | diagnosis | test (Admin's Test connection)
     status: Mapped[str] = mapped_column(String(16), nullable=False)  # ok | error
     model: Mapped[str] = mapped_column(String(100), nullable=False)
     input_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

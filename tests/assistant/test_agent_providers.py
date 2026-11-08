@@ -11,6 +11,7 @@ from src.agent import chat as agent_service, providers
 from src.agent.providers import Completion, NoApiKey
 from src.agent.providers.claude import ClaudeProvider
 from src.agent.providers.openai_compatible import GEMINI_BASE_URL, OpenAIProvider
+from src.agent.providers.openai_responses import OpenAIResponsesProvider
 from src.backend import secrets_box
 from src.backend.models import AppSetting, Base
 
@@ -77,7 +78,7 @@ def test_without_a_choice_the_agent_has_no_provider(db):
         providers.get_provider(db)
 
 
-@pytest.mark.parametrize("provider, cls, model", [("anthropic", ClaudeProvider, "claude-haiku-5-5"), ("openai", OpenAIProvider, "gpt-6-luna"), ("gemini", OpenAIProvider, "gemini-3.1-flash-lite")])
+@pytest.mark.parametrize("provider, cls, model", [("anthropic", ClaudeProvider, "claude-haiku-5-5"), ("openai", OpenAIResponsesProvider, "gpt-6-luna"), ("gemini", OpenAIProvider, "gemini-3.1-flash-lite")])
 def test_each_provider_starts_with_its_own_default_model(db, provider, cls, model):
     providers.save(db, provider, None, "test-key-123")
 

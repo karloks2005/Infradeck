@@ -8,6 +8,7 @@ import pytest
 from src.agent.providers import Tool, ToolResult
 from src.agent.providers.claude import ClaudeProvider
 from src.agent.providers.openai_compatible import GEMINI_BASE_URL, OpenAIProvider
+from src.agent.providers.openai_responses import OpenAIResponsesProvider
 
 ANSWER = '{"message":"Done."}'
 SCHEMA = {"type": "object", "properties": {"message": {"type": "string"}}, "required": ["message"], "additionalProperties": False}
@@ -59,19 +60,56 @@ class FakeOpenAI:
         return self.calls[index]["tool_choice"]
 
 
+class Item(NS):
+    """An output item of the Responses API: the SDK's are models that can be dumped back into the next input."""
+
+    def model_dump(self, **_):
+        return {key: value.model_dump() if isinstance(value, Item) else [part.model_dump() for part in value] if isinstance(value, list) else value
+                for key, value in vars(self).items()}
+
+
+class FakeResponses:
+    """OpenAI's Responses API: a turn is the answer (a message with output_text) or tool calls, after a reasoning item."""
+
+    def __init__(self, *turns, refusal=None, raw_arguments=None, status="completed", incomplete=None):
+        self.turns, self.calls, self.refusal, self.raw_arguments = list(turns), [], refusal, raw_arguments
+        self.status, self.incomplete = status, incomplete
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        turn = self.turns.pop(0)
+        reasoning = Item(type="reasoning", id="rs_1", summary=[], encrypted_content="opaque")
+        if isinstance(turn, str):
+            part = Item(type="refusal", refusal=self.refusal) if self.refusal else Item(type="output_text", text=turn, annotations=[])
+            output = [reasoning, Item(type="message", id="msg_1", role="assistant", status="completed", content=[part])]
+            text = "" if self.refusal else turn
+        else:
+            output = [reasoning] + [Item(type="function_call", id=f"fc_{call_id}", call_id=call_id, name="get_host_summary", arguments=self.raw_arguments or json.dumps(args))
+                                    for call_id, args in turn]
+            text = ""
+        return NS(output=output, output_text=text, status=self.status, incomplete_details=NS(reason=self.incomplete), model="gpt-test",
+                  usage=NS(input_tokens=100, output_tokens=10))
+
+    def sent(self, index):
+        return self.calls[index]["input"]
+
+    def tool_choice(self, index):
+        return self.calls[index]["tool_choice"]
+
+
 def claude(fake):
     return ClaudeProvider("key", "claude-test", client=NS(messages=fake))
 
 
 def openai(fake):
-    return OpenAIProvider("key", "gpt-test", client=NS(chat=NS(completions=fake)))
+    return OpenAIResponsesProvider("key", "gpt-test", client=NS(responses=fake))
 
 
 def gemini(fake):
     return OpenAIProvider("key", "gpt-test", name="Google Gemini", base_url=GEMINI_BASE_URL, client=NS(chat=NS(completions=fake)))
 
 
-PROVIDERS = [pytest.param(claude, FakeClaude, id="claude"), pytest.param(openai, FakeOpenAI, id="openai"), pytest.param(gemini, FakeOpenAI, id="gemini")]
+PROVIDERS = [pytest.param(claude, FakeClaude, id="claude"), pytest.param(openai, FakeResponses, id="openai"), pytest.param(gemini, FakeOpenAI, id="gemini")]
 
 
 @pytest.mark.parametrize("build, Fake", PROVIDERS)
@@ -124,9 +162,11 @@ def test_several_tool_calls_in_one_turn_get_all_their_results(build, Fake):
     conversation.step()
 
     sent = fake.sent(1)
-    if Fake is FakeClaude:   # one user message with both results
+    if Fake is FakeClaude:       # one user message with both results
         assert [block["tool_use_id"] for block in sent[-1]["content"]] == ["call_1", "call_2"]
-    else:                    # one tool message per result
+    elif Fake is FakeResponses:  # one function_call_output item per result
+        assert [(item["type"], item["call_id"]) for item in sent[-2:]] == [("function_call_output", "call_1"), ("function_call_output", "call_2")]
+    else:                        # one tool message per result
         assert [message["tool_call_id"] for message in sent[-2:]] == ["call_1", "call_2"]
 
 
@@ -141,6 +181,8 @@ def test_a_failed_tool_is_reported_as_an_error(build, Fake):
     result = fake.sent(1)[-1]
     if Fake is FakeClaude:
         assert result["content"][0]["is_error"] is True
+    elif Fake is FakeResponses:
+        assert result["output"] == "Error: No such server."
     else:
         assert result["content"] == "Error: No such server."
 
@@ -176,18 +218,52 @@ def test_claude_refusing_midway_is_an_error():
 
 def test_openai_refusing_is_an_error():
     with pytest.raises(ValueError, match="refused"):
-        openai(FakeOpenAI(ANSWER, refusal="I can't help with that.")).start(MESSAGES, TOOLS, SCHEMA, "reply").step()
+        openai(FakeResponses(ANSWER, refusal="I can't help with that.")).start(MESSAGES, TOOLS, SCHEMA, "reply").step()
 
 
+def test_gemini_refusing_is_an_error():
+    with pytest.raises(ValueError, match="refused"):
+        gemini(FakeOpenAI(ANSWER, refusal="I can't help with that.")).start(MESSAGES, TOOLS, SCHEMA, "reply").step()
+
+
+@pytest.mark.parametrize("build, Fake", [pytest.param(openai, FakeResponses, id="openai"), pytest.param(gemini, FakeOpenAI, id="gemini")])
 @pytest.mark.parametrize("raw", ["{not json", "[1, 2]"])
-def test_openai_tool_arguments_must_be_a_json_object(raw):
+def test_openai_tool_arguments_must_be_a_json_object(build, Fake, raw):
     with pytest.raises(ValueError, match="tool arguments"):
-        openai(FakeOpenAI([("call_1", {})], raw_arguments=raw)).start(MESSAGES, TOOLS, SCHEMA, "reply").step()
+        build(Fake([("call_1", {})], raw_arguments=raw)).start(MESSAGES, TOOLS, SCHEMA, "reply").step()
 
 
-def test_openai_tools_are_strict_functions():
+def test_openai_uses_the_responses_api_with_strict_tools_reasoning_and_nothing_stored():
+    fake = FakeResponses(ANSWER)
+    openai(fake).start(MESSAGES, TOOLS, SCHEMA, "reply", effort="high").step()
+
+    sent = fake.calls[0]
+    assert sent["tools"][0] == {"type": "function", "name": "get_host_summary", "description": TOOLS[0].description, "parameters": TOOLS[0].schema, "strict": True}
+    assert sent["text"]["format"] == {"type": "json_schema", "name": "reply", "schema": SCHEMA, "strict": True}
+    assert sent["reasoning"] == {"effort": "high"} and sent["store"] is False and sent["include"] == ["reasoning.encrypted_content"]
+    assert sent["instructions"] == "You are the agent." and sent["input"] == [{"role": "user", "content": "Why is it slow?"}]
+
+
+def test_openai_gets_its_reasoning_back_unchanged_with_the_tool_results():
+    fake = FakeResponses([("call_1", {"server_id": 1})], ANSWER)
+    conversation = openai(fake).start(MESSAGES, TOOLS, SCHEMA, "reply")
+    conversation.step()
+    conversation.add_tool_results([ToolResult("call_1", "ok")])
+    conversation.step()
+
+    second = fake.sent(1)
+    assert [item.get("type") for item in second[1:]] == ["reasoning", "function_call", "function_call_output"]
+    assert second[1]["encrypted_content"] == "opaque" and second[2]["call_id"] == "call_1"
+
+
+def test_an_openai_answer_cut_off_is_an_error():
+    with pytest.raises(ValueError, match="cut off"):
+        openai(FakeResponses(ANSWER, status="incomplete", incomplete="max_output_tokens")).start(MESSAGES, TOOLS, SCHEMA, "reply").step()
+
+
+def test_gemini_tools_are_strict_functions():
     fake = FakeOpenAI(ANSWER)
-    openai(fake).start(MESSAGES, TOOLS, SCHEMA, "reply").step()
+    gemini(fake).start(MESSAGES, TOOLS, SCHEMA, "reply").step()
 
     function = fake.calls[0]["tools"][0]["function"]
     assert fake.calls[0]["tools"][0]["type"] == "function" and function["strict"] is True and function["parameters"] == TOOLS[0].schema

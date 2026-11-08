@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from collections.abc import Callable
 
+from . import diagnosis, tools, usage
 from .investigate import Auditor, Recorder, investigate
 from .prompts import SYSTEM_PROMPT
 from .providers import Completion, Provider, get_provider
@@ -108,6 +110,23 @@ def delete_agent_conversation(user_id: int, conversation_id: str) -> None:
         _agent_service.delete_conversation(user_id, conversation_id)
 
 
-def check_provider_connection(db) -> dict:
-    """For Admin's "Test connection": the key works and the configured model exists. Spends no tokens."""
-    return get_provider(db).check()
+TRIAL_MESSAGES = [{"role": "system", "content": "This is a connection test. Do not call any tool."},
+                  {"role": "user", "content": "Answer with the shortest values the schema allows."}]
+
+
+def check_provider_connection(db, user_id: int | None = None) -> dict:
+    """For Admin's "Test connection": the key works, the configured model exists, and the provider accepts a
+    request shaped like a diagnosis: every tool and the diagnosis schema, tools not allowed (#196). That one request
+    is the only thing here that costs tokens (a few thousand, mostly the tools' definitions), and it is
+    counted in the usage like any other (kind ``test``). Raises the provider's error when it is refused."""
+    provider = get_provider(db)
+    found = provider.check()
+    started = time.monotonic()
+    try:
+        completion = provider.start(TRIAL_MESSAGES, tools.TOOLS, diagnosis.SCHEMA, "incident_diagnosis", effort="low").step(allow_tools=False).completion
+    except Exception as exc:
+        usage.record(db, kind="test", status="error", model=provider.model, user_id=user_id, duration_ms=round((time.monotonic() - started) * 1000), error=f"{type(exc).__name__}: {exc}")
+        raise
+    usage.record(db, kind="test", model=completion.model or provider.model, input_tokens=completion.input_tokens, output_tokens=completion.output_tokens,
+                 duration_ms=round((time.monotonic() - started) * 1000), user_id=user_id)
+    return {**found, "tokens": completion.input_tokens + completion.output_tokens}

@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from src.agent import tools
+from src.agent import chat, diagnosis, tools
 from src.agent.tools import common, servers
 from src.backend import history, rollups
 from src.backend.models import (AppSetting, Base, Check, CheckResult, ContainerMetric, FirewallState, HostMetric, HostRollup, IncidentAlert, ListenerState,
@@ -106,6 +106,32 @@ def test_every_tool_is_listed_once_with_a_strict_schema():
     assert sorted(names) == sorted(name for name, _ in EVERY_CALL) and len(names) == 11
     assert all(_strict(tool.schema) for tool in tools.TOOLS)
     assert set(servers.HOST_METRICS) <= set(history.HOST_METRICS)
+
+
+def _unions(schema) -> int:
+    """Parameters that may hold more than one type (anyOf, or a list of types), as Anthropic counts them."""
+    if isinstance(schema, dict):
+        return int("anyOf" in schema or isinstance(schema.get("type"), list)) + sum(_unions(value) for value in schema.values())
+    if isinstance(schema, list):
+        return sum(_unions(value) for value in schema)
+    return 0
+
+
+@pytest.mark.parametrize("answer", [diagnosis.SCHEMA, chat.REPLY_SCHEMA], ids=["diagnosis", "chat"])
+def test_no_request_has_more_union_typed_parameters_than_the_provider_accepts(answer):
+    # Anthropic rejects strict schemas with more than 16 nullable or union-typed parameters over all tools and the
+    # answer's schema of one request (#196), so the tools themselves have none.
+    assert sum(_unions(tool.schema) for tool in tools.TOOLS) == 0
+    assert _unions(answer) <= 16
+
+
+def test_an_optional_argument_left_empty_or_null_means_not_given(db):
+    empty = tools.run(db, "host_metrics", {"server": "web1", "metrics": ["cpu"], "from": "", "to": " "}, now=NOW)
+    null = tools.run(db, "host_metrics", {"server": "web1", "metrics": ["cpu"], "from": None, "to": None}, now=NOW)
+
+    assert empty.content == null.content and json.loads(empty.content)["to"] == "2026-11-07T12:00+00:00"
+    with pytest.raises(tools.ToolError, match="non-empty"):
+        tools.run(db, "server_info", {"server": ""}, now=NOW)   # a required one may not be empty
 
 
 def test_an_unknown_tool_is_refused(db):

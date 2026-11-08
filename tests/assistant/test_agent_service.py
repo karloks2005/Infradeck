@@ -25,11 +25,42 @@ def test_a_reply_without_a_message_is_an_error():
         make_service().send(1, "conversation", "Hello", ScriptedProvider('{"message":"  "}'))
 
 
+def test_test_connection_tries_one_request_shaped_like_a_diagnosis_and_counts_it(monkeypatch):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from src.agent import diagnosis, tools
+    from src.backend.models import AgentRun, Base
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    provider = ScriptedProvider('{"summary":"x"}', tokens=(3100, 40))
+    provider.check = lambda: {"provider": "Anthropic", "model": "claude-test"}
+    monkeypatch.setattr(agent_service, "get_provider", lambda db: provider)
+
+    result = agent_service.check_provider_connection(db, user_id=1)
+
+    assert result == {"provider": "Anthropic", "model": "claude-test", "tokens": 3140}
+    assert provider.started[0]["tools"] == [tool.name for tool in tools.TOOLS] and provider.started[0]["schema_name"] == "incident_diagnosis"
+    assert provider.allowed == [False]   # the tools are listed, as in a diagnosis, but not called
+    run = db.query(AgentRun).one()
+    assert (run.kind, run.status, run.input_tokens, run.user_id) == ("test", "ok", 3100, 1)
+
+    refused = ScriptedProvider(ValueError("Schemas contains too many parameters with union types"))
+    refused.check = provider.check
+    monkeypatch.setattr(agent_service, "get_provider", lambda db: refused)
+    with pytest.raises(ValueError, match="union types"):
+        agent_service.check_provider_connection(db)
+    assert [run.status for run in db.query(AgentRun).order_by(AgentRun.id)] == ["ok", "error"]
+    assert diagnosis.SCHEMA   # the same schema a diagnosis uses
+
+
 def test_the_reply_can_only_be_a_message():
     assert agent_service.REPLY_SCHEMA["properties"].keys() == {"message"} and agent_service.REPLY_SCHEMA["additionalProperties"] is False
 
 
-# --- the OpenAI provider ----------------------------------------------------------------------------------------
+# --- the Chat Completions provider (Gemini's OpenAI-compatible endpoint) ----------------------------------------
 
 from types import SimpleNamespace
 
@@ -53,7 +84,7 @@ def fake_client(completions):
     return SimpleNamespace(chat=SimpleNamespace(completions=completions), models=SimpleNamespace(retrieve=lambda model: SimpleNamespace(id=model)))
 
 
-def test_openai_provider_asks_for_the_reply_schema_and_reports_tokens():
+def test_the_chat_completions_provider_asks_for_the_reply_schema_and_reports_tokens():
     completions = FakeCompletions()
     provider = OpenAIProvider("sk-test", "gpt-test", client=fake_client(completions))
 

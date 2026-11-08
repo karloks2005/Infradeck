@@ -50,9 +50,9 @@ export default function AgentProvider({ agent, user, secretsConfigured, onChange
   return (
     <>
       <Row icon="AI" title="Model provider" detail={detail} tone={agent.key_configured ? undefined : 'warn'}>
-        <button type="button" className="btn btn-sm" disabled={!agent.key_configured || test.busy} title={agent.key_configured ? 'Checks the key and the model without spending tokens.' : 'Save an API key first.'} onClick={runTest}>{test.busy ? 'Testing…' : 'Test connection'}</button>
+        <button type="button" className="btn btn-sm" disabled={!agent.key_configured || test.busy} title={agent.key_configured ? 'Checks the key, the model, and one small request with the agent\'s tools (a few thousand tokens).' : 'Save an API key first.'} onClick={runTest}>{test.busy ? 'Testing…' : 'Test connection'}</button>
       </Row>
-      {(test.error || tested) && <div className="px-[18px] py-2.5">{test.error ? <p role="alert" className="m-0 text-xs text-warn">{test.error}</p> : <p role="status" className="m-0 text-xs text-ok">Connected. {tested.provider} accepts the key and offers {tested.model}.</p>}</div>}
+      {(test.error || tested) && <div className="px-[18px] py-2.5">{test.error ? <p role="alert" className="m-0 text-xs text-warn">{test.error}</p> : <p role="status" className="m-0 text-xs text-ok">Connected. {tested.provider} accepts the key, offers {tested.model} and takes the agent's tools{tested.tokens ? ` (${tested.tokens.toLocaleString()} tokens)` : ''}.</p>}</div>}
       <form className="grid items-start gap-3 px-[18px] py-3.5 md:grid-cols-[10rem_minmax(0,1fr)_minmax(0,1.5fr)_auto]" onSubmit={save}>
         <Field label="Provider">
           <select className="select h-9 w-full" value={provider} disabled={state.busy} onChange={(event) => choose(event.target.value)}>

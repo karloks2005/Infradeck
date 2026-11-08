@@ -222,8 +222,10 @@ class MetricsIngestRequest(BaseModel):
     containers: list[dict] = []
 
 
-def agent_error_message(exc: Exception) -> str:
-    """Turn provider failures into useful, non-sensitive chat text."""
+def agent_error_message(exc: Exception, detail: bool = False) -> str:
+    """Turn provider failures into useful, non-sensitive text. Only ``detail=True`` (for admins, such as Test
+    connection) adds the provider's own words, redacted; the chat gets the plain sentence and the details go to the
+    server log and the agent's usage record (agent_error_detail)."""
     if isinstance(exc, NoApiKey):
         return "The agent has no API key. An admin adds one in Admin › Incident agent."
     raw_message = str(exc).strip()
@@ -238,16 +240,17 @@ def agent_error_message(exc: Exception) -> str:
         prefix = "The AI provider's rate limit or quota was reached. Please try again later."
     elif any(marker in normalized for marker in ("timeout", "timed out", "deadline exceeded")):
         prefix = "The AI provider did not respond before the request timed out. Please try again."
+    elif any(marker in normalized for marker in (" 400", "status 400", "invalid_request")):
+        prefix = "The AI provider rejected the request. An admin finds the reason in the backend's log, or with Test connection in Admin › Incident agent."
     else:
         prefix = "The AI provider could not complete this request."
+    return f"{prefix} Provider error: {agent_error_detail(exc)}" if detail and raw_message else prefix
 
-    if not raw_message:
-        return prefix
-    # Errors can include request headers or provider diagnostics: keep a short,
-    # redacted detail for the administrator without leaking credentials.
-    detail = re.sub(r"(?i)(api[_ -]?key|authorization|token)\s*[:=]\s*\S+", r"\1=[redacted]", raw_message)
-    detail = re.sub(r"(AIza|sk-)[\w-]+", "[redacted]", detail)[:300]
-    return f"{prefix} Provider error: {detail}"
+
+def agent_error_detail(exc: Exception) -> str:
+    """The provider's own error, short and with keys redacted: errors can include request headers or diagnostics."""
+    text = re.sub(r"(?i)(api[_ -]?key|authorization|token)\s*[:=]\s*\S+", r"\1=[redacted]", str(exc).strip())
+    return re.sub(r"(AIza|sk-)[\w-]+", "[redacted]", text)[:300]
 
 
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
