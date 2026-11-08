@@ -174,6 +174,9 @@ def run(db, name: str, arguments, now: datetime | None = None) -> Output:
     if name not in _REGISTRY:
         raise ToolError(f"There is no tool named {str(name)[:60]!r}.")
     tool, handler = _REGISTRY[name]
+    if isinstance(arguments, dict):
+        # A model without strict tools (Claude, #199) may leave out an optional argument: that is "not given" too.
+        arguments = {**{key: None for key, schema in tool.schema["properties"].items() if isinstance(schema, _Optional)}, **arguments}
     _check(tool.schema, arguments, "arguments")
     # An optional argument left empty reaches the tool as None, whether the model sent "" or null.
     arguments = {key: None if isinstance(tool.schema["properties"][key], _Optional) and _blank(value) else value for key, value in arguments.items()}

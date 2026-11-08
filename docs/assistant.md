@@ -26,8 +26,9 @@ change files on your servers. Everything about it is in `src/agent/` and in **Ad
    Another model works if it supports structured (JSON schema) output and tool calls. With OpenAI it must be a
    reasoning model (the gpt-5 family and later): the agent sets how hard it thinks.
 4. **Test connection** checks the key, that the model exists, and that the provider accepts the agent's real
-   requests: one small request with every tool and the diagnosis schema. It costs a few thousand tokens (about
-   2 000 to 4 500 in our tests), counted in the usage like any other call. Run it after changing the provider or
+   requests: one small request exactly as a diagnosis sends it, with every tool (calls allowed, though the model is
+   told not to make any, and one it makes anyway isn't run) and the diagnosis schema. It costs a few thousand tokens
+   (about 2 000 to 5 000 in our tests), counted in the usage like any other call. Run it after changing the provider or
    the model; a provider that refuses the request says why here, instead of every diagnosis failing later.
 5. Enter the model's price per million tokens under **Prices** (from the provider's pricing page), so its calls
    count towards the budget, and set a **Monthly budget** if you want one.
@@ -119,7 +120,9 @@ facts and the conversation so far (its latest 40 turns), and the model may look 
 questions and replies stay in the conversation; the look-ups of an earlier message aren't sent again. Under a reply
 that used tools, **Looked up** (folded away) shows them the same way as in a diagnosis, and stays after a reload. Every reply
 is held to a JSON schema with the provider's structured output: one message. All three providers sit behind one
-small interface (`src/agent/providers/`): Claude through Anthropic's Messages API; OpenAI through its Responses API
+small interface (`src/agent/providers/`): Claude through Anthropic's Messages API, with the tools sent without
+`strict` (Anthropic compiles strict tools and the strict answer schema into one grammar whose size limit the agent's
+tools exceed; the answer stays strict and the backend checks every call itself); OpenAI through its Responses API
 (the only one where its reasoning models can use tools), sent with `store: false` so nothing is kept at OpenAI, with
 the model's reasoning carried from one step to the next in encrypted form; Gemini through Google's OpenAI-compatible
 Chat Completions endpoint.
@@ -195,7 +198,9 @@ facts each carry an `id` added with `facts.add`. Register it in `tools/__init__.
 strict schema (every property required, `additionalProperties: false`, and an optional text argument made with
 `_optional`, a plain string where empty means "not given", never a nullable type: Anthropic refuses strict schemas
 with more than 16 nullable or union-typed parameters per request, counted over every tool and the answer's schema,
-and `test_no_request_has_more_union_typed_parameters_than_the_provider_accepts` checks it), and add tests to
+and `test_no_request_has_more_union_typed_parameters_than_the_provider_accepts` checks it). After adding a tool, run
+**Test connection** with Claude: the size of the grammar its answer schema compiles to has a limit that no local test
+can check. Add tests to
 `tests/assistant/test_agent_tools.py`: the shared tests then check that it stays bounded, masked, labelled and
 read-only.
 

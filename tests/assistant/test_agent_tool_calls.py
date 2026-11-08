@@ -149,7 +149,8 @@ def test_claude_gets_its_own_answer_back_untouched_thinking_included():
     assistant = fake.sent(1)[1]
     assert assistant["role"] == "assistant" and assistant["content"][0].type == "thinking"
     tool = fake.calls[0]["tools"][0]
-    assert tool["strict"] is True and tool["input_schema"] == TOOLS[0].schema and fake.calls[0]["system"] == "You are the agent."
+    # Claude's tools aren't strict (its compiled grammar has a size limit the agent's tools exceed, #199); the answer is.
+    assert "strict" not in tool and tool["input_schema"] == TOOLS[0].schema and fake.calls[0]["system"] == "You are the agent."
 
 
 @pytest.mark.parametrize("build, Fake", PROVIDERS)
