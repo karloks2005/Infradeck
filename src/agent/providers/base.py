@@ -67,6 +67,11 @@ class Conversation:
     def _append_results(self, results: list[ToolResult]) -> None:
         raise NotImplementedError
 
+    def add_user(self, text: str) -> None:
+        """A follow-up written by the agent itself, never by a monitored machine: why the last answer couldn't be
+        used. Both providers keep plain {"role", "content"} turns in ``self.history``."""
+        self.history.append({"role": "user", "content": text})
+
 
 class Provider(Protocol):
     name: str

@@ -122,7 +122,7 @@ class ConversationRequest(BaseModel):
     title: str = Field(default="New chat", max_length=255)
 
 
-RESERVED_EVENT_TYPES = {"health_check_completed", "credentials_replaced", "login", "logout"}
+RESERVED_EVENT_TYPES = {"agent_tool_call", "health_check_completed", "credentials_replaced", "login", "logout"}
 
 
 class LogCreateRequest(BaseModel):
@@ -198,6 +198,9 @@ class AdminSettingsRequest(BaseModel):
     agent_auto_diagnose: bool | None = None
     agent_show_diagnoses_to_users: bool | None = None
     agent_chat_access: Literal["admins_only", "per_user"] | None = None
+    # How many look-ups the agent may make per diagnosis and per chat message (0: none).
+    agent_tool_budget_diagnosis: int | None = None
+    agent_tool_budget_chat: int | None = None
     # Turning the agent on, or letting more people use it, is confirmed with the password and a code (reauth.py).
     reauth_token: str | None = Field(default=None, max_length=100)
     code: str | None = Field(default=None, max_length=64)
@@ -207,7 +210,9 @@ def _starts_sending_data(db, payload: AdminSettingsRequest) -> bool:
     """Whether the change turns something on that sends data to the AI provider, or lets more people do so."""
     return ((payload.agent_chat_enabled is True and not is_agent_chat_enabled(db))
             or (payload.agent_auto_diagnose is True and not agent_settings.auto_diagnose(db))
-            or (payload.agent_chat_access == "per_user" and agent_settings.chat_access(db) != "per_user"))
+            or (payload.agent_chat_access == "per_user" and agent_settings.chat_access(db) != "per_user")
+            # Tools send more of a server's data (ports, firewall, history) than the evidence pack alone.
+            or any(getattr(payload, f"agent_tool_budget_{kind}") and not agent_settings.tool_budget(db, kind) for kind in agent_settings.TOOL_BUDGETS))
 
 
 class MetricsIngestRequest(BaseModel):
@@ -616,7 +621,8 @@ def _admin_settings(db) -> dict:
     return {"instance_name": get_instance_name(db), "history_retention_days": retention.history_days(db), "agent_chat_enabled": is_agent_chat_enabled(db), "alert_thresholds": get_alert_thresholds(db), "mount_thresholds": get_mount_thresholds(db), "require_2fa_for_admins": require_admin_two_factor(db), "secrets_configured": secrets_box.available(),
             "require_2fa_for_everyone": require_two_factor_for_everyone(db), "disabled_rules": sorted(get_disabled_rules(db)),
             "agent_prices": agent_usage.get_prices(db), "agent_monthly_cap_usd": agent_usage.get_cap(db), "agent_daily_chat_limit": agent_usage.get_daily_limit(db), "agent_auto_diagnose": agent_settings.auto_diagnose(db),
-            "agent_show_diagnoses_to_users": agent_settings.show_diagnoses_to_users(db), "agent_chat_access": agent_settings.chat_access(db)}
+            "agent_show_diagnoses_to_users": agent_settings.show_diagnoses_to_users(db), "agent_chat_access": agent_settings.chat_access(db),
+            **{f"agent_tool_budget_{kind}": agent_settings.tool_budget(db, kind) for kind in agent_settings.TOOL_BUDGETS}}
 
 
 @app.get("/admin/settings")
@@ -675,6 +681,11 @@ def update_admin_settings(payload: AdminSettingsRequest, session_id: Annotated[s
             if limit != agent_usage.get_daily_limit(db):
                 _set_setting(db, agent_usage.DAILY_LIMIT_KEY, str(limit))
                 changes.append(f"Set the agent chat limit to {limit} messages per person per day")
+        for kind, (key, _default, _highest) in agent_settings.TOOL_BUDGETS.items():
+            wanted = getattr(payload, f"agent_tool_budget_{kind}")
+            if wanted is not None and agent_settings.validate_tool_budget(kind, wanted) != agent_settings.tool_budget(db, kind):
+                _set_setting(db, key, str(wanted))
+                changes.append(f"Set the agent's tool budget to {wanted} look-ups per {'diagnosis' if kind == 'diagnosis' else 'chat message'}")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if payload.agent_auto_diagnose is not None and payload.agent_auto_diagnose != agent_settings.auto_diagnose(db):
@@ -1489,14 +1500,14 @@ def dashboard_summary(
     total_users = db.query(User).count()
     total_logs = db.query(AuditLog).count()
     error_logs = db.query(AuditLog).filter(AuditLog.level.in_(["ERROR", "WARN"])).count()
-    health_checks = db.query(AuditLog).filter(AuditLog.event_type == "health_check_completed").count()
+    agent_lookups = db.query(AuditLog).filter(AuditLog.event_type == "agent_tool_call").count()
 
     return {
         "total_users": total_users,
         "total_logs": total_logs,
         "error_logs": error_logs,
         "uptime": "99.97%",
-        "health_checks": health_checks,
+        "agent_lookups": agent_lookups,
     }
 
 

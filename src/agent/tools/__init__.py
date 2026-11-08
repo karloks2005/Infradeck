@@ -8,7 +8,7 @@ says what each ID is. Check targets are always shown without credentials or quer
 because the result goes to the model provider; nothing that only admins can see (IP addresses, users, the audit log,
 enrolment) is returned, so a tool gives the same answer whoever is asking.
 
-The loop that offers these to the model, with its budget and audit log, is in #157. See docs/assistant.md.
+The loop that offers these to the model, with its budget and audit log, is investigate.py. See docs/assistant.md.
 """
 from __future__ import annotations
 

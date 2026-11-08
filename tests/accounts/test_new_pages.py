@@ -411,7 +411,7 @@ from src.backend.models import AgentRun
 
 
 def _fake_agent(monkeypatch, tokens=(1000, 200), fail=None):
-    def fake(user_id, conversation_id, message, provider, command_logger=None, usage_logger=None):
+    def fake(user_id, conversation_id, message, provider, usage_logger=None, **kwargs):
         if fail:
             raise fail
         # A dated model name, as the API reports it: it must still use the price set for "gpt-test".
@@ -639,6 +639,43 @@ def test_turning_the_agent_on_needs_the_password_and_a_code(app):
         assert owner.put("/admin/settings", json={**body, **confirmed(app, owner)}).status_code == 200
     settings = owner.get("/admin/settings").json()
     assert settings["agent_auto_diagnose"] and settings["agent_chat_enabled"] and settings["agent_chat_access"] == "per_user"
+
+
+def test_the_look_up_budgets_are_checked_audited_and_raising_one_from_0_is_confirmed(app):
+    owner = signed_in(app, 1)
+
+    assert owner.put("/admin/settings", json={"agent_tool_budget_diagnosis": 21}).status_code == 400
+    assert owner.put("/admin/settings", json={"agent_tool_budget_chat": 0}).status_code == 200        # lowering needs nothing
+    assert owner.put("/admin/settings", json={"agent_tool_budget_chat": 3}).status_code == 403        # up from 0: confirm
+    assert owner.put("/admin/settings", json={"agent_tool_budget_chat": 3, **confirmed(app, owner)}).status_code == 200
+    assert owner.put("/admin/settings", json={"agent_tool_budget_chat": 5}).status_code == 200        # already above 0
+
+    settings = owner.get("/admin/settings").json()
+    assert (settings["agent_tool_budget_diagnosis"], settings["agent_tool_budget_chat"]) == (8, 5)
+    logged = [entry.message for entry in app.db.query(AuditLog)]
+    assert any("tool budget to 0 look-ups per chat message" in message for message in logged) and any("to 5 look-ups" in message for message in logged)
+    assert signed_in(app, 3).put("/admin/settings", json={"agent_tool_budget_chat": 1}).status_code == 403
+
+
+def test_a_chat_message_looks_things_up_and_the_look_ups_outlive_the_conversation(app, monkeypatch):
+    from tests.fakes import ScriptedProvider
+    provider = ScriptedProvider([("server_info", {"server": "alpha"})], '{"message":"alpha is online."}')
+    monkeypatch.setattr(main, "get_provider", lambda db: provider)
+    monkeypatch.setattr(main, "is_agent_chat_enabled", lambda db: True)
+    owner = signed_in(app, 1)
+
+    response = _ask(owner)
+
+    assert response.status_code == 200 and response.json() == {"message": "alpha is online."}
+    assert provider.started[0]["tools"] and json.loads(provider.results[0][0].content)["hostname"] == "alpha"
+    assert app.db.query(AgentRun).count() == 2
+    looked = app.db.query(AuditLog).filter(AuditLog.event_type == "agent_tool_call").one()
+    assert (looked.user_id, looked.conversation_id, looked.task_title) == (1, "c1", "Why did it restart?")
+    assert owner.get("/dashboard/summary").json()["agent_lookups"] == 1
+
+    assert owner.delete("/conversations/c1").status_code == 200
+    kept = app.db.query(AuditLog).filter(AuditLog.event_type == "agent_tool_call").one()
+    assert kept.conversation_id is None
 
 
 def test_choosing_the_provider_needs_confirmation_but_removing_the_key_does_not(app):

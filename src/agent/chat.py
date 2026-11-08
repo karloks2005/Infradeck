@@ -1,31 +1,28 @@
+"""Chat with the agent. Each message is one investigation (investigate.py): the model may make up to the chat tool
+budget's look-ups with the read-only tools before it replies. Only the questions and the final replies stay in the
+conversation's memory; the look-ups of earlier messages are not sent again."""
 from __future__ import annotations
 
 import json
 import threading
-import time
 from collections.abc import Callable
 
-from .health_checks import HealthCheckRunner
+from .investigate import Auditor, Recorder, investigate
 from .prompts import SYSTEM_PROMPT
 from .providers import Completion, Provider, get_provider
 
 MAX_CACHED_CHATS = 200
 # Only the most recent turns go back to the model, so a long conversation can't grow every request without limit.
 MAX_HISTORY_MESSAGES = 40
+# After this long the agent stops looking things up and replies, so the request finishes before nginx gives up
+# waiting (proxy_read_timeout 120 s), even if the final call takes as long as the provider allows.
+DEADLINE_SECONDS = 45
 
-# Every reply is a message and at most one predefined check; Structured Outputs makes the model keep to it.
+# Every reply is one message; Structured Outputs makes the model keep to it.
 REPLY_SCHEMA = {
     "type": "object",
-    "properties": {
-        "message": {"type": "string"},
-        "action": {
-            "anyOf": [
-                {"type": "object", "properties": {"check": {"type": "string", "enum": sorted(HealthCheckRunner.ALLOWED_CHECKS)}}, "required": ["check"], "additionalProperties": False},
-                {"type": "null"},
-            ],
-        },
-    },
-    "required": ["message", "action"],
+    "properties": {"message": {"type": "string"}},
+    "required": ["message"],
     "additionalProperties": False,
 }
 
@@ -42,115 +39,68 @@ class Chat:
     def __init__(self):
         self.history: list[dict] = []
 
-    def send_message(self, provider: Provider, message: str) -> Reply:
+    def send_message(self, provider: Provider, message: str, db=None, budget: int = 0, record: Recorder | None = None, audit: Auditor | None = None) -> Reply:
         self.history.append({"role": "user", "content": message})
         messages = [{"role": "system", "content": SYSTEM_PROMPT}, *self.history[-MAX_HISTORY_MESSAGES:]]
         try:
-            completion = provider.complete(messages, REPLY_SCHEMA, "agent_reply", effort="low")
+            found = investigate(db, provider, messages, REPLY_SCHEMA, "agent_reply", budget=budget, effort="low", record=record or (lambda *_: None),
+                                audit=audit or (lambda _: None), deadline_seconds=DEADLINE_SECONDS)
         except Exception:
             self.history.pop()   # a failed turn is not part of the conversation
             raise
-        self.history.append({"role": "assistant", "content": completion.text})
-        return Reply(completion.text, completion)
+        self.history.append({"role": "assistant", "content": found.completion.text})
+        return Reply(found.completion.text, found.completion)
+
+
+def parse_reply(text: str) -> str:
+    try:
+        payload = json.loads(text or "")
+    except json.JSONDecodeError as exc:
+        raise ValueError("Agent returned invalid JSON.") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("message"), str) or not payload["message"].strip():
+        raise ValueError("Agent response must contain a message.")
+    return payload["message"].strip()
 
 
 class AgentService:
-    """LLM interface restricted to a small, fixed health-check capability set."""
+    """Keeps each conversation's turns in memory, so the agent remembers what was said."""
 
-    def __init__(self, health_checks: HealthCheckRunner | None = None):
-        self.health_checks = health_checks or HealthCheckRunner()
-        # Least recently used first (a dict keeps insertion order). A chat only lives in memory so the assistant
-        # remembers the conversation; the cache is bounded so endless new conversations can't grow it without limit.
+    def __init__(self):
+        # Least recently used first (a dict keeps insertion order). The cache is bounded so endless new
+        # conversations can't grow it without limit.
         self.chats = {}
         self.lock = threading.Lock()
 
-    def _new_chat(self) -> Chat:
-        return Chat()
-
-    def _get_chat(self, user_id: int, conversation_id: str):
+    def _get_chat(self, user_id: int, conversation_id: str) -> Chat:
         chat_key = (user_id, conversation_id)
         with self.lock:
             if chat_key not in self.chats:
-                self.chats[chat_key] = self._new_chat()
+                self.chats[chat_key] = Chat()
             chat = self.chats.pop(chat_key)
             self.chats[chat_key] = chat   # now the most recently used
             while len(self.chats) > MAX_CACHED_CHATS:
                 del self.chats[next(iter(self.chats))]
             return chat
 
-    @staticmethod
-    def _ask(chat, provider: Provider, message: str, usage_logger: Callable[[Completion, int], None] | None):
-        """One call to the model; ``usage_logger`` gets its tokens and how long it took, in milliseconds."""
-        started = time.monotonic()
-        reply = chat.send_message(provider, message)
-        completion = getattr(reply, "completion", None)
-        if usage_logger and completion is not None:
-            usage_logger(completion, round((time.monotonic() - started) * 1000))
-        return reply
-
-    def send(self, user_id: int, conversation_id: str, message: str, provider: Provider, command_logger: Callable[[dict], None] | None = None,
-             usage_logger: Callable[[Completion, int], None] | None = None) -> str:
+    def send(self, user_id: int, conversation_id: str, message: str, provider: Provider, *, db=None, budget: int = 0,
+             usage_logger: Callable[[Completion, int], None] | None = None, audit: Auditor | None = None) -> str:
         chat = self._get_chat(user_id, conversation_id)
-        response_text, action = self._parse_agent_response(self._response_text(self._ask(chat, provider, message, usage_logger)))
-        if not action:
-            return response_text
-
-        check_name = action["check"]
-        self._log_event(command_logger, {
-            "event_type": "health_check_requested", "message": "Agent requested a predefined health check",
-            "check": check_name,
-            "steps": ["Validated the requested check against the closed allow-list."],
-        })
-        result = self.health_checks.run(check_name)
-        level = "ERROR" if result["status"] == "critical" else "WARN" if result["status"] in {"warning", "unknown"} else "INFO"
-        self._log_event(command_logger, {
-            "event_type": "health_check_completed", "message": f"Predefined health check completed: {check_name}",
-            "check": check_name, "level": level,
-            "steps": [f"Completed predefined check '{check_name}' with status {result['status']}."],
-        })
-        final_text, final_action = self._parse_agent_response(self._response_text(self._ask(chat, provider, "[HEALTH-CHECK-RESULT]\n" + json.dumps(result), usage_logger)))
-        if final_action:
-            raise ValueError("Agent must summarize a health-check result without requesting another check.")
-        return final_text
+        return parse_reply(chat.send_message(provider, message, db, budget, usage_logger, audit).text)
 
     def delete_conversation(self, user_id: int, conversation_id: str) -> None:
         """Discard the in-memory context after its persisted chat is deleted."""
         with self.lock:
             self.chats.pop((user_id, conversation_id), None)
 
-    @staticmethod
-    def _response_text(response) -> str:
-        return getattr(response, "text", "") or "The agent returned an empty response."
-
-    @staticmethod
-    def _parse_agent_response(response_text: str) -> tuple[str, dict | None]:
-        try:
-            payload = json.loads(response_text)
-        except json.JSONDecodeError as exc:
-            raise ValueError("Agent returned invalid JSON.") from exc
-        if not isinstance(payload, dict) or not isinstance(payload.get("message"), str):
-            raise ValueError("Agent response must contain a string message.")
-        action = payload.get("action")
-        if action is None:
-            return payload["message"].strip(), None
-        if not isinstance(action, dict) or set(action) != {"check"} or action.get("check") not in HealthCheckRunner.ALLOWED_CHECKS:
-            raise ValueError("Agent requested a health check outside the allow-list.")
-        return payload["message"].strip(), {"check": action["check"]}
-
-    @staticmethod
-    def _log_event(command_logger: Callable[[dict], None] | None, event: dict) -> None:
-        if command_logger:
-            command_logger(event)
-
 
 _agent_service = None
 
 
-def send_agent_message(user_id: int, conversation_id: str, message: str, provider: Provider, command_logger=None, usage_logger=None) -> str:
+def send_agent_message(user_id: int, conversation_id: str, message: str, provider: Provider, *, db=None, budget: int = 0, usage_logger=None, audit=None) -> str:
     global _agent_service
     if _agent_service is None:
         _agent_service = AgentService()
-    return _agent_service.send(user_id, conversation_id, message, provider, command_logger=command_logger, usage_logger=usage_logger)
+    return _agent_service.send(user_id, conversation_id, message, provider, db=db, budget=budget, usage_logger=usage_logger, audit=audit)
 
 
 def delete_agent_conversation(user_id: int, conversation_id: str) -> None:

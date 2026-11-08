@@ -310,6 +310,9 @@ function Agent({ settings, system, user, onSaved, onSystemChanged }) {
       <Row title="Chat access" detail={settings.agent_chat_access === 'per_user' ? 'Admins always; everyone else only with the Agent chat switch next to their name in Users.' : 'Only owners and admins can use the chat.'}>
         <select className="select" aria-label="Chat access" value={settings.agent_chat_access || 'admins_only'} disabled={state.busy} onChange={(event) => chooseAccess(event.target.value)}><option value="admins_only">Admins only</option><option value="per_user">Per user</option></select>
       </Row>
+      <ToolBudget settings={settings} busy={state.busy} waiting={waiting} ask={(body) => ask(body, { title: 'Look-ups', from: '0', to: String(Object.values(body)[0]), action: 'Verify and save',
+        intro: 'Look-ups send more of a server\'s data (its history, ports and firewall) to an outside model.', detail: 'Look-up results will be sent to', target: where })}
+        save={(body) => run(async () => onSaved(await put(body)), 'Saved.')} />
       <Row title="Show diagnoses to users" detail="Off: only owners and admins see the agent's diagnoses and their summary in notifications; everyone else sees the rule-based diagnosis.">
         <Switch label="Show diagnoses to users" checked={settings.agent_show_diagnoses_to_users !== false} disabled={state.busy} onChange={(on) => run(async () => onSaved(await put({ agent_show_diagnoses_to_users: on })))} />
       </Row>
@@ -320,6 +323,33 @@ function Agent({ settings, system, user, onSaved, onSystemChanged }) {
     <AgentWorker />
     <AgentSpending settings={settings} onSaved={onSaved} />
   </>
+}
+
+// How many read-only look-ups (metrics, containers, events, checks …) the agent may make before it answers. Going up
+// from 0 gives it more data to send, so that is confirmed like turning the agent on.
+const BUDGETS = [['agent_tool_budget_diagnosis', 'per diagnosis', 20], ['agent_tool_budget_chat', 'per chat message', 10]]
+
+function ToolBudget({ settings, busy, waiting, ask, save }) {
+  const [values, setValues] = useState(() => Object.fromEntries(BUDGETS.map(([key]) => [key, String(settings[key] ?? '')])))
+  const submit = (key) => (event) => {
+    event.preventDefault()
+    const body = { [key]: Number(values[key]) }
+    if (settings[key] === 0 && body[key] > 0) ask(body)
+    else save(body)
+  }
+  return (
+    <Row title="Look-ups" detail="How many times the agent may look something up in Infradeck's data before it answers. More look-ups cost more tokens. 0: it answers from the incident's evidence alone.">
+      <div className="flex flex-wrap items-center gap-3">
+        {BUDGETS.map(([key, label, highest]) => (
+          <form key={key} className="flex items-center gap-2" onSubmit={submit(key)}>
+            <input type="number" min="0" max={highest} step="1" inputMode="numeric" className="field h-9 w-16" aria-label={`Look-ups ${label}`} value={values[key]} onChange={(event) => setValues({ ...values, [key]: event.target.value })} />
+            <span className="text-xs text-muted">{label}</span>
+            <button type="submit" className="btn btn-sm h-9" disabled={busy || waiting(key) || values[key] === '' || values[key] === String(settings[key])}>Save</button>
+          </form>
+        ))}
+      </div>
+    </Row>
+  )
 }
 
 const JOB_TONE = { failed: 'chip-warn', noted: '', skipped: '', diagnosed: 'chip-ok', reused: 'chip-ok' }

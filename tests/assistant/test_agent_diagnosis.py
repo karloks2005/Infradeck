@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 from src.agent import bounds, diagnosis, evidence, masking, safety, worker
 from src.agent.providers import Completion
 from src.backend.models import AgentReport, AgentRun, Base, ContainerMetric, HostMetric, IncidentAlert, Server, SystemEvent
+from tests.fakes import ScriptedProvider
 
 NOW = datetime.now(timezone.utc)
 
@@ -156,19 +157,8 @@ def test_an_unusable_answer_is_rejected(raw):
 
 # --- the whole diagnosis ----------------------------------------------------------------------------------------
 
-class FakeProvider:
-    model = "gpt-test"
-
-    def __init__(self, *answers):
-        self.answers = list(answers)
-        self.calls = []
-
-    def complete(self, messages, schema, schema_name, effort="medium"):
-        self.calls.append(messages)
-        reply = self.answers.pop(0)
-        if isinstance(reply, Exception):
-            raise reply
-        return Completion(text=reply, model="gpt-test", input_tokens=2000, output_tokens=300)
+def FakeProvider(*answers):
+    return ScriptedProvider(*answers)
 
 
 def valid_answer():

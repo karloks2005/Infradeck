@@ -163,3 +163,47 @@ class FakeRedis:
                 return results
 
         return Pipeline()
+
+
+class ScriptedProvider:
+    """A model provider that plays back scripted turns, so the agent's loop is tested without an API. A turn is
+    the final answer (a string), an exception to raise, or a list of (tool name, arguments) calls. ``calls`` keeps
+    the messages each step saw, ``allowed`` whether tools were allowed, ``results`` the tool results sent back."""
+
+    model = "gpt-test"
+
+    def __init__(self, *turns, tokens=(2000, 300)):
+        self.turns, self.tokens = list(turns), tokens
+        self.calls, self.allowed, self.results, self.started = [], [], [], []
+
+    def start(self, messages, tools, schema, schema_name, effort="medium"):
+        from src.agent.providers import Conversation, Completion, ToolCall, Turn
+        provider = self
+        provider.started.append({"tools": [tool.name for tool in tools], "effort": effort, "schema_name": schema_name})
+
+        class Scripted(Conversation):
+            def __init__(self):
+                self.history = [dict(message) for message in messages]
+
+            def step(self, allow_tools=True):
+                provider.calls.append(list(self.history))
+                provider.allowed.append(allow_tools)
+                turn = provider.turns.pop(0)
+                if isinstance(turn, Exception):
+                    raise turn
+                completion = Completion(text="" if isinstance(turn, list) else turn, model=provider.model, input_tokens=provider.tokens[0], output_tokens=provider.tokens[1])
+                if isinstance(turn, list):
+                    calls = [ToolCall(f"call-{len(provider.calls)}-{index}", name, arguments) for index, (name, arguments) in enumerate(turn)]
+                    self.history.append({"role": "assistant", "content": "", "tool_calls": [call.name for call in calls]})
+                    return Turn(completion, calls)
+                self.history.append({"role": "assistant", "content": turn})
+                return Turn(completion)
+
+            def _append_results(self, results):
+                provider.results.append(results)
+                self.history.extend({"role": "tool", "content": result.content, "is_error": result.is_error} for result in results)
+
+        return Scripted()
+
+    def complete(self, messages, schema, schema_name, effort="medium"):
+        return self.start(messages, [], schema, schema_name, effort).step().completion

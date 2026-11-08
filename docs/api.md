@@ -28,7 +28,7 @@ All paths are relative to `/api` when going through the frontend/nginx.
 | `POST /monitoring/join-tokens` | admin | Create the single-use join token for **Connect a server** (shown once). |
 | `GET /monitoring/install-info` | admin | The collector address and images the panel uses. |
 | `GET` / `POST` / `DELETE /monitoring/enrollment-key` | admin | Show status / create or rotate / revoke the enrollment key. |
-| `GET` / `PUT /admin/settings` | admin | History retention (`history_retention_days`: 365, 730 or 0 for forever), chat on/off, require two-factor for admins, alert thresholds and per-mount disk thresholds; the agent's model prices, monthly budget, daily chat limit, automatic diagnosis, whether users see diagnoses, and chat access (`admins_only` or `per_user`). Turning the chat or automatic diagnosis on, and chat access to `per_user`, also need `reauth_token` and `code` (see `POST /auth/reauth`). |
+| `GET` / `PUT /admin/settings` | admin | History retention (`history_retention_days`: 365, 730 or 0 for forever), chat on/off, require two-factor for admins, alert thresholds and per-mount disk thresholds; the agent's model prices, monthly budget, daily chat limit, automatic diagnosis, whether users see diagnoses, chat access (`admins_only` or `per_user`), and the look-up budgets (`agent_tool_budget_diagnosis` 0–20, `agent_tool_budget_chat` 0–10). Turning the chat or automatic diagnosis on, chat access to `per_user`, and a look-up budget up from 0 also need `reauth_token` and `code` (see `POST /auth/reauth`). |
 | `GET /admin/users`, `PATCH /admin/users/{id}` | admin | Users and invitations; change someone's role, switch them off, or (with per-user chat access) allow them the agent chat (`agent_chat_enabled`). |
 | `GET /agent/config` | session | Whether chat with the agent can be used: switched on, allowed for you (`may_chat`), a key configured, and the monthly budget not used up. |
 | `GET /incidents`, `GET /incidents/{id}` | session | The incident inbox; one incident with its rule-based diagnosis and, under `agent`, the agent's latest report (with `watch` progress while it is open, `reused_from` when it was reused). The report is left out (`hidden: true`) for users who aren't admins while diagnoses aren't shown to users. |
@@ -44,7 +44,7 @@ All paths are relative to `/api` when going through the frontend/nginx.
 | `POST /monitoring/collectors/enroll` | enrollment key | Join without approval. |
 | `POST /monitoring/metrics/ingest` | collector token | Collector reports host, container and system metrics. |
 | `GET /conversations`, `POST /conversations`, `DELETE /conversations/{id}`, `POST /agent/chat` | session | Chats with the incident agent (403 for users chat isn't allowed for). |
-| `GET /logs`, `POST /logs`, `GET /dashboard/summary` | session | Audit log and summary counts. `POST /logs` adds an entry to your own log (level from a fixed list, message up to 2000 characters, at most 120 an hour); its source is always `dashboard`. |
+| `GET /logs`, `POST /logs`, `GET /dashboard/summary` | session | Audit log and summary counts (`agent_lookups`: the agent's tool calls). `POST /logs` adds an entry to your own log (level from a fixed list, message up to 2000 characters, at most 120 an hour); its source is always `dashboard`, and system event types such as `agent_tool_call` are refused. |
 
 The four collector endpoints above exist only on the collector gate in the server
 stack (the public listener answers 404); the development stack serves them on the

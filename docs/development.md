@@ -135,7 +135,8 @@ src/
   agent/                    the incident agent; runs in the backend (chat) and the agent-worker container
     providers/              the language model behind one interface (answers and tool calls): Claude, OpenAI, Gemini; the choice and its encrypted key
     chat.py, prompts.py, SYSTEM_PROMPT.md  the incident chat and its instructions
-    health_checks.py        the fixed, read-only checks the agent may ask for
+    investigate.py          the look-up loop of a diagnosis or chat message: tools within a budget, each call audited
+    tools/                  the read-only look-ups the agent may make (metrics, containers, events, checks, network)
     jobs.py                 job queue in Redis: published after an incident opens or worsens
     worker.py               the agent-worker container: runs the queued jobs
     usage.py                tokens, cost per model, monthly budget, daily chat limit

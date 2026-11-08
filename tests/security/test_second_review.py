@@ -316,6 +316,7 @@ def test_a_user_cannot_write_the_log_entries_the_system_counts(app):
     sign_in(app)
 
     assert app.post("/logs", json={"message": "x", "event_type": "health_check_completed"}).status_code == 422
+    assert app.post("/logs", json={"message": "x", "event_type": "agent_tool_call"}).status_code == 422
     assert app.post("/logs", json={"message": "x", "event_type": "report_opened"}).status_code == 200
 
 

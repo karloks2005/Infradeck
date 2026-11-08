@@ -10,7 +10,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Query
 from sqlalchemy import func
 
 from .. import main
-from ...agent import providers as agent_providers, settings as agent_settings, usage as agent_usage
+from ...agent import investigate as agent_investigate, providers as agent_providers, settings as agent_settings, usage as agent_usage
 from ..config import SESSION_COOKIE_NAME
 from ..db import get_db
 from ..models import AuditLog, ChatMessage, Conversation, User
@@ -72,7 +72,10 @@ def delete_conversation(conversation_id: str, session_id: Annotated[str | None, 
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found.")
     db.query(ChatMessage).filter(ChatMessage.conversation_id == conversation_id).delete(synchronize_session=False)
-    db.query(AuditLog).filter(AuditLog.user_id == user["id"], AuditLog.conversation_id == conversation_id).delete(synchronize_session=False)
+    mine = db.query(AuditLog).filter(AuditLog.user_id == user["id"], AuditLog.conversation_id == conversation_id)
+    # The agent's look-ups stay in the audit log; only their link to the deleted conversation goes.
+    mine.filter(AuditLog.event_type == agent_investigate.EVENT_TYPE).update({AuditLog.conversation_id: None}, synchronize_session=False)
+    mine.filter(AuditLog.event_type.is_distinct_from(agent_investigate.EVENT_TYPE)).delete(synchronize_session=False)
     db.delete(conversation)
     db.commit()
     main.delete_agent_conversation(user["id"], conversation_id)
@@ -138,18 +141,10 @@ def agent_chat(payload: main.AgentChatRequest, session_id: Annotated[str | None,
             payload.conversation_id,
             main._incident_context(db, payload.incident_id) + message,
             main.get_provider(db),
+            db=db,
+            budget=agent_settings.tool_budget(db, "chat"),
             usage_logger=log_usage,
-            command_logger=lambda event: main.record_audit_log(
-                db,
-                user_id=user["id"],
-                source="health_monitor",
-                task_title=message[:255],
-                steps=event.get("steps", []),
-                conversation_id=payload.conversation_id,
-                event_type=event.get("event_type"),
-                message=event.get("message", "Command event"),
-                level=event.get("level", "INFO"),
-            ),
+            audit=agent_investigate.audit_log(db, title=message, user_id=user["id"], conversation_id=payload.conversation_id),
         )
     except Exception as exc:
         user_message = main.agent_error_message(exc)
@@ -161,7 +156,7 @@ def agent_chat(payload: main.AgentChatRequest, session_id: Annotated[str | None,
             message=user_message[:255],
             source="health_monitor",
             task_title=message[:255],
-            steps=["The AI provider request failed before a health check could run."],
+            steps=["The request to the AI provider failed."],
             conversation_id=payload.conversation_id,
             event_type="agent_error",
         )

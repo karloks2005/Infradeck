@@ -13,7 +13,8 @@ change files on your servers. Everything about it is in `src/agent/` and in **Ad
 2. Create an API key with one of the providers: Anthropic (Claude), OpenAI or Google Gemini.
 3. In **Admin → Incident agent**, pick the provider, keep or change the model, paste the key and click **Save**.
    Confirm with your password and a two-factor code: this decides where the agent's data goes. Turning the chat
-   or automatic diagnosis on, and setting Chat access to "Per user", ask for the same; turning things off doesn't.
+   or automatic diagnosis on, setting Chat access to "Per user" and raising a look-up budget from 0 ask for the
+   same; turning things off doesn't.
    Models used when the field is left empty:
 
    | Provider | Default model |
@@ -39,20 +40,25 @@ longer be decrypted, the agent behaves as if there were no key until it is saved
 ## Diagnoses
 
 When a warning or critical incident opens, or gets worse, the backend queues a job and the **agent worker**
-(its own container, see [The containers](containers.md#infradeck-agent-worker)) diagnoses it in three steps:
+(its own container, see [The containers](containers.md#infradeck-agent-worker)) diagnoses it in four steps:
 
 1. **Evidence pack** (`evidence.py`): the incident, the machine, metrics from an hour before it opened until now,
    recorded events, image changes of the container, the alert rule's own checks, the containers right now, and
    similar incidents in the last 90 days. Every fact has an ID (`metric:main`, `event:812`, `check:2`,
    `incident:31`). Series are cut to 40 points and lists to their newest entries, and every text is masked for
    secrets (`masking.py`).
-2. **The model** (`diagnosis.py`, `DIAGNOSIS_PROMPT.md`) answers in a strict JSON schema: a summary, its confidence,
+2. **Looking further** (`investigate.py`): the model may look things up with the [read-only
+   tools](#what-the-agent-can-look-up), up to 8 calls by default, for example the week before the pack's window, or
+   whether other servers are affected. See [Look-up budget](#look-up-budget).
+3. **The answer** (`diagnosis.py`, `DIAGNOSIS_PROMPT.md`) in a strict JSON schema: a summary, its confidence,
    signals that each cite fact IDs, up to five fix steps and a condition that shows the incident is over.
-3. **Checks** before anyone sees it: signals that cite no fact from the pack are dropped and counted ("1
-   unsupported claim left out"), fix commands that could destroy data are flagged and never recommended
-   (`safety.py`), and an answer that doesn't parse is asked for once more, then saved as a failed report.
+4. **Checks** before anyone sees it: signals that cite no fact from the pack or from a tool result are dropped and
+   counted ("1 unsupported claim left out"), fix commands that could destroy data are flagged and never recommended
+   (`safety.py`), and an answer that doesn't parse is asked for once more, in the same conversation and without
+   tools (so the look-ups aren't paid for twice), then saved as a failed report.
 
-Each diagnosis is a new version in `agent_reports`. The incident page (Agent) says which model wrote it, when, and
+Each diagnosis is a new version in `agent_reports`, with the evidence pack and every look-up it made (tool,
+arguments, result) kept next to it. The incident page (Agent) says which model wrote it, when, and
 how sure it is, and shows its summary, signals with the facts they rest on, and fix steps; with no diagnosis it
 shows the rule-based one and says so. The evidence chart, recorded events and timeline always come from stored
 data, never from the model. The Overview shows the first sentence next to the incident.
@@ -71,7 +77,8 @@ Each diagnosis ends with a condition that shows the incident is over. Two kinds 
 every minute, without the model (`verify.py`):
 
 - **a container runs N minutes without a restart**;
-- **a metric stays under a threshold for N minutes** (memory, swap, load, CPU, a disk).
+- **a metric stays under a threshold for N minutes** (memory, swap, load, CPU, a disk). Only a metric from the
+  evidence pack can be watched; a condition on a metric the agent found with a tool becomes one a person confirms.
 
 The incident shows the progress ("Watching: resolves itself once gitlab runs 15 min without a restart. Held for 9
 of 15 min."). When the condition holds, the agent resolves the incident with "Resolved by the agent: …", which is
@@ -101,24 +108,24 @@ off, the budget used up, or the worker not running. Resolved notifications never
 ## Chat
 
 The chat answers questions about an incident or any server. Each message goes to the model with the incident's
-facts, and the conversation so far (its latest 40 turns). Every reply is held to a JSON schema with the
-provider's structured output: a message, and at most one check from a fixed list. All three providers sit behind
-one small interface (`src/agent/providers/`). With Claude, the chat thinks briefly (effort `low`) and a diagnosis
-thinks harder (effort `high`); the other providers ignore the setting.
+facts and the conversation so far (its latest 40 turns), and the model may look things up with the same
+[read-only tools](#what-the-agent-can-look-up) as a diagnosis, up to 4 calls per message by default. Only the
+questions and replies stay in the conversation; the look-ups of an earlier message aren't sent again. Every reply
+is held to a JSON schema with the provider's structured output: one message. All three providers sit behind one
+small interface (`src/agent/providers/`).
 
-The chat has no code path for running shell commands. It may request exactly one fixed, read-only check at a time:
-`server_health`, `container_health`, or `daily_checkup`, implemented with Python system APIs and Docker's Unix API
-socket, never the shell or Docker CLI. The backend container does **not** mount `/var/run/docker.sock`; for the
-container checks, point `DOCKER_SOCKET_PATH` at a hardened Docker API proxy that permits only the required GET
-endpoints. `daily_checkup` combines host and container checks; on a critical finding it POSTs an alert only to
-`ADMIN_ALERT_WEBHOOK_URL`, and without it the result says `not_configured` and no request is made.
+With Claude, an answer that may use tools thinks harder (effort `high`); a chat message without tools thinks
+briefly (`low`). The other providers ignore the setting.
+
+A message that is still looking things up after 45 seconds is told to answer with what it has, so the reply comes
+back before the web server stops waiting (120 seconds). The chat has no code path for running commands: the tools
+only read Infradeck's database, and the reply is text.
 
 ## What the agent can look up
 
 Besides the evidence pack, the agent has eleven **read-only tools** (`src/agent/tools/`): questions it can ask
 Infradeck's database while it investigates, such as "how did CPU change on 3 November between 10:00 and 12:00" or
-"has this disk filled up before". The tools are ready; diagnoses and the chat start calling them, within a budget of
-calls, in the next step of the agent upgrade (#157). Until then the agent works from the evidence pack alone.
+"has this disk filled up before". Diagnoses and the chat use them within a [budget](#look-up-budget) of calls.
 
 | Tool | What it answers |
 |---|---|
@@ -176,6 +183,30 @@ strict schema (every property required, `additionalProperties: false`, null for 
 `tests/assistant/test_agent_tools.py`: the shared tests then check that it stays bounded, masked, labelled and
 read-only.
 
+### Look-up budget
+
+**Admin → Incident agent → Look-ups** sets how many tool calls one answer may make: **8 per diagnosis** (0 to 20)
+and **4 per chat message** (0 to 10) by default. At 0 the agent gets no tools and answers from what it was given in
+a single call, as before the tools existed. Raising a budget from 0 is confirmed with the password and a two-factor
+code, because look-ups send more of a server's data (its history, ports, firewall) to the provider. Each change is
+written to the audit log.
+
+How the budget holds (`investigate.py`):
+
+- A call past the budget isn't run; the model gets "Tool budget used up; give your final answer now." for it.
+- Once the budget is used up, the month's [budget](#what-it-costs) is reached, or a chat message's 45 seconds are
+  over, the next call to the model is made with tools not allowed, so it has to answer. The tools stay listed (a
+  changed tool list would make the provider's cache and Claude's earlier thinking invalid).
+- A model that still asks for tools after that is stopped and the answer fails, so a loop can't run on.
+- A call with wrong arguments, or for an unknown server, goes back to the model with the reason so it can correct
+  it; that counts as a call. Any other failure is logged on the server and the model only hears "The look-up
+  failed".
+
+**Audit log.** Every tool call, run or refused, is an `agent_tool_call` entry: which tool, its arguments (masked),
+and whether it worked, under the incident ("Diagnosis of INC-0042") or the chat question and conversation.
+Deleting a conversation keeps these entries and only removes their link to it. No one can write this event type
+through `POST /logs`.
+
 ## What it costs
 
 Every call to the model is recorded with the tokens the provider reports for it (see `agent_runs` in
@@ -186,8 +217,10 @@ fail are recorded with no tokens, since the provider reports none.
 
 With a **monthly budget**, admins get a notification at 80 %, and at 100 % diagnoses and the chat pause until the
 1st of next month (incidents and notifications keep working). Each person may send at most a set number of chat
-messages in 24 hours (100 by default), on top of 30 an hour. A diagnosis is usually around 10 000 tokens; a chat
-message a few hundred to a few thousand.
+messages in 24 hours (100 by default), on top of 30 an hour. A diagnosis without look-ups is usually around 10 000
+tokens; a chat message a few hundred to a few thousand. Each look-up adds its result (up to about 12 KB, a few
+thousand tokens) to every later call of the same answer, and every call is recorded on its own, so a diagnosis that
+uses all 8 look-ups can cost several times as much. Lower the [look-up budget](#look-up-budget) to spend less.
 
 ## The worker card
 
