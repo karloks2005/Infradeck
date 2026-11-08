@@ -1,4 +1,5 @@
-"""OpenAI, and Google Gemini through its OpenAI-compatible endpoint: both take the same Chat Completions request."""
+"""Google Gemini through its OpenAI-compatible endpoint, which takes a Chat Completions request. OpenAI itself uses
+the Responses API (openai_responses.py), since its reasoning models can't use tools through Chat Completions."""
 from __future__ import annotations
 
 import json

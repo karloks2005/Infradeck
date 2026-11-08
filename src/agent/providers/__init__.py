@@ -15,6 +15,7 @@ from src.backend.models import AppSetting
 from .base import Completion, Conversation, Provider, Tool, ToolCall, ToolResult, Turn
 from .claude import ClaudeProvider
 from .openai_compatible import GEMINI_BASE_URL, OpenAIProvider
+from .openai_responses import OpenAIResponsesProvider
 
 __all__ = ["Completion", "Conversation", "Provider", "Tool", "ToolCall", "ToolResult", "Turn", "PROVIDERS", "NoApiKey", "current", "get_provider", "key_configured", "save", "remove_key"]
 
@@ -85,7 +86,7 @@ def get_provider(db) -> Provider:
         return ClaudeProvider(choice.key, choice.model)
     if choice.provider == "gemini":
         return OpenAIProvider(choice.key, choice.model, name="Google Gemini", base_url=GEMINI_BASE_URL)
-    return OpenAIProvider(choice.key, choice.model)
+    return OpenAIResponsesProvider(choice.key, choice.model)
 
 
 def save(db, provider: str, model: str | None, api_key: str | None) -> None:

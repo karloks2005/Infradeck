@@ -23,8 +23,12 @@ change files on your servers. Everything about it is in `src/agent/` and in **Ad
    | OpenAI | `gpt-6-luna` |
    | Google Gemini | `gemini-3.1-flash-lite` |
 
-   Another model works if it supports structured (JSON schema) output.
-4. **Test connection** checks the key and that the model exists, without spending tokens.
+   Another model works if it supports structured (JSON schema) output and tool calls. With OpenAI it must be a
+   reasoning model (the gpt-5 family and later): the agent sets how hard it thinks.
+4. **Test connection** checks the key, that the model exists, and that the provider accepts the agent's real
+   requests: one small request with every tool and the diagnosis schema. It costs a few thousand tokens (about
+   2 000 to 4 500 in our tests), counted in the usage like any other call. Run it after changing the provider or
+   the model; a provider that refuses the request says why here, instead of every diagnosis failing later.
 5. Enter the model's price per million tokens under **Prices** (from the provider's pricing page), so its calls
    count towards the budget, and set a **Monthly budget** if you want one.
 
@@ -112,7 +116,10 @@ facts and the conversation so far (its latest 40 turns), and the model may look 
 [read-only tools](#what-the-agent-can-look-up) as a diagnosis, up to 4 calls per message by default. Only the
 questions and replies stay in the conversation; the look-ups of an earlier message aren't sent again. Every reply
 is held to a JSON schema with the provider's structured output: one message. All three providers sit behind one
-small interface (`src/agent/providers/`).
+small interface (`src/agent/providers/`): Claude through Anthropic's Messages API; OpenAI through its Responses API
+(the only one where its reasoning models can use tools), sent with `store: false` so nothing is kept at OpenAI, with
+the model's reasoning carried from one step to the next in encrypted form; Gemini through Google's OpenAI-compatible
+Chat Completions endpoint.
 
 With Claude, an answer that may use tools thinks harder (effort `high`); a chat message without tools thinks
 briefly (`low`). The other providers ignore the setting.
@@ -179,7 +186,10 @@ different windows, the label keeps both.
 **Adding a tool.** Write the function in the module for its area (`servers.py`, `containers.py`, `activity.py`):
 it gets the database session, the checked arguments, the time and a `Facts` collector, and returns a dict whose
 facts each carry an `id` added with `facts.add`. Register it in `tools/__init__.py` with a description and a
-strict schema (every property required, `additionalProperties: false`, null for "not given"), and add tests to
+strict schema (every property required, `additionalProperties: false`, and an optional text argument made with
+`_optional`, a plain string where empty means "not given", never a nullable type: Anthropic refuses strict schemas
+with more than 16 nullable or union-typed parameters per request, counted over every tool and the answer's schema,
+and `test_no_request_has_more_union_typed_parameters_than_the_provider_accepts` checks it), and add tests to
 `tests/assistant/test_agent_tools.py`: the shared tests then check that it stays bounded, masked, labelled and
 read-only.
 

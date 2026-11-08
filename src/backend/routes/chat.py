@@ -4,6 +4,7 @@ tune them) and the shared helpers (`_incident_context`, `send_agent_message`, `_
 this module is the HTTP layer."""
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Query
@@ -15,6 +16,7 @@ from ..config import SESSION_COOKIE_NAME
 from ..db import get_db
 from ..models import AuditLog, ChatMessage, Conversation, User
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -148,7 +150,11 @@ def agent_chat(payload: main.AgentChatRequest, session_id: Annotated[str | None,
         )
     except Exception as exc:
         user_message = main.agent_error_message(exc)
-        agent_usage.record(db, kind="chat", status="error", model=agent_providers.current(db).model or "unknown", user_id=user["id"], conversation_id=payload.conversation_id, incident_id=payload.incident_id, error=user_message)
+        # The person chatting gets a plain sentence; the provider's own words go to the log and the usage record, which
+        # only admins see.
+        logger.warning("The agent's chat request failed: %s", main.agent_error_detail(exc))
+        agent_usage.record(db, kind="chat", status="error", model=agent_providers.current(db).model or "unknown", user_id=user["id"], conversation_id=payload.conversation_id,
+                           incident_id=payload.incident_id, error=f"{type(exc).__name__}: {main.agent_error_detail(exc)}")
         main.record_audit_log(
             db,
             user_id=user["id"],

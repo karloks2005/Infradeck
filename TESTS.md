@@ -4,7 +4,7 @@ Infradeck ships with an automated test suite. This page explains how to run it, 
 covers (and what it doesn't), and what every single test is for, so you can decide
 whether a failure matters before you upgrade or change your setup.
 
-- **1563 test cases** from 849 test functions, plus 38 small tests of the frontend helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
+- **1574 test cases** from 857 test functions, plus 38 small tests of the frontend helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
 - **About two minutes** to run. No Docker, PostgreSQL, Redis, network or root access needed.
 - **Safe to run next to a live install.** The tests use a throwaway in-memory database
   and fakes; they never touch your running containers or your data. (Two collector
@@ -146,13 +146,13 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 |---|---|---|
 | [`test_account_security.py`](#test_account_securitypy) | 146 | Two-factor sign-in, recovery codes, encrypted secrets, sessions you can review and end, password change, and the password check before turning two-factor on. |
 | [`test_admin.py`](#test_adminpy) | 18 | Who may do what: admin-only actions, roles, retention cleanup, the chat on/off switch. |
-| [`test_agent_errors.py`](#test_agent_errorspy) | 5 | Helpful, non-leaking error messages from the AI assistant. |
-| [`test_agent_service.py`](#test_agent_servicepy) | 9 | The chat's reply is one message; the OpenAI provider and conversation history. |
+| [`test_agent_errors.py`](#test_agent_errorspy) | 6 | Helpful, non-leaking error messages from the AI assistant: a plain sentence in the chat, the provider's own words only for admins. |
+| [`test_agent_service.py`](#test_agent_servicepy) | 10 | The chat's reply is one message; Test connection trying a real request; the Chat Completions provider and conversation history. |
 | [`test_agent_providers.py`](#test_agent_providerspy) | 12 | The Claude provider, and how the chosen provider, model and encrypted API key are stored. |
-| [`test_agent_tool_calls.py`](#test_agent_tool_callspy) | 24 | Tool calling with Claude, OpenAI and Gemini: calls, several at once, errors, masking, append-only history, forcing an answer. |
+| [`test_agent_tool_calls.py`](#test_agent_tool_callspy) | 30 | Tool calling with Claude, OpenAI (Responses API) and Gemini: calls, several at once, errors, masking, append-only history, forcing an answer, reasoning carried over, nothing stored at OpenAI. |
 | [`test_agent_diagnosis.py`](#test_agent_diagnosispy) | 42 | The agent's diagnosis: the evidence pack, secret masking, dangerous commands, checking the model's answer, saving reports. |
 | [`test_agent_investigation.py`](#test_agent_investigationpy) | 27 | The agent looking things up: the budget of tool calls per diagnosis and chat message, forced final answers, errors, the audit log, citations from tool results. |
-| [`test_agent_tools.py`](#test_agent_toolspy) | 49 | The agent's read-only tools: a closed list with strict schemas, checked arguments, bounded and masked results with fact IDs, no secrets or IP addresses, nothing written. |
+| [`test_agent_tools.py`](#test_agent_toolspy) | 52 | The agent's read-only tools: a closed list with strict schemas, checked arguments, bounded and masked results with fact IDs, no secrets or IP addresses, nothing written. |
 | [`test_agent_watch.py`](#test_agent_watchpy) | 10 | Reusing a recent diagnosis, and watching the fix until the agent resolves the incident. |
 | [`test_agent_worker.py`](#test_agent_workerpy) | 12 | The agent's job queue and worker: one job per opened or worsened incident after the commit, retries, time limit, restarts. |
 | [`test_alerts.py`](#test_alertspy) | 10 | The incident engine: one incident per problem, resolve, container rules. |
@@ -312,7 +312,8 @@ shouldn't, or an admin might be locked out.
 | Test | What it checks |
 |---|---|
 | `test_overloaded_provider_error_is_explained_to_the_user` | When the AI provider reports it is overloaded, the user gets a readable explanation. |
-| `test_provider_error_redacts_api_keys` | Error text from the provider never leaks an API key to the chat or logs; it is replaced with `[redacted]`. |
+| `test_the_chat_gets_a_plain_sentence_and_only_admins_the_providers_words` | A request the provider rejects is a plain sentence in the chat; only the admin's Test connection adds the provider's own error (#196). |
+| `test_provider_error_redacts_api_keys` | Error text from the provider never leaks an API key to the admin or the logs; it is replaced with `[redacted]`. |
 | `test_openai_keys_are_redacted_too` | An OpenAI key (`sk-…`) in an error is redacted, and a rejected key is explained as such. |
 | `test_a_missing_key_says_where_to_set_it` | Without a key the chat says to add one in Admin › Incident agent. |
 | `test_an_unknown_model_points_at_the_model_setting` | A model the key can't use points the admin at the model in Admin › Incident agent. |
@@ -323,8 +324,9 @@ shouldn't, or an admin might be locked out.
 |---|---|
 | `test_without_a_tool_budget_the_chat_is_one_call_without_tools` | With the chat's look-up budget at 0, a message is one call to the model, with no tools and effort `low`. |
 | `test_a_reply_without_a_message_is_an_error` | A reply whose message is missing or empty is an error, not a blank answer. |
+| `test_test_connection_tries_one_request_shaped_like_a_diagnosis_and_counts_it` | Test connection checks the key, then sends one request with every tool and the diagnosis schema (tools not allowed), counts it as a `test` call, and raises the provider's refusal (#196). |
 | `test_the_reply_can_only_be_a_message` | The reply schema has one field, the message, and nothing else is allowed. |
-| `test_openai_provider_asks_for_the_reply_schema_and_reports_tokens` | Requests use Structured Outputs in strict mode with the reply schema, and token usage is read from the response. |
+| `test_the_chat_completions_provider_asks_for_the_reply_schema_and_reports_tokens` | Requests to the Chat Completions provider (Gemini) use Structured Outputs in strict mode with the reply schema, and token usage is read from the response. |
 | `test_a_refusal_is_an_error_not_an_empty_reply` | When the model refuses, the chat gets an error instead of an empty answer. |
 | `test_test_connection_spends_no_tokens` | Admin's Test connection only looks the model up; it sends no prompt. |
 | `test_a_conversation_sends_the_system_prompt_and_its_history` | Each request carries the system prompt and the conversation so far, in order. |
@@ -347,21 +349,27 @@ shouldn't, or an admin might be locked out.
 
 ### test_agent_tool_calls.py
 
-Most tests run once per provider (Claude, OpenAI, Gemini), with fake clients.
+Most tests run once per provider (Claude, OpenAI through the Responses API, Gemini through Chat Completions), with
+fake clients. The fakes can't know each provider's own limits (#196), which is why Test connection sends one real
+request.
 
 | Test | What it checks |
 |---|---|
 | `test_with_tools_the_model_can_still_answer_at_once` *(3 inputs)* | With tools offered, a model that answers straight away gives the final answer and its token usage. |
 | `test_a_tool_call_is_answered_and_the_history_goes_back_unchanged` *(3 inputs)* | A tool call comes back parsed; after its result, the next request repeats every earlier turn exactly as sent and adds the result. |
 | `test_claude_gets_its_own_answer_back_untouched_thinking_included` | Claude's own turn, thinking included, goes back unchanged; its tools are strict and the system prompt is sent apart. |
-| `test_several_tool_calls_in_one_turn_get_all_their_results` *(3 inputs)* | Several calls in one turn are all answered: in one message for Claude, one tool message each for OpenAI and Gemini. |
+| `test_several_tool_calls_in_one_turn_get_all_their_results` *(3 inputs)* | Several calls in one turn are all answered: in one message for Claude, one `function_call_output` item each for OpenAI, one tool message each for Gemini. |
 | `test_a_failed_tool_is_reported_as_an_error` *(3 inputs)* | A failed tool is marked as an error for the model. |
 | `test_tool_results_are_masked_before_they_leave` *(3 inputs)* | A password in a tool result is masked before it is sent to the provider. |
 | `test_without_tools_allowed_the_model_must_answer_but_the_tools_stay_listed` *(3 inputs)* | When the budget is used up the model is told to answer (`tool_choice` none), while the tool list stays the same. |
 | `test_claude_refusing_midway_is_an_error` | A refusal from Claude in the middle of an investigation is an error. |
 | `test_openai_refusing_is_an_error` | A refusal from OpenAI with tools offered is an error. |
-| `test_openai_tool_arguments_must_be_a_json_object` *(2 inputs)* | Tool arguments that aren't valid JSON, or aren't an object, are refused. |
-| `test_openai_tools_are_strict_functions` | OpenAI and Gemini get strict function tools and a strict answer schema. |
+| `test_gemini_refusing_is_an_error` | A refusal from Gemini with tools offered is an error. |
+| `test_openai_tool_arguments_must_be_a_json_object` *(4 inputs)* | For OpenAI and Gemini, tool arguments that aren't valid JSON, or aren't an object, are refused. |
+| `test_openai_uses_the_responses_api_with_strict_tools_reasoning_and_nothing_stored` | OpenAI gets strict function tools, a strict answer schema, the reasoning effort, the system prompt as instructions, `store: false` and the encrypted reasoning back. |
+| `test_openai_gets_its_reasoning_back_unchanged_with_the_tool_results` | The next request repeats OpenAI's reasoning item (encrypted) and its tool call unchanged, followed by the result. |
+| `test_an_openai_answer_cut_off_is_an_error` | A response stopped at the output limit is an error, not a half answer. |
+| `test_gemini_tools_are_strict_functions` | Gemini gets strict function tools and a strict answer schema. |
 
 ### test_agent_diagnosis.py
 
@@ -425,6 +433,8 @@ and a firewall.
 
 | Test | What it checks |
 |---|---|
+| `test_no_request_has_more_union_typed_parameters_than_the_provider_accepts` *(2 inputs)* | The tools have no nullable or union-typed parameter, and with the diagnosis or chat schema a request stays within Anthropic's limit of 16 (#196). |
+| `test_an_optional_argument_left_empty_or_null_means_not_given` | An optional argument sent as an empty string or null gives the same result (not given); a required one may not be empty. |
 | `test_every_tool_is_listed_once_with_a_strict_schema` | The eleven tools are each listed once, every schema is strict (all fields required, nothing extra allowed), and every host metric offered can be read. |
 | `test_an_unknown_tool_is_refused` | A call to a tool that isn't on the list (`run_shell`) is refused. |
 | `test_bad_arguments_are_refused_with_a_reason_the_model_can_act_on` *(17 inputs)* | Missing or extra arguments, wrong types, values outside a list, oversized text, bad or reversed times, windows older than 90 days, container snapshots older than 7 days, and unknown checks or containers are refused before anything is read, with a reason (and the names that do exist). |

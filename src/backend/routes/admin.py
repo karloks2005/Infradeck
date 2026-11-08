@@ -161,13 +161,14 @@ def admin_agent_worker(session_id: Annotated[str | None, Cookie(alias=SESSION_CO
 
 @router.post("/admin/agent/test")
 def admin_agent_test(session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db)):
-    """Admin's "Test connection": the API key works and the configured model exists. Spends no tokens."""
+    """Admin's "Test connection": the API key works, the model exists, and the provider accepts the agent's tools
+    and answer schema (one small request of a few thousand tokens; see check_provider_connection)."""
     admin = main._require_admin(session_id, db)
     main.enforce_limit(main.redis_client, scope="agent-test", subject=admin["id"], limit=10, window_seconds=600)
     try:
-        result = main.check_provider_connection(db)
+        result = main.check_provider_connection(db, user_id=admin["id"])
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=main.agent_error_message(exc)) from exc
+        raise HTTPException(status_code=502, detail=main.agent_error_message(exc, detail=True)) from exc
     return {"ok": True, **result}
 
 

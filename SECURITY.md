@@ -78,7 +78,9 @@ the containers' names, images and figures, and similar incidents before it. Befo
 masked for secrets (tokens, keys, passwords, credentials in URLs, private keys; `src/agent/masking.py`), and the
 model is told the pack is untrusted data. Its answer is checked before anyone sees it: claims that cite no fact
 from the pack are dropped, and fix commands that could destroy data or open the machine up are flagged and never
-marked recommended (`src/agent/safety.py`). Nothing the model writes is run. Turn off "Diagnose new incidents
+marked recommended (`src/agent/safety.py`). Nothing the model writes is run. Requests to OpenAI are sent with
+`store: false`, so OpenAI keeps no copy of the conversation for later retrieval (its own abuse-monitoring retention
+still applies). Turn off "Diagnose new incidents
 automatically" in Admin › Incident agent to send nothing unless someone asks; without a key nothing is sent
 and incidents keep the rule-based diagnosis, which is worked out locally.
 

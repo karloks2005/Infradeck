@@ -33,14 +33,20 @@ def _object(**properties) -> dict:
     return {"type": "object", "properties": properties, "required": list(properties), "additionalProperties": False}
 
 
-def _nullable(kind: str, description: str) -> dict:
-    return {"anyOf": [{"type": kind}, {"type": "null"}], "description": description}
+class _Optional(dict):
+    """A text argument that may be left empty ("" or null), which the tool reads as "not given". It is a plain
+    string in the schema because strict schemas allow at most 16 nullable or union-typed parameters per request,
+    counted over every tool and the answer's schema (Anthropic rejects more); see docs/assistant.md."""
+
+
+def _optional(description: str) -> dict:
+    return _Optional(type="string", description=description)
 
 
 SERVER = {"type": "string", "description": "The server's hostname, as the evidence names it."}
-FROM = _nullable("string", "Start of the window, ISO 8601 in UTC (2026-11-07T10:00). null: 24 hours before `to`.")
-TO = _nullable("string", "End of the window, ISO 8601 in UTC. null: now.")
-AT = _nullable("string", "The moment to look at, ISO 8601 in UTC. null: now.")
+FROM = _optional("Start of the window, ISO 8601 in UTC (2026-11-07T10:00). Empty: 24 hours before `to`.")
+TO = _optional("End of the window, ISO 8601 in UTC. Empty: now.")
+AT = _optional("The moment to look at, ISO 8601 in UTC. Empty: now.")
 WINDOW_NOTE = (f" Any window within the last {MAX_DAYS} days: every check-in for the last 7 days, hourly averages and peaks before that."
                " Start wide, then narrow down to the interesting hours.")
 
@@ -66,7 +72,7 @@ _REGISTRY: dict[str, tuple[Tool, Handler]] = {tool.name: (tool, handler) for too
           "and (for the last 7 days) each change of status, health, exit code, OOM kill or image." + WINDOW_NOTE,
           _object(server=SERVER, container={"type": "string", "description": "The container's name."}, **{"from": FROM, "to": TO})), containers.container_history),
     (Tool("disk_usage", "Every filesystem of a server (or one): used space and inodes now, usage over the last `days`, growth in GB per day and, when it grows, "
-          "in about how many days it fills up.", _object(server=SERVER, mount=_nullable("string", "One mount point such as /var. null: all of them."),
+          "in about how many days it fills up.", _object(server=SERVER, mount=_optional("One mount point such as /var. Empty: all of them."),
                                                          days={"type": "integer", "description": f"How many days back to look at, 1 to {MAX_DAYS}."})), servers.disk_usage),
     (Tool("events", "What the server recorded in a window: reboots, OOM kills, kernel faults and errors, image changes, containers added or removed, ports "
           "opened or closed, firewall changes, package updates. The newest 30, oldest first." + WINDOW_NOTE,
@@ -77,35 +83,32 @@ _REGISTRY: dict[str, tuple[Tool, Handler]] = {tool.name: (tool, handler) for too
      servers.compare_to_baseline),
     (Tool("find_incidents", "Earlier incidents on one server or all of them: title, kind, severity, how long they lasted and how they were resolved. Newest "
           "first. The window defaults to the last 30 days.",
-          _object(server=_nullable("string", "A hostname. null: every server."),
-                  kind=_nullable("string", "Only this kind, as in the evidence's incident `kind` (host:disk, container:restart_loop, …). null: every kind."),
-                  **{"from": _nullable("string", "Start of the window, ISO 8601 in UTC. null: 30 days before `to`."), "to": TO})), activity.find_incidents),
+          _object(server=_optional("A hostname. Empty: every server."),
+                  kind=_optional("Only this kind, as in the evidence's incident `kind` (host:disk, container:restart_loop, …). Empty: every kind."),
+                  **{"from": _optional("Start of the window, ISO 8601 in UTC. Empty: 30 days before `to`."), "to": TO})), activity.find_incidents),
     (Tool("fleet_snapshot", "Every server at one moment: online or not, open incidents and the worst of them, availability checks failing from it. "
           "Shows whether a problem is on one machine or many.", _object(at=AT)), activity.fleet_snapshot),
     (Tool("check_results", "Availability checks (HTTP, TCP, TLS, DNS, ping …) over a window: uptime, when they were down, the errors they got and response "
           "times. Give one check by name, or a server for every check that runs from it." + WINDOW_NOTE,
-          _object(check=_nullable("string", "The check's name."), server=_nullable("string", "A hostname: every check run from it."), **{"from": FROM, "to": TO})),
+          _object(check=_optional("The check's name."), server=_optional("A hostname: every check run from it."), **{"from": FROM, "to": TO})),
      activity.check_results),
     (Tool("network_state", "A server's listening ports (and whether other machines can reach them), its firewall configuration, and port and firewall changes "
           "in the last 7 days.", _object(server=SERVER)), servers.network_state),
 ]}
-TOOLS: list[Tool] = [tool for tool, _ in _REGISTRY.values()]
+# What the provider gets: the same schemas as plain JSON (the _Optional marker is only for checking arguments here).
+TOOLS: list[Tool] = [Tool(tool.name, tool.description, json.loads(json.dumps(tool.schema))) for tool, _ in _REGISTRY.values()]
+
+
+def _blank(value) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
 
 
 def _check(schema: dict, value, path: str) -> None:
     """``value`` against the small part of JSON Schema the tools use. Raises ToolError naming the argument."""
-    if "anyOf" in schema:
-        for option in schema["anyOf"]:
-            try:
-                return _check(option, value, path)
-            except ToolError:
-                continue
-        raise ToolError(f"{path} has the wrong type.")
+    if isinstance(schema, _Optional) and _blank(value):
+        return
     kind = schema["type"]
-    if kind == "null":
-        if value is not None:
-            raise ToolError(f"{path} must be null.")
-    elif kind == "object":
+    if kind == "object":
         if not isinstance(value, dict) or set(value) != set(schema["properties"]):
             raise ToolError(f"Give exactly these arguments: {', '.join(schema['properties'])}.")
         for key, sub in schema["properties"].items():
@@ -165,6 +168,8 @@ def run(db, name: str, arguments, now: datetime | None = None) -> Output:
         raise ToolError(f"There is no tool named {str(name)[:60]!r}.")
     tool, handler = _REGISTRY[name]
     _check(tool.schema, arguments, "arguments")
+    # An optional argument left empty reaches the tool as None, whether the model sent "" or null.
+    arguments = {key: None if isinstance(tool.schema["properties"][key], _Optional) and _blank(value) else value for key, value in arguments.items()}
     now = now or datetime.now(timezone.utc)
     facts = Facts()
     text = _fit(mask(handler(db, arguments, now, facts)))
