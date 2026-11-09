@@ -100,6 +100,55 @@ def test_an_unreachable_service_is_down_with_a_short_reason():
     assert collector.run_tcp(check(type="tcp", target=f"127.0.0.1:{port}"))["detail"] == "Connection refused"
 
 
+@pytest.fixture
+def dripping():
+    """Starts a server that sends ``answer`` one byte every 0.2 s, so no single read ever times out (#204)."""
+    listeners = []
+
+    def start(answer: bytes) -> int:
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        listeners.append(listener)
+
+        def drip(conn):
+            with conn:
+                try:
+                    conn.recv(1024)
+                    for byte in answer:
+                        conn.send(bytes([byte]))
+                        time.sleep(0.2)
+                except OSError:
+                    pass
+
+        def accept():
+            while True:
+                try:
+                    conn, _ = listener.accept()
+                except OSError:
+                    return
+                threading.Thread(target=drip, args=(conn,), daemon=True).start()
+
+        threading.Thread(target=accept, daemon=True).start()
+        return listener.getsockname()[1]
+
+    yield start
+    for listener in listeners:
+        listener.close()
+
+
+def test_a_server_that_answers_a_byte_at_a_time_cant_stretch_the_timeout(dripping):
+    web_port = dripping(b"HTTP/1.1 200 OK\r\nX-Slow: " + b"a" * 100)
+    tls_port = dripping(b"\x16\x03\x03\x40\x00" + b"a" * 100)   # a TLS handshake record that never finishes
+
+    started = time.monotonic()
+    web = collector.run_http(check(target=f"http://127.0.0.1:{web_port}/", timeout=1))
+    tls = collector.run_tls({"host": "127.0.0.1", "port": tls_port, "timeout": 1})
+
+    assert (web["ok"], web["detail"]) == (False, "Timed out after 1 s") and (tls["ok"], tls["detail"]) == (False, "Timed out after 1 s")
+    assert time.monotonic() - started < 4   # each within its own second, not the 20 s the answer takes
+
+
 def test_an_open_tcp_port_is_up(site):
     port = site.rsplit(":", 1)[1]
 

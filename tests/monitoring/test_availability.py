@@ -242,6 +242,24 @@ def test_coming_back_up_resolves_the_incident(app):
     assert incident(app, check["id"]).status == "resolved"
 
 
+def test_a_check_whose_results_stop_turns_stale_instead_of_staying_up(app):
+    up, down = create(app, server_ids=[1], name="Up"), create(app, server_ids=[1], name="Down")
+    for check in (up, down):
+        age(app, check["id"])
+    online(app, 1)   # the collector still checks in: only its checks went quiet (#204)
+    report(app, 1, [run(up["id"], True)] + runs(down["id"], [False, False, False]))
+    assert (check_row(app, up["id"]).state, check_row(app, down["id"]).state) == ("up", "down")
+
+    with app.Session() as db:
+        assert availability.mark_stale(db) == 0   # results are fresh: nothing changes
+        assert availability.mark_stale(db, datetime.now(timezone.utc) + timedelta(minutes=10)) == 2
+    assert (check_row(app, up["id"]).state, check_row(app, down["id"]).state) == ("stale", "stale")
+    assert incident(app, down["id"]).status == "active"   # nothing is known to be fixed, so its incident stays open
+
+    report(app, 1, [run(down["id"], True)])   # results again
+    assert check_row(app, down["id"]).state == "up" and incident(app, down["id"]).status == "resolved"
+
+
 def test_a_new_check_stays_quiet_for_ten_minutes(app):
     check = create(app, server_ids=[1])
 

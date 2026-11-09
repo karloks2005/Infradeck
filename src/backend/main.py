@@ -1007,6 +1007,7 @@ def _offline_watch_loop() -> None:
         db = SessionLocal()
         try:
             mark_offline_servers(db)
+            availability.mark_stale(db)
             purge_stale_pending(db)
             purge_due = last_metrics_purge is None or time.monotonic() - last_metrics_purge >= METRICS_PURGE_INTERVAL_SECONDS
             if metrics_maintenance(db, purge_due):
