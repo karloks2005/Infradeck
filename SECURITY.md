@@ -411,6 +411,11 @@ URL, a keyword or a value in a JSON reply, a TCP port, a TLS certificate, a DNS 
   never leaves the collector: a result is only up/down, the status code, the response time, the days
   until a TLS certificate expires, and a short reason (≤200 characters; for a JSON check that reason can
   include up to ~80 characters of the value that failed the comparison).
+- **A check's timeout is a hard limit for the whole run.** When it is up, the collector shuts down the
+  check's connections, so a target that answers a byte at a time can't hold a check, or the collector's
+  few check workers, past it. (A name lookup ends when the system resolver gives up.) A check whose
+  results stop arriving turns **stale** on the Availability page within a few intervals instead of
+  keeping its last state; an incident it had stays open until results come back.
 - **Ping uses an unprivileged ICMP datagram socket**, allowed for the container's own group by a
   namespaced `net.ipv4.ping_group_range` sysctl. It grants no capability and no raw socket (no packet
   crafting or sniffing); without the sysctl a ping check simply reports that ICMP isn't permitted. DNS

@@ -1364,7 +1364,7 @@ def _failure(exc: BaseException, timeout: int) -> str:
         return f"Timed out after {timeout} s"
     if isinstance(reason, ssl.SSLCertVerificationError):
         return f"TLS certificate not valid: {reason.verify_message}"[:200]
-    if isinstance(reason, ssl.SSLError):
+    if isinstance(reason, ssl.SSLError) or isinstance(exc, ssl.SSLError):   # an SSLError's own reason is a string
         return "TLS handshake failed"
     if isinstance(reason, socket.gaierror):
         return "Host name not found"
@@ -1377,34 +1377,106 @@ def _failure(exc: BaseException, timeout: int) -> str:
     return type(reason).__name__
 
 
+class _Deadline:
+    """A check's timeout as a hard limit for the whole run (#204). A socket timeout only limits each read, so a
+    server that sends its answer a byte at a time could hold a check, and one of the CHECK_WORKERS, for as long as
+    it likes. When the time is up this shuts down every socket the check opened, which ends any read or TLS
+    handshake still waiting on it. A name lookup can't be interrupted; it ends when the system resolver gives up,
+    and the connection after it is then shut down at once."""
+
+    def __init__(self, seconds: float) -> None:
+        self.expired = False
+        self.sockets: list[socket.socket] = []
+        self.lock = threading.Lock()
+        self.timer = threading.Timer(seconds, self._expire)
+        self.timer.daemon = True
+
+    def __enter__(self) -> "_Deadline":
+        self.timer.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.timer.cancel()
+
+    def track(self, sock: socket.socket) -> socket.socket:
+        with self.lock:
+            self.sockets.append(sock)
+            if self.expired:
+                _shut(sock)
+        return sock
+
+    def _expire(self) -> None:
+        with self.lock:
+            self.expired = True
+            for sock in self.sockets:
+                _shut(sock)
+
+
+def _shut(sock: socket.socket) -> None:
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+
+
+def _tracked(base: type, deadline: _Deadline) -> type:
+    """``base`` (an http.client connection class) whose sockets ``deadline`` can shut down."""
+    class Tracked(base):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self._create_connection = lambda *a, **k: deadline.track(socket.create_connection(*a, **k))
+    return Tracked
+
+
+class _DeadlineHTTP(urllib.request.HTTPHandler):
+    def __init__(self, deadline: _Deadline) -> None:
+        super().__init__()
+        self.deadline = deadline
+
+    def http_open(self, req):  # noqa: ANN001, ANN201
+        return self.do_open(_tracked(http.client.HTTPConnection, self.deadline), req)
+
+
+class _DeadlineHTTPS(urllib.request.HTTPSHandler):
+    def __init__(self, context: ssl.SSLContext, deadline: _Deadline) -> None:
+        super().__init__(context=context)
+        self.deadline = deadline
+
+    def https_open(self, req):  # noqa: ANN001, ANN201
+        return self.do_open(_tracked(http.client.HTTPSConnection, self.deadline), req, context=self._context)
+
+
 def run_http(check: dict[str, Any]) -> dict[str, Any]:
     """One run of an HTTP(s) or keyword check: {ok, response_ms, code, detail, cert_days}."""
     context = ssl.create_default_context()
     if check["ignore_tls"]:
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context), _Redirects(check["follow_redirects"]))
     request = urllib.request.Request(check["target"], method=check["method"], headers={"User-Agent": f"Infradeck-Check/{COLLECTOR_VERSION}", "Accept": "*/*"})
     started = time.monotonic()
     result: dict[str, Any] = {"ok": False, "response_ms": None, "code": None, "detail": None, "cert_days": None}
     body = b""
-    try:
-        with opener.open(request, timeout=check["timeout"]) as response:
-            result["code"] = response.status
-            if not check["ignore_tls"]:
-                result["cert_days"] = _cert_days(response)
-            if check["type"] in ("keyword", "json"):
-                deadline = started + check["timeout"]
-                while len(body) < MAX_BODY_BYTES and time.monotonic() < deadline:
-                    chunk = response.read(min(65536, MAX_BODY_BYTES - len(body)))
-                    if not chunk:
-                        break
-                    body += chunk
-    except urllib.error.HTTPError as exc:
-        result["code"] = exc.code
-        exc.close()
-    except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError) as exc:
-        result["detail"] = _failure(exc, check["timeout"])
+    with _Deadline(check["timeout"]) as deadline:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _DeadlineHTTP(deadline), _DeadlineHTTPS(context, deadline), _Redirects(check["follow_redirects"]))
+        try:
+            with opener.open(request, timeout=check["timeout"]) as response:
+                result["code"] = response.status
+                if not check["ignore_tls"]:
+                    result["cert_days"] = _cert_days(response)
+                if check["type"] in ("keyword", "json"):
+                    while len(body) < MAX_BODY_BYTES:
+                        chunk = response.read(min(65536, MAX_BODY_BYTES - len(body)))
+                        if not chunk:
+                            break
+                        body += chunk
+        except urllib.error.HTTPError as exc:
+            result["code"] = exc.code
+            exc.close()
+        except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError) as exc:
+            result["detail"] = f"Timed out after {check['timeout']} s" if deadline.expired else _failure(exc, check["timeout"])
+            return result
+    if deadline.expired:   # the answer was cut off, so it can't be judged
+        result["detail"] = f"Timed out after {check['timeout']} s"
         return result
     result["response_ms"] = int((time.monotonic() - started) * 1000)
     if not _code_accepted(result["code"], check["accepted_codes"]):
@@ -1474,14 +1546,16 @@ def run_tls(check: dict[str, Any]) -> dict[str, Any]:
     """Connect, read the server's certificate, and be down when it is invalid, expired, or close to expiring."""
     context = ssl.create_default_context()
     started = time.monotonic()
-    try:
-        with socket.create_connection((check["host"], check["port"]), timeout=check["timeout"]) as sock:
-            with context.wrap_socket(sock, server_hostname=check["host"]) as tls:
-                cert = tls.getpeercert()
-    except ssl.SSLCertVerificationError as exc:
-        return {"ok": False, "response_ms": None, "code": None, "detail": f"Certificate not valid: {getattr(exc, 'verify_message', None) or exc}"[:200], "cert_days": None}
-    except (ssl.SSLError, OSError, http.client.HTTPException) as exc:
-        return {"ok": False, "response_ms": None, "code": None, "detail": _failure(exc, check["timeout"]), "cert_days": None}
+    with _Deadline(check["timeout"]) as deadline:
+        try:
+            with deadline.track(socket.create_connection((check["host"], check["port"]), timeout=check["timeout"])) as sock:
+                with context.wrap_socket(sock, server_hostname=check["host"]) as tls:
+                    cert = tls.getpeercert()
+        except ssl.SSLCertVerificationError as exc:
+            return {"ok": False, "response_ms": None, "code": None, "detail": f"Certificate not valid: {getattr(exc, 'verify_message', None) or exc}"[:200], "cert_days": None}
+        except (ssl.SSLError, OSError, http.client.HTTPException) as exc:
+            detail = f"Timed out after {check['timeout']} s" if deadline.expired else _failure(exc, check["timeout"])
+            return {"ok": False, "response_ms": None, "code": None, "detail": detail, "cert_days": None}
     response_ms = int((time.monotonic() - started) * 1000)
     try:
         days = int((ssl.cert_time_to_seconds(cert["notAfter"]) - time.time()) // 86400)

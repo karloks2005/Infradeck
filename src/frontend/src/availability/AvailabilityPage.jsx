@@ -128,7 +128,7 @@ function CheckRow({ check, selected, onSelect }) {
       <td className="px-3 text-right text-[13px] tabular-nums text-paper">{check.paused ? '—' : percent(check.uptime_30d)}</td>
       <td className="px-3">
         <span className="flex items-center gap-2.5">{!check.paused && <Sparkline check={check} />}
-          <span className={`text-[13px] tabular-nums ${down ? 'text-signal' : isSlow(check) ? 'text-warn' : 'text-paper'}`}>{check.paused ? '—' : down ? (check.last_detail?.replace(/^HTTP /, '') || 'down') : check.response_ms != null ? `${check.response_ms} ms` : '—'}</span>
+          <span className={`text-[13px] tabular-nums ${down ? 'text-signal' : check.state === 'stale' ? 'text-warn' : isSlow(check) ? 'text-warn' : 'text-paper'}`}>{check.paused ? '—' : down ? (check.last_detail?.replace(/^HTTP /, '') || 'down') : check.state === 'stale' ? 'no results' : check.response_ms != null ? `${check.response_ms} ms` : '—'}</span>
         </span>
       </td>
       <td className={`px-3 text-[13px] ${check.cert_days != null && check.cert_days <= 21 ? 'text-warn' : 'text-paper'}`}>{check.cert_days != null ? `${check.cert_days} days` : check.target.startsWith('http://') ? <span className="text-muted">no TLS</span> : <span className="text-muted">—</span>}</td>
@@ -144,7 +144,7 @@ function PhoneCheck({ check, onSelect }) {
     <button type="button" onClick={() => onSelect(check)} className={`block w-full border-t border-line px-4 py-3 text-left ${down ? 'shadow-[inset_3px_0_0_var(--color-signal)]' : ''}`}>
       <span className="flex items-baseline gap-2">
         <span className="min-w-0 flex-1 truncate text-[15px] font-medium text-paper">{check.name}</span>
-        <span className={`shrink-0 text-[13px] tabular-nums ${check.paused ? 'text-muted' : down ? 'text-signal' : 'text-paper'}`}>{check.paused ? 'paused' : down ? (check.last_detail || 'down') : percent(check.uptime_24h)}</span>
+        <span className={`shrink-0 text-[13px] tabular-nums ${check.paused ? 'text-muted' : down ? 'text-signal' : check.state === 'stale' ? 'text-warn' : 'text-paper'}`}>{check.paused ? 'paused' : down ? (check.last_detail || 'down') : check.state === 'stale' ? 'no results' : percent(check.uptime_24h)}</span>
       </span>
       <span className="mono mt-0.5 block truncate text-[11px] text-muted">{TYPE_LABEL[check.type]} · {check.target}</span>
       <span className="mt-2 flex items-center justify-between gap-3"><Strip check={check} size="sm" /><span className="shrink-0 text-xs tabular-nums text-muted">{check.response_ms != null && !check.paused ? `${check.response_ms} ms` : ''}</span></span>
@@ -337,7 +337,7 @@ function Detail({ check, canEdit, onEdit, onPause, onDelete, refreshedAt }) {
             <h3 className="m-0 text-[13px] font-semibold text-paper">Last 30 checks</h3>
             <div className="mt-2.5"><Strip check={check} /></div>
             <p className="mb-0 mt-2.5 text-xs text-muted">
-              {check.paused ? 'Paused: no checks run and no alerts are sent.' : check.state === 'pending' ? 'Waiting for the first results from its servers.' : `${check.state === 'down' ? 'Down' : 'Up'} since ${check.state_since ? new Date(check.state_since).toLocaleString() : '—'}.`}
+              {check.paused ? 'Paused: no checks run and no alerts are sent.' : check.state === 'pending' ? 'Waiting for the first results from its servers.' : check.state === 'stale' ? `No recent results since ${check.state_since ? new Date(check.state_since).toLocaleString() : '—'}: its servers aren't running it, or their results don't arrive.` : `${check.state === 'down' ? 'Down' : 'Up'} since ${check.state_since ? new Date(check.state_since).toLocaleString() : '—'}.`}
               {check.last_result_at && ` Last result ${ago(check.last_result_at)}${check.last_detail ? `: ${check.last_detail}` : ''}.`}
               {check.quiet_until && ` New check: it alerts from ${new Date(check.quiet_until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}, so a wrong address doesn't page anyone.`}
             </p>

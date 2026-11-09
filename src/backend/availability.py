@@ -408,13 +408,16 @@ def evaluate(db, check: Check, now: datetime | None = None, alerting: bool = Tru
     else:
         states = server_states(db, check, now)
         known = {server: state for server, state in states.items() if state != "unknown"}
-        if check.rule == "all":
+        if known and check.rule == "all":
             # A server that should be reporting but hasn't yet keeps the check from counting as down everywhere;
             # one that can't (offline, or a collector too old to run checks) doesn't hold it up.
             waiting = [server for server, state in states.items() if state == "unknown" and server in _reporting(db, now)]
             known.update({server: "retrying" for server in waiting})
         if not known:
-            new = "pending" if check.state in ("pending", "paused") else check.state
+            # No server has a fresh result: the check isn't run, or its results don't arrive (a collector that is
+            # online but whose checks are stuck, too). Its last verdict no longer says anything, so it isn't shown
+            # as up (or down) any more (#204).
+            new = "pending" if check.state in ("pending", "paused") else "stale"
         elif check.rule == "all":
             new = "down" if all(state == "down" for state in known.values()) else "up" if any(state == "up" for state in known.values()) else check.state if check.state in ("up", "down") else "pending"
         else:
@@ -429,9 +432,22 @@ def evaluate(db, check: Check, now: datetime | None = None, alerting: bool = Tru
         why = (latest.detail if latest and latest.detail else "No answer") + f" from {', '.join(failing) or 'its servers'}"
         raise_alert(db, servers[0], rule_key(check), check.severity, f"{check.name} is down"[:255],
                     f"{why}. Failed {check.retries + 1} checks in a row. {redacted_target(check.target)}"[:1000])
-    elif servers:
+    elif servers and new != "stale":   # without results nothing is known to be fixed, so an open incident stays open
         resolve_alerts(db, servers[0], [rule_key(check)], now)
     return new
+
+
+def mark_stale(db, now: datetime | None = None) -> int:
+    """Re-evaluate the checks whose results stopped arriving, which nothing else would look at again, so they turn
+    stale instead of keeping their last verdict. Run every minute. Returns how many changed."""
+    now = now or datetime.now(timezone.utc)
+    changed = 0
+    for check in db.query(Check).filter(Check.paused.is_(False), Check.state.notin_(("pending", "stale"))):
+        last = _utc(check.last_result_at or check.state_since or check.created_at)
+        if last and now - last > timedelta(seconds=check.interval_seconds * 3 + check.timeout_seconds + 60):
+            changed += evaluate(db, check, now, alerting=False) == "stale"
+    db.commit()
+    return changed
 
 
 def forget_check(db, check: Check) -> None:
