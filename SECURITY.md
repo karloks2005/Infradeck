@@ -70,7 +70,9 @@ rule. An admin can also switch a rule off entirely in Admin › Alert rules, whi
 
 **The chat about an incident** sends your question together with that incident's title, description
 and the facts Infradeck worked out (signals and recorded events, which contain container and host
-names) to the model provider. Turn Chat off in Admin › Incident agent if that must not happen.
+names) to the model provider. Before it leaves, the whole message is masked for secrets like the
+agent's evidence pack (below; `src/agent/masking.py`). Turn Chat off in Admin › Incident agent if that
+must not happen.
 
 **The agent's diagnosis** (when an API key is saved in Admin › Incident agent) sends an evidence pack to the model provider: the
 incident, the server's name, OS, cores and memory, metrics around the incident, recorded events, image changes,

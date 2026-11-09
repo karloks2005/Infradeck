@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 from . import diagnosis, steps as investigation_steps, tools, usage
 from .investigate import Auditor, Recorder, investigate
+from .masking import mask_text
 from .prompts import SYSTEM_PROMPT
 from .providers import Completion, Provider, get_provider
 
@@ -52,7 +53,9 @@ class Chat:
         self.history: list[dict] = []
 
     def send_message(self, provider: Provider, message: str, db=None, budget: int = 0, record: Recorder | None = None, audit: Auditor | None = None) -> Reply:
-        self.history.append({"role": "user", "content": message})
+        # The question and the incident context in front of it (event text from the monitored machines) go to the
+        # provider with every later turn too, so they are masked once, here, before they join the history.
+        self.history.append({"role": "user", "content": mask_text(message)})
         messages = [{"role": "system", "content": SYSTEM_PROMPT}, *self.history[-MAX_HISTORY_MESSAGES:]]
         try:
             found = investigate(db, provider, messages, REPLY_SCHEMA, "agent_reply", budget=budget, effort="low", record=record or (lambda *_: None),

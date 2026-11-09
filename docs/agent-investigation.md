@@ -130,8 +130,9 @@ Nothing reaches the browser that the dashboard doesn't already show: the raw res
 without credentials or query string.
 
 **Masking.** Every text that goes to the provider is masked for tokens, keys, passwords and credentials in URLs
-(`masking.py`): the evidence pack, each tool result (twice: by the tool and by the provider interface), each
-tool error, and each call's arguments and reason as they are stored. The reason is the model's own text, but it
+(`masking.py`): the evidence pack, each chat question with the incident context in front of it (`chat.py`, once,
+before it joins the conversation's history), each tool result (twice: by the tool and by the provider interface),
+each tool error, and each call's arguments and reason as they are stored. The reason is the model's own text, but it
 can repeat something it saw, so it is masked too.
 
 ## The budget, and when the model has to answer

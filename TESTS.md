@@ -147,7 +147,7 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 | [`test_account_security.py`](#test_account_securitypy) | 146 | Two-factor sign-in, recovery codes, encrypted secrets, sessions you can review and end, password change, and the password check before turning two-factor on. |
 | [`test_admin.py`](#test_adminpy) | 18 | Who may do what: admin-only actions, roles, retention cleanup, the chat on/off switch. |
 | [`test_agent_errors.py`](#test_agent_errorspy) | 6 | Helpful, non-leaking error messages from the AI assistant: a plain sentence in the chat, the provider's own words only for admins. |
-| [`test_agent_service.py`](#test_agent_servicepy) | 10 | The chat's reply is one message; Test connection trying a real request; the Chat Completions provider and conversation history. |
+| [`test_agent_service.py`](#test_agent_servicepy) | 11 | The chat's reply is one message; secrets in the question and incident context are masked; Test connection trying a real request; the Chat Completions provider and conversation history. |
 | [`test_agent_providers.py`](#test_agent_providerspy) | 12 | The Claude provider, and how the chosen provider, model and encrypted API key are stored. |
 | [`test_agent_tool_calls.py`](#test_agent_tool_callspy) | 30 | Tool calling with Claude, OpenAI (Responses API) and Gemini: calls, several at once, errors, masking, append-only history, forcing an answer, reasoning carried over, nothing stored at OpenAI. |
 | [`test_agent_diagnosis.py`](#test_agent_diagnosispy) | 42 | The agent's diagnosis: the evidence pack, secret masking, dangerous commands, checking the model's answer, saving reports. |
@@ -324,6 +324,7 @@ shouldn't, or an admin might be locked out.
 | Test | What it checks |
 |---|---|
 | `test_without_a_tool_budget_the_chat_is_one_call_without_tools` | With the chat's look-up budget at 0, a message is one call to the model, with no tools and effort `low`. |
+| `test_secrets_in_the_question_and_incident_context_never_reach_the_provider` | Tokens, keys and passwords in a chat question and in the incident context in front of it are masked before the provider sees them, in the first turn and when the history goes back with later turns; the rest of the text stays readable (#207). |
 | `test_a_reply_without_a_message_is_an_error` | A reply whose message is missing or empty is an error, not a blank answer. |
 | `test_test_connection_tries_one_request_shaped_like_a_diagnosis_and_counts_it` | Test connection checks the key, then sends one request exactly as a diagnosis does (every tool, calls allowed, the diagnosis schema), counts it as a `test` call, and raises the provider's refusal (#196, #199). |
 | `test_the_reply_can_only_be_a_message` | The reply schema has one field, the message, and nothing else is allowed. |
