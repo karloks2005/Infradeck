@@ -325,6 +325,12 @@ def test_validate_check_rejects_credentials_in_a_url():
 
 # --- calls to the dashboard (#205) ------------------------------------------------------------------------------
 
+def _read_request(handler):
+    """Read the request's body. A server that closes with it unread makes the kernel reset the connection, and the
+    collector then sees "Connection reset" instead of the answer."""
+    handler.rfile.read(int(handler.headers.get("Content-Length") or 0))
+
+
 def _serve(handler):
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -349,6 +355,7 @@ def test_a_call_to_the_dashboard_never_follows_a_redirect_with_the_token():
 
     class SignInRedirect(http.server.BaseHTTPRequestHandler):
         def do_POST(self):  # noqa: N802
+            _read_request(self)
             self.send_response(302)
             self.send_header("Location", f"{elsewhere_url}/login?rd=secret-return-path")
             self.end_headers()
@@ -370,6 +377,7 @@ def test_a_call_to_the_dashboard_never_follows_a_redirect_with_the_token():
 def test_a_huge_answer_from_the_dashboard_is_refused(monkeypatch):
     class Huge(http.server.BaseHTTPRequestHandler):
         def do_POST(self):  # noqa: N802
+            _read_request(self)
             body = b"[" + b"0," * collector.MAX_BODY_BYTES + b"0]"
             self.send_response(200)
             self.send_header("Content-Length", str(len(body)))
