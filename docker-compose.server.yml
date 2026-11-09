@@ -1,5 +1,7 @@
 # Server stack, published over HTTPS by the reverse proxy you already run (Traefik, Caddy, nginx, ...).
-# Your proxy reaches the dashboard on 127.0.0.1:5173, or over the `front` network if it runs in Docker.
+# Your proxy reaches the dashboard on 127.0.0.1:5173. A proxy in Docker can reach frontend:8080 instead, with the
+# frontend attached to the proxy's network (as deploy/traefik.yml does); never attach the proxy to this stack's
+# `front` network, where the backend and the collector gate trust whatever reaches them.
 # Set COMPOSE_FILE in .env, adding the ready-made file for your proxy from deploy/ if there is one
 # (see docs/deployment.md), then run a plain `docker compose up -d --build`:
 #   COMPOSE_FILE=docker-compose.server.yml:deploy/traefik.yml   (Traefik)
