@@ -59,7 +59,7 @@ When a warning or critical incident opens, or gets worse, the backend queues a j
    signals that each cite fact IDs, up to five fix steps and a condition that shows the incident is over.
 4. **Checks** before anyone sees it: signals that cite no fact from the pack or from a tool result are dropped and
    counted ("1 unsupported claim left out"), fix commands that could destroy data are flagged and never recommended
-   (`safety.py`), and an answer that doesn't parse is asked for once more, in the same conversation and without
+   (`safety.py`), no command that removes something is recommended, and an answer that doesn't parse is asked for once more, in the same conversation and without
    tools (so the look-ups aren't paid for twice), then saved as a failed report.
 
 Each diagnosis is a new version in `agent_reports`, with the evidence pack and every look-up it made (tool,
@@ -83,9 +83,11 @@ incident says so and links to the earlier one. Getting worse and **Diagnose agai
 Each diagnosis ends with a condition that shows the incident is over. Two kinds are checked against the data
 every minute, without the model (`verify.py`):
 
-- **a container runs N minutes without a restart**;
+- **a container runs N minutes without a restart** (only the incident's own container);
 - **a metric stays under a threshold for N minutes** (memory, swap, load, CPU, a disk). Only a metric from the
   evidence pack can be watched; a condition on a metric the agent found with a tool becomes one a person confirms.
+
+A condition lasts at least 5 minutes; a shorter one is stretched to 5.
 
 The incident shows the progress ("Watching: resolves itself once gitlab runs 15 min without a restart. Held for 9
 of 15 min."). When the condition holds, the agent resolves the incident with "Resolved by the agent: …", which is

@@ -178,7 +178,10 @@ into the conversation.
 - A "metric stays below a threshold" condition must name a metric from the evidence pack, because only those can be
   watched by `verify.py`. A condition on a metric the agent found with a tool becomes one a person confirms.
 - Fix commands are checked for destructive patterns (`safety.py`); a flagged step gets a warning and is never
-  recommended.
+  recommended. A line break or hidden characters in a command flag it too, and any command that removes something
+  (`rm`, `prune`, `-delete`, `DROP` …) gets a note and is never recommended either.
+- A "container runs N minutes without a restart" condition must name the incident's own container, and every
+  watched condition lasts at least 5 minutes; anything else becomes one a person confirms.
 - An answer that doesn't parse is asked for once more in the same conversation, without tools, so the look-ups
   aren't paid for twice; after that the report is saved as failed.
 

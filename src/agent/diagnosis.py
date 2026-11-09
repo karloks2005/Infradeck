@@ -34,6 +34,7 @@ VERIFY_TYPES = ("container_running_for", "metric_below_for", "incident_quiet_for
 MAX_SIGNALS = 6
 MAX_STEPS = 5
 MAX_ATTEMPTS = 2
+MIN_WATCH_MINUTES = 5
 # A diagnosis of the same rule on the same server (so the same container, mount or check) this recent is reused for a
 # new incident instead of asking the model again.
 REUSE_WITHIN = timedelta(hours=24)
@@ -73,10 +74,11 @@ def _clip(text, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def check_answer(raw: str, labels: dict[str, str], watchable: dict[str, str] | None = None) -> dict:
+def check_answer(raw: str, labels: dict[str, str], watchable: dict[str, str] | None = None, container: str | None = None) -> dict:
     """The model's answer, checked against the evidence. ``labels`` are the facts it may cite (the pack's and the
-    tools'), ``watchable`` the metrics a fix may be verified on (the pack's; default ``labels``). Raises InvalidAnswer
-    when the answer isn't usable at all."""
+    tools'), ``watchable`` the metrics a fix may be verified on (the pack's; default ``labels``), ``container`` the
+    incident's own container (None when it isn't about one), the only one a fix may be verified on. Raises
+    InvalidAnswer when the answer isn't usable at all."""
     watchable = labels if watchable is None else watchable
     try:
         answer = json.loads(raw)
@@ -102,15 +104,26 @@ def check_answer(raw: str, labels: dict[str, str], watchable: dict[str, str] | N
             continue
         command = _clip(step.get("command"), 500) if isinstance(step.get("command"), str) and step["command"].strip() else None
         reasons = safety.check(command)
-        recommended = bool(step.get("recommended")) and not reasons and not recommended_given
+        removes = safety.removes_data(command)
+        recommended = bool(step.get("recommended")) and not reasons and not removes and not recommended_given
         recommended_given = recommended_given or recommended
+        warning = f"Careful: this {', and '.join(reasons)}." if reasons else "This removes data." if removes else None
         steps.append({"title": _clip(step["title"], 120), "text": _clip(step.get("text"), 500), "command": command, "recommended": recommended,
-                      "dangerous": bool(reasons), "warning": f"Careful: this {', and '.join(reasons)}." if reasons else None})
+                      "dangerous": bool(reasons), "warning": warning})
     verify = answer.get("verify") if isinstance(answer.get("verify"), dict) else {}
     if verify.get("type") not in VERIFY_TYPES:
         verify = {"type": "manual", "target": None, "threshold": None, "minutes": None}
     if verify["type"] == "metric_below_for" and verify.get("target") not in watchable:
         verify = {"type": "manual", "target": None, "threshold": None, "minutes": None}
+    # Only the incident's own container can show that its fix held; any other running container would resolve it (#208).
+    if verify["type"] == "container_running_for" and (container is None or verify.get("target") != container):
+        verify = {"type": "manual", "target": None, "threshold": None, "minutes": None}
+    if verify["type"] != "manual":
+        minutes = verify.get("minutes")
+        if not isinstance(minutes, int) or isinstance(minutes, bool):
+            verify = {"type": "manual", "target": None, "threshold": None, "minutes": None}
+        else:
+            verify = {**verify, "minutes": max(MIN_WATCH_MINUTES, minutes)}   # a minute of quiet proves nothing
     confidence = answer.get("confidence") if answer.get("confidence") in CONFIDENCE else "low"
     if not signals:
         confidence = "low"   # a cause with nothing in the data behind it can't be more than a guess
@@ -151,6 +164,7 @@ def diagnose(db, incident: IncidentAlert, provider: Provider, trigger: str = "in
     pack_labels = evidence_pack.index(pack)
     model = getattr(provider, "model", "unknown")
     budget = settings.tool_budget(db, "diagnosis")
+    container = pack["incident"]["subject"] if str(pack["incident"]["kind"]).startswith("container:") else None
 
     def record(completion, duration_ms: int) -> None:
         nonlocal model
@@ -165,7 +179,7 @@ def diagnose(db, incident: IncidentAlert, provider: Provider, trigger: str = "in
         completion = found.completion
         for attempt in range(MAX_ATTEMPTS):
             try:
-                answer = check_answer(completion.text, labels, pack_labels)
+                answer = check_answer(completion.text, labels, pack_labels, container)
             except InvalidAnswer as exc:
                 reason = str(exc)
                 if attempt + 1 < MAX_ATTEMPTS:
