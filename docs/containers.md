@@ -243,8 +243,9 @@ health, restarts, CPU, memory, swap and volumes. Each figure is explained in [Me
 - It is one Python file using only the standard library: no third-party packages to audit or keep updated.
 - It reads the host's `/proc` and its filesystem through **read-only** mounts (`/proc:/host/proc:ro`,
   `/:/hostfs:ro`). It runs with **all capabilities dropped**, a read-only root filesystem and
-  `no-new-privileges`, so although it runs as root it can't read other users' private files (SSH keys,
-  `.env` files) on the host.
+  `no-new-privileges`, so although it runs as root it can't read other users' private files (their SSH
+  keys, their `.env` files) on the host. Files that root itself owns stay readable; see
+  [SECURITY.md](../SECURITY.md#other-exposure-to-be-aware-of).
 - Container data comes from the Docker proxy through a Unix socket, not from Docker directly; the
   collector has no Docker socket.
 - If the optional helpers run, it also reads their summary files from the shared `system_events` volume.
