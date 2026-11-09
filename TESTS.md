@@ -150,7 +150,7 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 | [`test_agent_service.py`](#test_agent_servicepy) | 11 | The chat's reply is one message; secrets in the question and incident context are masked; Test connection trying a real request; the Chat Completions provider and conversation history. |
 | [`test_agent_providers.py`](#test_agent_providerspy) | 12 | The Claude provider, and how the chosen provider, model and encrypted API key are stored. |
 | [`test_agent_tool_calls.py`](#test_agent_tool_callspy) | 30 | Tool calling with Claude, OpenAI (Responses API) and Gemini: calls, several at once, errors, masking, append-only history, forcing an answer, reasoning carried over, nothing stored at OpenAI. |
-| [`test_agent_diagnosis.py`](#test_agent_diagnosispy) | 55 | The agent's diagnosis: the evidence pack, secret masking, dangerous commands, checking the model's answer, saving reports. |
+| [`test_agent_diagnosis.py`](#test_agent_diagnosispy) | 56 | The agent's diagnosis: the evidence pack, secret masking, dangerous commands, checking the model's answer, saving reports. |
 | [`test_agent_investigation.py`](#test_agent_investigationpy) | 27 | The agent looking things up: the budget of tool calls per diagnosis and chat message, forced final answers, errors, the audit log, citations from tool results. |
 | [`test_agent_steps.py`](#test_agent_stepspy) | 34 | The agent's look-ups in plain words: what each tool asked and found, no raw results or secrets, windows left for the page, odd entries never failing. |
 | [`test_agent_tools.py`](#test_agent_toolspy) | 52 | The agent's read-only tools: a closed list with strict schemas, checked arguments, bounded and masked results with fact IDs, no secrets or IP addresses, nothing written. |
@@ -392,6 +392,7 @@ request.
 | `test_a_verify_condition_on_an_unknown_metric_becomes_manual` | A condition on a metric that isn't in the pack is not watched. |
 | `test_an_unusable_answer_is_rejected` | Answers that aren't JSON, aren't an object or have no summary are rejected (3 cases). |
 | `test_a_diagnosis_is_saved_as_a_new_version_and_counted` | Each diagnosis is a new version, each model call counts as `diagnosis`, the evidence is sent as untrusted and masked. |
+| `test_a_watched_metric_keeps_its_unit_from_the_evidence` | A condition on a metric is saved with that metric's unit from the evidence pack, so the page says "under 3500 MB" (#213). |
 | `test_an_unusable_answer_is_asked_for_once_more` | An unusable answer is asked for once more, saying why. |
 | `test_two_unusable_answers_give_a_failed_report` | After two unusable answers the report is saved as failed, with the reason and the evidence. |
 | `test_a_provider_error_is_counted_and_raised_so_the_job_is_retried` | A provider error is recorded and raised so the queue retries the job; no report is saved. |
@@ -494,7 +495,7 @@ and a firewall.
 | `test_a_container_that_ran_long_enough_without_restarting_resolves_the_incident` | A container running past the condition without a restart resolves the incident, with the condition as its resolution, and starts the hold. |
 | `test_a_recent_restart_keeps_it_open_and_shows_progress` | A recent restart keeps the incident open and reports how long the condition has held. |
 | `test_old_data_is_not_proof` | Samples older than 5 minutes never resolve an incident. |
-| `test_a_metric_under_its_threshold_long_enough_holds` | A metric under its threshold for long enough holds, described by the metric's name. |
+| `test_a_metric_under_its_threshold_long_enough_holds` | A metric under its threshold for long enough holds, described by the metric's name and, when the report has it, its unit ("under 80%", "under 3500 MB"). |
 | `test_the_rule_does_not_reopen_what_the_agent_closed_until_the_hold_ends_or_it_breaks` | The rule stays quiet after the agent resolved its incident, until the problem comes back. |
 | `test_manual_conditions_are_not_watched` | Conditions that need a person are never acted on. |
 

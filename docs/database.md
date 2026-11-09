@@ -46,6 +46,11 @@ only deleted once summarised. Hourly rollups, `check_rollups` and `system_events
 once its day is summarised. Daily, weekly and monthly rollups are never deleted. Deletes run in chunks of
 10,000 rows.
 
+**Not covered by retention.** `incident_alerts` and their `agent_reports` stay until their server is removed
+(which deletes them with it). `audit_logs` and `agent_runs` are never deleted by age; deleting a chat
+conversation deletes its `chat_messages` and its own audit entries (the agent's look-ups stay, unlinked). See
+[SECURITY.md](../SECURITY.md#statistics-and-history).
+
 The metrics tables carry only the indexes their queries use: `time` (for the hourly purge) and
 `(server_id, time)`, or `(server_id, container_id, time)` for containers. A database from before
 migrations gets them from the baseline migration, which also drops the redundant single-column

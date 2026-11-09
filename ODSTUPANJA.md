@@ -1,7 +1,8 @@
 # Odstupanja od dizajna
 
 Popis svega što se u implementaciji redizajna razlikuje od PDF-ova u `design/web/` i `design/mobile/`,
-s razlogom i, gdje postoji, GitHub issueom. Stanje: 14. 10. 2026.
+s razlogom i, gdje postoji, GitHub issueom. Stanje: 14. 10. 2026. Retci o incident agentu usklađeni su 10. 11. 2026.
+(automatska dijagnoza, ključ u Adminu i praćenje potrošnje sada postoje).
 
 Mobilni prikazi (`design/mobile/`) napravljeni su 14. 10. 2026; njihova odstupanja su u odjeljku „Mobitel i tablet".
 
@@ -21,7 +22,7 @@ su anotacije dizajna i namjerno nisu ugrađeni.
 
 | Dizajn | Implementacija | Razlog | Issue |
 | --- | --- | --- | --- |
-| Agentova bilješka na svakom incidentu („Agent: limit is 4 GB…") | Bilješka dolazi iz lokalne dijagnoze po pravilima, ne od jezičnog modela | Automatska LLM dijagnoza ne postoji | #93 |
+| Agentova bilješka na svakom incidentu („Agent: limit is 4 GB…") | Bilješka je prva rečenica agentove dijagnoze kad ona postoji; inače dolazi iz lokalne dijagnoze po pravilima | Bez API ključa, ili dok dijagnoza ne stigne, nema teksta modela | – |
 | „Ask the agent" otvara razgovor o tom kontejneru | Vodi na `/agent` bez konteksta kontejnera („Open diagnosis" otvara točno taj incident) | Chat još ne prima kontekst kontejnera | – |
 | Zadnji incident: „Resolved 2 h ago · memory limit raised to 6 GB" | Piše samo kada je riješen i na kojem serveru | Nitko ne upisuje kako je incident riješen | – |
 | „You'll get a push on ntfy if that changes" | Rečenica je izostavljena | Obavijesti ovise o kanalima koje je svaki korisnik postavio, pa rečenica ne bi vrijedila za svakoga | – |
@@ -31,7 +32,7 @@ su anotacije dizajna i namjerno nisu ugrađeni.
 | „Another machine": polje samo za ime | Dodano je i polje za adresu na koju se novi stroj javlja | Bez ispravne adrese naredba ne radi (localhost, VPN) | – |
 | Brisanje servera nije na Overviewu | „Remove this server" je i u System tabu, uz Admin → Servers | Zgodno je imati ga uz podatke servera | – |
 | Kartica „What you'll get": „Kept for a year as 30-minute points" | „Kept as rolled-up points for as long as you set in Admin" | Zadržavanje je postavka, a točke nisu uvijek 30-minutne | – |
-| „The agent only sends data to your model provider when it diagnoses an incident" | „…when you ask it something" | Automatska dijagnoza ne postoji | #93 |
+| „The agent only sends data to your model provider when it diagnoses an incident" | „…when it diagnoses an incident or you ask it something, and only once an admin has saved an API key" | Podaci idu i kod pitanja u chatu, a bez ključa ne ide ništa | – |
 
 ## Tabovi servera (`08-server-tabs.pdf`)
 
@@ -86,9 +87,9 @@ su anotacije dizajna i namjerno nisu ugrađeni.
 
 | Dizajn | Implementacija | Razlog | Issue |
 | --- | --- | --- | --- |
-| Dijagnozu piše jezični model („watchtower updated the image to 17.4.1…") | Dijagnoza se gradi fiksnim pravilima iz spremljenih metrika i događaja; sažetak je opis pravila | Automatska LLM dijagnoza ne postoji; ovako ne košta ništa i ništa ne šalje van | #93 |
+| Dijagnozu piše jezični model („watchtower updated the image to 17.4.1…") | Kad postoji API ključ, dijagnozu piše model i ona se provjerava prema podacima; bez ključa, ili dok ne stigne, prikazuje se dijagnoza po fiksnim pravilima | Agent je opcionalan; dijagnoza po pravilima ne košta ništa i ništa ne šalje van | – |
 | Evidence: retci iz loga kontejnera i `docker events` | Događaji koje je Infradeck zabilježio na tom serveru | Docker proxy ne može čitati logove | #100 |
-| „Confidence: high · 3 of 3 signals agree" | „3 of 3 checks against the data hold" | Nema modela koji bi procijenio pouzdanost | #93 |
+| „Confidence: high · 3 of 3 signals agree" | Agentova dijagnoza: oznaka „high confidence" i broj izostavljenih tvrdnji; dijagnoza po pravilima: „3 of 3 checks against the data hold" | Pouzdanost procjenjuje samo model; pravila je nemaju | – |
 | Koraci s točnom putanjom (`/opt/gitlab/docker-compose.yml`) i brojkama iz povijesti verzija | Koraci iz fiksnog priručnika po vrsti pravila, s imenom kontejnera i izračunatim limitom | Infradeck ne zna gdje je compose datoteka ni koju verziju slike je kontejner imao prije | – |
 | „Notified ntfy, email" | „sent to the channels people chose" ili „nobody yet" | Ne bilježi se po kanalu | – |
 | Chat: odgovori s oznakama izvora („memory 12:30–13:55", „docker events") | Običan tekst odgovora; ispod njega sklopljeni „Looked up": pretrage koje je agent napravio, s njegovim pitanjem, što je tražio i redak činjenica iz rezultata | Izvori su pretrage alata, a ne oznake u tekstu; retke činjenica piše Infradeck, ne model | #158 |
@@ -128,12 +129,10 @@ su anotacije dizajna i namjerno nisu ugrađeni.
 | Alert rules: stupac Servers s izborom servera | Uvijek „All" | Pravila vrijede za sve servere | – |
 | Alert rules: „New rule" | Gumb je onemogućen, s oznakom „Coming soon" | Vlastita pravila ne postoje | – |
 | Alert rules: bilješka zašto je pravilo isključeno | Samo broj isključenih pravila | Razlog se ne upisuje | – |
-| Incident agent: „Anthropic API · key ending 4f2a", „Change" | OpenAI, ključ i model iz `.env`; „Change" je onemogućen, „Test connection" provjerava ključ | Ključ se zasad postavlja u `.env`; spremanje u Adminu je dio #109 | #109 |
-| „Diagnose new incidents automatically" prekidač | Uvijek uključeno i onemogućeno | Dijagnoza je lokalna i ne može se isključiti | #93 |
+| Incident agent: „Anthropic API · key ending 4f2a", „Change" | Provider, model i ključ biraju se u Adminu; prikazuje se samo da je ključ spremljen, bez njegovih zadnjih znakova | Ključ, ni djelomično, ne napušta backend | – |
 | „Read container logs" s iznimkama | Onemogućeno | Proxy ne čita logove | #100 |
 | „Redact IPs and hostnames" | Onemogućeno | Nije napravljeno | – |
 | Incident agent: nema retka za broj pretraga | Redak „Look-ups": koliko alata agent smije pozvati po dijagnozi (8) i po poruci u chatu (4) | Budžet poziva alata, podizanje s 0 traži lozinku i 2FA | #157 |
-| „$1.84 estimated provider cost · cap $10" | „— · not tracked" | Potrošnja se ne mjeri | #91 |
 | Retention: tri zasebna roka | Jedan rok za sažetke; javljanja se čuvaju tjedan dana | Tako radi postojeće zadržavanje | #58 |
 | Database: putanja, rast po tjednu, „Last backup", „Export", „Back up now" | Veličina baze i broj zapisa; gumbi su onemogućeni, s oznakom „Coming soon" | Backup ne postoji | – |
 | About: „built 2 Oct 2026" | Samo verzija | Datum builda se ne bilježi | #106 |
@@ -151,14 +150,13 @@ su anotacije dizajna i namjerno nisu ugrađeni.
 | Statistics: legenda „This week / Last week" | „Last 7 days / The previous 7 days" | Isti tekst kao na desktopu | – |
 | Agent: „Show 5 log lines" | „Show N recorded events" | Infradeck ne čita logove kontejnera, nego bilježi događaje | #100 |
 | Agent: „Push alerts are on · Critical only between 23:00 and 07:00" | Redak „Where alerts go" vodi u Account | Infradeck nema push obavijesti na mobitel (nema aplikacije ni Web Pusha) | #50 |
-| Agent chat: oznake izvora ispod odgovora | Običan tekst | Model ne vraća izvore | #93 |
+| Agent chat: oznake izvora ispod odgovora | Ispod odgovora su koraci istrage (što je agent provjerio i što je našao), ne oznake izvora | Odgovor u chatu ne citira činjenice; citati postoje samo u dijagnozi | – |
 | More: „Owner" | Owner za admine, Member za ostale | Ne postoji uloga vlasnika | #106 |
 | Security: redovi s strelicom i prekidačem za 2FA | Isti redovi kao na desktopu (gumbi „Change password", „Set up") | Postupci traže lozinku i kod, pa ostaju gumbi | – |
 | Sessions: lokacija i „via WireGuard" | Adresa i vrijeme prijave | Nema geolokacije | – |
 | Notifications: kanal „This iPhone · Push" | Nema | Nema push obavijesti | #50 |
 | Notifications: redovi „Weekly report" i „Email digest 08:00" | Jedna rečenica da još ne postoje | Ne postoje | #33 |
 | Admin: „Infradeck 0.9.3 is out" | Nema; hub prikazuje strojeve koji čekaju | Infradeck ne zove van | – |
-| Admin: „Incident agent · $1.84 of $10" | „chat on/off" ili „no key" | Potrošnja se ne mjeri | #91 |
 | Admin: Connect a server u tri numerirana koraka | Ista kartica kao na desktopu, uz Copy i Share ispod naredbe | Jedna implementacija | – |
 | Admin: „You'll get a push when it connects" | Nema | Nema push obavijesti | #50 |
 | Alert rules: „+" za novo pravilo | Nema | Vlastita pravila ne postoje | – |

@@ -504,6 +504,18 @@ URL, a keyword or a value in a JSON reply, a TCP port, a TLS certificate, a DNS 
   retention* (1 year by default, 2 years or forever; nothing shorter can be chosen); daily, weekly and
   monthly summaries are kept forever. Nothing is deleted before the coarser level that replaces it exists,
   so long-range history stays available while the bulky raw rows don't grow without bound.
+- **What the retention setting does not cover.** These are kept until you remove them, and no setting
+  deletes them by age:
+  - **incidents**, with the agent's reports on them (each report keeps the masked evidence it was based
+    on): until their server is removed in Admin, which deletes them with it;
+  - **the audit log** (who did what and when: sign-ins, admin changes, the agent's look-ups; an entry
+    about replaced collector credentials names the address it came from): kept, except that deleting a
+    chat conversation deletes its own entries;
+  - **chat conversations**: until the person who had them deletes them;
+  - **the agent's usage records** (model, tokens, cost, a masked error): kept.
+
+  They are small next to the metrics, but they grow, and the audit log and the chat hold personal data.
+  If you need them gone after some time, delete them in the database; nothing else depends on old rows.
 
 ## Container privileges
 

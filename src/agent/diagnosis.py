@@ -184,6 +184,8 @@ def diagnose(db, incident: IncidentAlert, provider: Provider, trigger: str = "in
         for attempt in range(MAX_ATTEMPTS):
             try:
                 answer = check_answer(completion.text, labels, pack_labels, container)
+                # The unit of the watched metric, so the condition reads "under 80%" and not "under 80".
+                answer["verify"]["unit"] = next((metric["unit"] for metric in pack["metrics"] if metric["id"] == answer["verify"]["target"]), None)
             except InvalidAnswer as exc:
                 reason = str(exc)
                 if attempt + 1 < MAX_ATTEMPTS:

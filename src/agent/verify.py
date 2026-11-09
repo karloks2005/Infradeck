@@ -35,7 +35,8 @@ def describe(verify: dict | None) -> str | None:
     minutes = int(verify["minutes"])
     if verify["type"] == "container_running_for":
         return f"{verify.get('target') or 'the container'} runs {minutes} min without a restart"
-    return f"{verify.get('label') or verify.get('target')} stays under {verify.get('threshold'):g} for {minutes} min"
+    unit = verify.get("unit") or ""   # from the evidence pack (%, MB, GB); reports from before it was kept have none
+    return f"{verify.get('label') or verify.get('target')} stays under {verify.get('threshold'):g}{unit if unit == '%' else f' {unit}' if unit else ''} for {minutes} min"
 
 
 def _metric_rows(db, incident: IncidentAlert, metric: str, since: datetime) -> list[tuple[datetime, float | None]]:
