@@ -1756,6 +1756,32 @@ def run_check(check: dict[str, Any]) -> dict[str, Any]:
     return {"check_id": check["id"], "time": datetime.now(timezone.utc).isoformat(), **{key: value for key, value in outcome.items() if value is not None or key == "ok"}}
 
 
+class _ApiRedirect(urllib.error.URLError):
+    """The dashboard's address answered with a redirect, which calls to it never follow."""
+
+
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        target = urllib.parse.urlsplit(urllib.parse.urljoin(req.full_url, newurl))
+        raise _ApiRedirect(f"INFRADECK_API_URL redirects to {target.scheme}://{target.netloc}; set it to the final address")
+
+
+# Calls to the dashboard carry this collector's token, so they never follow a redirect: a proxy in front of the API
+# (a sign-in page, an http-to-https redirect) would otherwise get the token sent to wherever it points (#205).
+_API_OPENER = urllib.request.build_opener(_NoRedirects())
+
+
+def _api(request: urllib.request.Request) -> dict[str, Any]:
+    """Send ``request`` to the dashboard and read its JSON answer, at most MAX_BODY_BYTES of it."""
+    if urllib.parse.urlsplit(request.full_url).scheme not in ("http", "https"):
+        raise ValueError("INFRADECK_API_URL must start with http:// or https://")
+    with _API_OPENER.open(request, timeout=15) as response:
+        body = response.read(MAX_BODY_BYTES + 1)
+    if len(body) > MAX_BODY_BYTES:
+        raise ValueError("The dashboard's answer is too large")
+    return json.loads(body.decode())
+
+
 def send_check_results(api_url: str, server_id: int, token: str, results: list[dict[str, Any]], tests: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     request = urllib.request.Request(
         f"{api_url.rstrip('/')}/monitoring/metrics/checks",
@@ -1763,8 +1789,7 @@ def send_check_results(api_url: str, server_id: int, token: str, results: list[d
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=15) as response:
-        return json.loads(response.read(MAX_BODY_BYTES).decode())
+    return _api(request)
 
 
 MAX_TESTS = 5
@@ -1879,8 +1904,7 @@ def send_payload(api_url: str, server_id: int, token: str, payload: dict[str, An
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=15) as response:
-        return json.loads(response.read().decode())
+    return _api(request)
 
 
 def _machine_id() -> str | None:
@@ -1939,8 +1963,7 @@ def enroll(api_url: str, enroll_key: str) -> tuple[int, str]:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=15) as response:
-        data = json.loads(response.read().decode())
+    data = _api(request)
     return int(data["server_id"]), str(data["collector_token"])
 
 
@@ -1949,8 +1972,7 @@ def _post_json(url: str, payload: dict[str, Any], bearer: str | None = None) -> 
     if bearer:
         headers["Authorization"] = f"Bearer {bearer}"
     request = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST")
-    with urllib.request.urlopen(request, timeout=15) as response:
-        return json.loads(response.read().decode())
+    return _api(request)
 
 
 def _error_detail(exc: urllib.error.HTTPError) -> str:

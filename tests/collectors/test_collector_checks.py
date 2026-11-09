@@ -321,3 +321,72 @@ def test_validate_check_rejects_credentials_in_a_url():
     base = {"id": 1, "interval": 60, "retry_interval": 20, "timeout": 10, "accepted_codes": ["200-299"]}
     assert collector.validate_check({**base, "type": "http", "target": "https://user:pass@host/"}) is None
     assert collector.validate_check({**base, "type": "http", "target": "https://host/?token=x"}) is not None
+
+
+# --- calls to the dashboard (#205) ------------------------------------------------------------------------------
+
+def _serve(handler):
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, f"http://127.0.0.1:{server.server_address[1]}"
+
+
+def test_a_call_to_the_dashboard_never_follows_a_redirect_with_the_token():
+    seen = []
+
+    class Elsewhere(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            seen.append(self.headers.get("Authorization"))
+            self.send_response(200)
+            self.end_headers()
+
+        do_POST = do_GET
+
+        def log_message(self, *args):
+            pass
+
+    elsewhere, elsewhere_url = _serve(Elsewhere)
+
+    class SignInRedirect(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            self.send_response(302)
+            self.send_header("Location", f"{elsewhere_url}/login?rd=secret-return-path")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    proxy, proxy_url = _serve(SignInRedirect)
+    try:
+        with pytest.raises(urllib.error.URLError) as raised:
+            collector.send_payload(proxy_url, 1, "collector-token", {})
+        assert seen == []   # the token never reached the other host
+        assert str(raised.value.reason) == f"INFRADECK_API_URL redirects to {elsewhere_url}; set it to the final address"   # no path or query
+    finally:
+        proxy.shutdown()
+        elsewhere.shutdown()
+
+
+def test_a_huge_answer_from_the_dashboard_is_refused(monkeypatch):
+    class Huge(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            body = b"[" + b"0," * collector.MAX_BODY_BYTES + b"0]"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except OSError:   # the collector stops reading at its limit
+                pass
+
+        def log_message(self, *args):
+            pass
+
+    server, url = _serve(Huge)
+    try:
+        with pytest.raises(ValueError, match="too large"):
+            collector.send_payload(url, 1, "collector-token", {})
+        with pytest.raises(ValueError, match="http:// or https://"):
+            collector.send_payload("file:///etc", 1, "collector-token", {})
+    finally:
+        server.shutdown()

@@ -322,6 +322,9 @@ check results) don't exist on the public side at all.
   without them. The GHCR packages must be public for hosts to pull them without credentials.
 - **The VPN is yours to run.** Collector traffic over the VPN listener is plain HTTP inside the
   tunnel. Collectors authenticate with a per-server token that is stored hashed on the dashboard.
+  A collector never follows a redirect from the dashboard's address, so a sign-in page or another proxy in
+  front of the API can't make it send its token somewhere else; it logs the address it was sent to and
+  waits for `INFRADECK_API_URL` to be fixed. It reads at most 1 MiB of any answer.
 
 What this still depends on:
 
