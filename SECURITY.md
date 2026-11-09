@@ -516,7 +516,7 @@ development stack's `https` profile, which uses the official image's defaults.
 | frontend | `nginx` (port 8080 inside the container, so it needs no capability to listen) | none | read-only; cache, pid file and the `TRUSTED_PROXIES` file in memory |
 | redis | `redis` | none while running | read-only, data in its volume |
 | postgres | `postgres` | none while running | read-only, data in its volume, socket and `/tmp` in memory |
-| collector | root | none, so it can't read other users' files (see below) | read-only |
+| collector | root | none, so it reads only what root owns or everyone may read, not other users' private files (see below) | read-only |
 | collector-gate | root, workers as `nginx` | `CHOWN`, `SETUID`, `SETGID` | read-only, cache and pid in memory |
 | docker-proxy | root (to open the Docker socket) | none | read-only, no network |
 | system-helper, port-owners (optional) | root | `SYSLOG`; `SYS_PTRACE` and `DAC_READ_SEARCH` (see their sections above) | read-only, no network |
@@ -533,8 +533,13 @@ ran as root) would no longer be writable.
 - The collector mounts the host filesystem read-only at `/hostfs` to read disk usage and a few
   files such as `/etc/os-release`.
 - The collector runs with all capabilities dropped, a read-only filesystem and `no-new-privileges`.
-  Without `CAP_DAC_OVERRIDE`, even as root it can't read other users' private files (SSH keys,
-  `.env`) through the `/hostfs` mount; only files readable by "other" or owned by root are visible.
+  Without `CAP_DAC_OVERRIDE`, root is treated like any other user: through the `/hostfs` mount it can
+  read files that everyone may read and files that **root itself owns**, and nothing else. So another
+  user's private files (their SSH keys, a `.env` with mode `0600` in their home) are out of reach, but
+  root-owned files are not: `/etc/shadow`, `/root/.ssh`, and any `.env` or key file that belongs to root,
+  which includes the dashboard's own `.env` when the stack was installed as root. The collector reads none
+  of these (it opens a fixed list of files); this is what an attacker who took over the collector could
+  read. To narrow it, keep secrets in files owned by a user other than root with mode `0600`.
   Its one kernel-level allowance is a namespaced `net.ipv4.ping_group_range` sysctl, so availability
   ping checks can use an unprivileged ICMP socket; it is not a capability and grants no raw-socket access.
 - The Docker proxy is reached through a Unix socket in a volume shared only with the collector. It

@@ -192,8 +192,9 @@ services:
       # Summary from the optional system helper (read-only; empty unless that profile runs).
       - system_events:/helper:ro
       - docker_proxy_socket:/run/docker-proxy:ro
-    # Read-only host view, no capabilities: as root it then can't read other users' private
-    # files (SSH keys, .env) even though / is mounted.
+    # Read-only host view, no capabilities: as root it then reads only what root owns or everyone may
+    # read, not other users' private files, even though / is mounted. Root-owned files (/etc/shadow,
+    # /root/.ssh, a root-owned .env) stay readable; see SECURITY.md.
     cap_drop: [ALL]
     read_only: true
     security_opt:

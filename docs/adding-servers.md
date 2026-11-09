@@ -68,7 +68,7 @@ EOF
 | `/proc:/host/proc:ro` | Host CPU, memory, load, network, uptime, boot ID, OOM counter and kernel flags. |
 | `/:/hostfs:ro` | Disk usage of every mounted filesystem, hostname, OS name and `/etc/machine-id`. |
 | `docker-proxy` | The only container with the Docker socket. It answers container list, inspect (without environment variables) and stats, and nothing else. |
-| `cap_drop: [ALL]`, `read_only: true` | The collector can't read other users' private files through `/hostfs`, or write outside its state volume. |
+| `cap_drop: [ALL]`, `read_only: true` | Through `/hostfs` the collector reads only what root owns or everyone may read, not other users' private files, and it can't write outside its state volume. |
 | `collector_state` volume | Keeps the token after approval, so restarts don't need approval again. |
 
 To remove a collector completely:
