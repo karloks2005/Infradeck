@@ -261,6 +261,23 @@ def test_incidents_are_sent_once_following_routing_quiet_hours_and_muting(app, o
     assert main.dispatch_notifications(app.db) == 1 and b"INC-0050" in outbox[-1][1]
 
 
+def test_a_new_incident_is_sent_however_many_came_before_it_that_day(app, outbox):
+    viewer = signed_in(app, 3)
+    viewer.post("/account/channels", json={"kind": "ntfy", "target": "https://ntfy.example/t"})
+    now = datetime.now(timezone.utc)
+    for index in range(250):   # a busy day, more than the 200 incidents a round used to look at (#212)
+        app.db.add(IncidentAlert(id=1000 + index, server_id=1, severity="WARNING", title=f"Container c{index} exited", description="d", status="active",
+                                 rule_key=f"container:c{index}:exited", created_at=now - timedelta(hours=20) + timedelta(minutes=index)))
+    app.db.commit()
+    assert main.dispatch_notifications(app.db) == 252   # all of them in one round, and the two from the fixture
+
+    app.db.add(IncidentAlert(id=5000, server_id=1, severity="CRITICAL", title="Disk / on alpha is full", description="d", status="active", rule_key="host:disk:/",
+                             created_at=now - timedelta(minutes=5)))
+    app.db.commit()
+    assert main.dispatch_notifications(app.db) == 1 and b"INC-5000" in outbox[-1][1]
+    assert main.dispatch_notifications(app.db) == 0   # and still each incident once
+
+
 # --- admin -------------------------------------------------------------------------------------------
 
 def test_users_are_listed_and_changed_but_not_the_owner_or_yourself(app):
