@@ -150,7 +150,7 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 | [`test_agent_service.py`](#test_agent_servicepy) | 11 | The chat's reply is one message; secrets in the question and incident context are masked; Test connection trying a real request; the Chat Completions provider and conversation history. |
 | [`test_agent_providers.py`](#test_agent_providerspy) | 12 | The Claude provider, and how the chosen provider, model and encrypted API key are stored. |
 | [`test_agent_tool_calls.py`](#test_agent_tool_callspy) | 30 | Tool calling with Claude, OpenAI (Responses API) and Gemini: calls, several at once, errors, masking, append-only history, forcing an answer, reasoning carried over, nothing stored at OpenAI. |
-| [`test_agent_diagnosis.py`](#test_agent_diagnosispy) | 42 | The agent's diagnosis: the evidence pack, secret masking, dangerous commands, checking the model's answer, saving reports. |
+| [`test_agent_diagnosis.py`](#test_agent_diagnosispy) | 53 | The agent's diagnosis: the evidence pack, secret masking, dangerous commands, checking the model's answer, saving reports. |
 | [`test_agent_investigation.py`](#test_agent_investigationpy) | 27 | The agent looking things up: the budget of tool calls per diagnosis and chat message, forced final answers, errors, the audit log, citations from tool results. |
 | [`test_agent_steps.py`](#test_agent_stepspy) | 34 | The agent's look-ups in plain words: what each tool asked and found, no raw results or secrets, windows left for the page, odd entries never failing. |
 | [`test_agent_tools.py`](#test_agent_toolspy) | 52 | The agent's read-only tools: a closed list with strict schemas, checked arguments, bounded and masked results with fact IDs, no secrets or IP addresses, nothing written. |
@@ -379,13 +379,15 @@ request.
 |---|---|
 | `test_secrets_are_masked` | Passwords, tokens, keys, credentials in URLs, JWTs and private keys are replaced with `[masked]` (8 cases). |
 | `test_ordinary_text_is_left_alone` | Ordinary event text, even with words like "token", is not masked. |
-| `test_destructive_commands_are_flagged` | `rm -rf`, volume pruning, `DROP DATABASE`, `mkfs`, `chmod 777`, `curl \| sh`, `ufw disable` and more are flagged (9 cases). |
+| `test_destructive_commands_are_flagged` | `rm -rf` however its flags are written, `find -delete`, volume pruning, `DROP DATABASE`, `mkfs`, `chmod 777`, `curl \| sh`, `ufw disable`, and a command with a line break or hidden characters are flagged (18 cases, #208). |
 | `test_reading_and_ordinary_commands_are_not` | Reading commands and ordinary fixes are not flagged (7 cases). |
 | `test_the_pack_has_an_id_on_every_fact_and_stays_small` | Every fact in the evidence pack has an ID, series stay within 40 points, similar incidents carry their resolution. |
 | `test_the_pack_is_masked_and_the_same_every_time` | A secret in an event never reaches the pack, and the same data gives the same pack. |
 | `test_signals_keep_only_the_evidence_that_exists` | References to facts that aren't in the pack are removed from a signal. |
 | `test_a_signal_with_no_real_evidence_is_dropped_and_confidence_follows` | A signal citing nothing real is dropped and counted, and confidence falls to low. |
 | `test_a_dangerous_step_is_flagged_and_never_recommended` | A destructive fix gets a warning and loses "recommended"; the first safe step may keep it. |
+| `test_a_step_that_removes_something_is_never_recommended_but_stays_offered` | A command that removes something but isn't flagged (`docker image prune -a`) is offered with a note and never recommended; the next step may be (#208). |
+| `test_a_fix_is_only_verified_on_the_incidents_own_container_for_at_least_five_minutes` | A "container runs N minutes" condition must name the incident's own container, lasts at least 5 minutes, and becomes manual otherwise (#208). |
 | `test_only_one_step_is_recommended` | At most one fix step is recommended. |
 | `test_a_verify_condition_on_an_unknown_metric_becomes_manual` | A condition on a metric that isn't in the pack is not watched. |
 | `test_an_unusable_answer_is_rejected` | Answers that aren't JSON, aren't an object or have no summary are rejected (3 cases). |

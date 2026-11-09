@@ -80,7 +80,10 @@ the containers' names, images and figures, and similar incidents before it. Befo
 masked for secrets (tokens, keys, passwords, credentials in URLs, private keys; `src/agent/masking.py`), and the
 model is told the pack is untrusted data. Its answer is checked before anyone sees it: claims that cite no fact
 from the pack are dropped, and fix commands that could destroy data or open the machine up are flagged and never
-marked recommended (`src/agent/safety.py`). Nothing the model writes is run. Requests to OpenAI are sent with
+marked recommended (`src/agent/safety.py`). So is a command with a line break or hidden characters, which could
+paste as something other than what the page shows; the page shows every command exactly as it is copied. Any
+other command that removes something (`rm`, `prune`, `-delete`, `DROP` …) is offered with a note but never marked
+recommended either, because a list of dangerous patterns is never complete. Nothing the model writes is run. Requests to OpenAI are sent with
 `store: false`, so OpenAI keeps no copy of the conversation for later retrieval (its own abuse-monitoring retention
 still applies). Turn off "Diagnose new incidents
 automatically" in Admin › Incident agent to send nothing unless someone asks; without a key nothing is sent

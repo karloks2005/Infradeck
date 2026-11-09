@@ -155,7 +155,7 @@ function Command({ step }) {
   return (
     <div className="mt-2.5 flex items-center gap-3 rounded-md border border-line bg-bg py-1.5 pl-3 pr-1.5">
       {step.label && <span className="mono shrink-0 text-dim">{step.label}</span>}
-      <code className="mono custom-scroll min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-paper">{step.command}</code>
+      <code className="mono custom-scroll min-w-0 flex-1 overflow-x-auto whitespace-pre text-paper">{step.command}</code>
       <button type="button" className="btn btn-sm btn-ghost shrink-0" onClick={() => copy(step.command)}><Icon name={copied ? 'check' : 'copy'} size={13} />{copied ? 'Copied' : 'Copy'}</button>
     </div>
   )
