@@ -20,6 +20,22 @@ def test_without_a_tool_budget_the_chat_is_one_call_without_tools():
     assert provider.started == [{"tools": [], "effort": "low", "schema_name": "agent_reply"}] and len(provider.calls) == 1
 
 
+def test_secrets_in_the_question_and_incident_context_never_reach_the_provider():
+    provider = ScriptedProvider('{"message":"Looking."}', '{"message":"Still looking."}')
+    context = ("[INCIDENT INC-0001 on web1, warning, active]\nContainer app exited\n"
+               "- GET https://admin:hunter2@db.internal/ failed, api_key=ABCDEF123456\n[QUESTION]\n")
+    service = make_service()
+
+    service.send(1, "conversation", context + "My token is ghp_" + "a" * 30, provider)
+    service.send(1, "conversation", "And now?", provider)
+
+    for sent in provider.calls:   # the first turn, and the history sent again with the second
+        text = " ".join(message["content"] for message in sent if message["role"] == "user")
+        assert "hunter2" not in text and "ABCDEF123456" not in text and "ghp_" + "a" * 30 not in text
+    first = provider.calls[0][-1]["content"]
+    assert "[masked]" in first and "Container app exited" in first and "INC-0001" in first   # the rest stays readable
+
+
 def test_a_reply_without_a_message_is_an_error():
     with pytest.raises(ValueError, match="must contain a message"):
         make_service().send(1, "conversation", "Hello", ScriptedProvider('{"message":"  "}'))
