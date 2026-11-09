@@ -1623,6 +1623,7 @@ def _deliver(db, channel: NotificationChannel, owner: User, title: str, body: st
 
 NOTIFY_WINDOW = timedelta(hours=24)
 NOTIFY_MARK_SECONDS = 7 * 24 * 3600
+NOTIFY_SCAN_LIMIT = 2000   # incidents looked at per round; only a flood of incidents reaches it
 
 
 # A new warning or critical incident waits this long for the agent's diagnosis, so the notification can carry it.
@@ -1663,7 +1664,10 @@ def dispatch_notifications(db, now: datetime | None = None) -> int:
             by_user.setdefault(channel.user_id, []).append(channel)
     if not by_user:
         return 0
-    recent = db.query(IncidentAlert).filter((IncidentAlert.created_at >= now - NOTIFY_WINDOW) | (IncidentAlert.resolved_at >= now - NOTIFY_WINDOW), IncidentAlert.severity != "INFO").order_by(IncidentAlert.created_at).limit(200).all()
+    # Critical first, then the latest change first, so a new incident is always looked at at once (#212). An
+    # incident everyone was already told about costs one Redis look-up per user, so the cap only bounds a flood.
+    recent = db.query(IncidentAlert).filter((IncidentAlert.created_at >= now - NOTIFY_WINDOW) | (IncidentAlert.resolved_at >= now - NOTIFY_WINDOW), IncidentAlert.severity != "INFO") \
+        .order_by(case((IncidentAlert.severity == "CRITICAL", 0), else_=1), func.coalesce(IncidentAlert.resolved_at, IncidentAlert.created_at).desc()).limit(NOTIFY_SCAN_LIMIT).all()
     hostnames = dict(db.query(Server.id, Server.hostname).all())
     coming = None
     sent = 0
@@ -1673,6 +1677,12 @@ def dispatch_notifications(db, now: datetime | None = None) -> int:
         event = "resolved" if alert.status == "resolved" else alert.severity.lower()
         if event not in notify.EVENTS:
             continue
+        try:
+            waiting = [user_id for user_id in by_user if not redis_client.exists(f"infradeck:notified:{alert.id}:{user_id}:{event}")]
+        except Exception:   # without the markers everyone would be told again every few seconds
+            return sent
+        if not waiting:
+            continue
         report = latest_report(db, alert.id)
         if event != "resolved" and report is None:
             coming = _diagnosis_coming(db) if coming is None else coming
@@ -1680,7 +1690,8 @@ def dispatch_notifications(db, now: datetime | None = None) -> int:
             if coming and now - created < DIAGNOSIS_WAIT:
                 continue   # checked again in 15 s; after DIAGNOSIS_WAIT it goes out without the diagnosis
         summary = _agent_summary(report) if event != "resolved" else None
-        for user_id, channels in by_user.items():
+        for user_id in waiting:
+            channels = by_user[user_id]
             preferences = _preferences(owners[user_id])
             routing = preferences["routing"].get(event, {})
             wanted = [channel for channel in channels if routing.get(str(channel.id), notify.DEFAULT_ROUTING[event])]
