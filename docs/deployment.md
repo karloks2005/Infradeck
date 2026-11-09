@@ -179,10 +179,29 @@ compose project). Collectors started from `collector-compose.yml` need
 
 - **Another reverse proxy (nginx, Caddy, HAProxy, a tunnel connector, ...):** use the **server stack**
   (`docker-compose.server.yml`) on its own, not the development stack, and point your proxy at its dashboard
-  port (`127.0.0.1:5173` by default). A proxy that runs in Docker can instead join the stack's `front` network
-  and reach `frontend:8080`. The server stack is the one that keeps the collector endpoints off the
+  port (`127.0.0.1:5173` by default). The server stack is the one that keeps the collector endpoints off the
   public side, registration closed and the session cookie HTTPS-only. Terminate HTTPS in your proxy, have it
   send `X-Forwarded-For`, and set `TRUSTED_PROXIES` to its address (see below).
+- **A proxy that runs in Docker** can reach `frontend:8080` over a Docker network instead of the published
+  port. Attach the **frontend to the proxy's network**, as `deploy/traefik.yml` does. Save this next to it
+  (for example as `deploy/proxy.yml`) and add it to `COMPOSE_FILE` after the server file:
+
+  ```yaml
+  services:
+    frontend:
+      networks:
+        - proxy
+
+  networks:
+    proxy:
+      external: true
+      name: <your-proxy-network>
+  ```
+
+  **Never attach the proxy to the stack's own `front` network.** The backend and the collector gate's internal
+  listener are on it, and they trust whatever reaches them there: a proxy on `front` could call the backend
+  past nginx, claim any client address, and register a collector without a join token. The proxy is the part
+  most exposed to the internet, so it gets to see the frontend and nothing else.
 - **Caddy profile (`--profile https`, development stack): private use only.** It publishes the development
   stack's single listener, which serves the collector endpoints on the same address as the dashboard, so it
   is not suitable for a dashboard that is open to the internet. Use it on a LAN or behind a VPN.
