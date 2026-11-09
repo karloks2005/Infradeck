@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func
 
 from ..backend.models import AgentRun, AppSetting
+from .masking import mask_text
 
 PRICES_KEY = "agent_prices"
 CAP_KEY = "agent_monthly_cap_usd"
@@ -113,7 +114,7 @@ def record(db, *, kind: str, model: str, status: str = "ok", input_tokens: int =
            user_id: int | None = None, conversation_id: str | None = None, incident_id: int | None = None, error: str | None = None) -> AgentRun:
     run = AgentRun(kind=kind, status=status, model=model[:100], input_tokens=max(0, int(input_tokens or 0)), output_tokens=max(0, int(output_tokens or 0)),
                    cost_usd=cost_of(get_prices(db), model, input_tokens or 0, output_tokens or 0), duration_ms=max(0, int(duration_ms or 0)),
-                   user_id=user_id, conversation_id=conversation_id, incident_id=incident_id, error=(error or None) and error[:300])
+                   user_id=user_id, conversation_id=conversation_id, incident_id=incident_id, error=(error or None) and mask_text(error)[:300])
     db.add(run)
     db.commit()
     return run

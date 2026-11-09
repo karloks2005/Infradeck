@@ -35,6 +35,10 @@ MAX_SIGNALS = 6
 MAX_STEPS = 5
 MAX_ATTEMPTS = 2
 MIN_WATCH_MINUTES = 5
+# After this long the agent stops looking things up and has to answer (#209). The worker gives a job enough time
+# for that answer on top of it (worker.JOB_TIMEOUT_SECONDS), so a slow diagnosis is never started a second time
+# while the first one still runs.
+DEADLINE_SECONDS = 300
 # A diagnosis of the same rule on the same server (so the same container, mount or check) this recent is reused for a
 # new incident instead of asking the model again.
 REUSE_WITHIN = timedelta(hours=24)
@@ -174,7 +178,7 @@ def diagnose(db, incident: IncidentAlert, provider: Provider, trigger: str = "in
     started = time.monotonic()
     try:
         found = investigate(db, provider, _messages(pack, budget), SCHEMA, "incident_diagnosis", budget=budget, effort="high", record=record,
-                            audit=audit_log(db, title=f"Diagnosis of INC-{incident.id:04d}"))
+                            audit=audit_log(db, title=f"Diagnosis of INC-{incident.id:04d}"), deadline_seconds=DEADLINE_SECONDS)
         labels = {**found.labels, **pack_labels}
         completion = found.completion
         for attempt in range(MAX_ATTEMPTS):

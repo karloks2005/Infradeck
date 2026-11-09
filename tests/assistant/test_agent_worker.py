@@ -112,6 +112,19 @@ def test_a_failing_job_is_retried_later_and_given_up_after_three_attempts(redis)
     assert "did not answer" in agent_jobs.status(redis)["recent"][0]["note"]
 
 
+def test_a_failed_jobs_note_does_not_show_a_key_the_provider_repeated(redis):
+    def refused(job):
+        raise RuntimeError("Incorrect API key provided: sk-proj-" + "b" * 40)
+    agent_jobs.publish(redis, agent_jobs.OPENED, 7, "CRITICAL")
+
+    for _ in range(agent_jobs.MAX_ATTEMPTS):
+        agent_jobs.promote_due(redis, now=time.time() + 3600)
+        worker.process(redis, _take(redis), {agent_jobs.OPENED: refused})
+
+    note = agent_jobs.status(redis)["recent"][0]["note"]
+    assert "Incorrect API key" in note and "b" * 40 not in note   # Admin shows the recent jobs (#209)
+
+
 def test_a_retry_waits_before_it_runs_again(redis):
     agent_jobs.publish(redis, agent_jobs.OPENED, 7, "CRITICAL")
     worker.process(redis, _take(redis), {agent_jobs.OPENED: lambda job: 1 / 0})

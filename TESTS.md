@@ -150,12 +150,12 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 | [`test_agent_service.py`](#test_agent_servicepy) | 11 | The chat's reply is one message; secrets in the question and incident context are masked; Test connection trying a real request; the Chat Completions provider and conversation history. |
 | [`test_agent_providers.py`](#test_agent_providerspy) | 12 | The Claude provider, and how the chosen provider, model and encrypted API key are stored. |
 | [`test_agent_tool_calls.py`](#test_agent_tool_callspy) | 30 | Tool calling with Claude, OpenAI (Responses API) and Gemini: calls, several at once, errors, masking, append-only history, forcing an answer, reasoning carried over, nothing stored at OpenAI. |
-| [`test_agent_diagnosis.py`](#test_agent_diagnosispy) | 53 | The agent's diagnosis: the evidence pack, secret masking, dangerous commands, checking the model's answer, saving reports. |
+| [`test_agent_diagnosis.py`](#test_agent_diagnosispy) | 55 | The agent's diagnosis: the evidence pack, secret masking, dangerous commands, checking the model's answer, saving reports. |
 | [`test_agent_investigation.py`](#test_agent_investigationpy) | 27 | The agent looking things up: the budget of tool calls per diagnosis and chat message, forced final answers, errors, the audit log, citations from tool results. |
 | [`test_agent_steps.py`](#test_agent_stepspy) | 34 | The agent's look-ups in plain words: what each tool asked and found, no raw results or secrets, windows left for the page, odd entries never failing. |
 | [`test_agent_tools.py`](#test_agent_toolspy) | 52 | The agent's read-only tools: a closed list with strict schemas, checked arguments, bounded and masked results with fact IDs, no secrets or IP addresses, nothing written. |
 | [`test_agent_watch.py`](#test_agent_watchpy) | 10 | Reusing a recent diagnosis, and watching the fix until the agent resolves the incident. |
-| [`test_agent_worker.py`](#test_agent_workerpy) | 12 | The agent's job queue and worker: one job per opened or worsened incident after the commit, retries, time limit, restarts. |
+| [`test_agent_worker.py`](#test_agent_workerpy) | 13 | The agent's job queue and worker: one job per opened or worsened incident after the commit, retries, time limit, restarts. |
 | [`test_alerts.py`](#test_alertspy) | 10 | The incident engine: one incident per problem, resolve, container rules. |
 | [`test_auth_backend.py`](#test_auth_backendpy) | 50 | Accounts, passwords, the first-account setup token, and the cross-site request check. |
 | [`test_collector_mounts.py`](#test_collector_mountspy) | 1 | Which filesystems the collector reports. |
@@ -395,6 +395,8 @@ request.
 | `test_an_unusable_answer_is_asked_for_once_more` | An unusable answer is asked for once more, saying why. |
 | `test_two_unusable_answers_give_a_failed_report` | After two unusable answers the report is saved as failed, with the reason and the evidence. |
 | `test_a_provider_error_is_counted_and_raised_so_the_job_is_retried` | A provider error is recorded and raised so the queue retries the job; no report is saved. |
+| `test_a_provider_error_is_stored_without_the_key_it_repeats` | A provider error that repeats the API key is stored masked in the usage records (#209). |
+| `test_after_its_deadline_a_diagnosis_must_answer_and_its_job_has_time_for_that` | Past its deadline a diagnosis gets no more look-ups, and the worker's job time covers the answer after it, so a diagnosis never runs twice at once (#209). |
 | `test_the_worker_diagnoses_and_reports_back` | The worker's job ends as "diagnosed" with the confidence and version. |
 | `test_without_a_key_the_worker_leaves_the_rule_based_diagnosis` | Without an API key the job is skipped and says why. |
 | `test_with_automatic_diagnosis_off_only_a_request_is_diagnosed` | With automatic diagnosis off, only a requested diagnosis runs. |
@@ -506,6 +508,7 @@ and a firewall.
 | `test_the_incident_is_saved_even_when_redis_is_down` | A Redis failure loses the job, not the incident. |
 | `test_a_finished_job_leaves_the_processing_list_and_shows_in_recent` | A finished job leaves the processing list and shows in the recent results. |
 | `test_a_failing_job_is_retried_later_and_given_up_after_three_attempts` | A failing job is tried three times in all and then marked failed with its error. |
+| `test_a_failed_jobs_note_does_not_show_a_key_the_provider_repeated` | The error Admin shows for a recent job is masked, so a key the provider repeated doesn't show (#209). |
 | `test_a_retry_waits_before_it_runs_again` | A retry waits 30 seconds before it can run. |
 | `test_a_job_that_hangs_is_abandoned_after_its_time_limit` | A job past its time limit is abandoned and retried. |
 | `test_jobs_interrupted_by_a_restart_go_back_to_the_queue` | Jobs a worker took but never finished go back to the queue when it starts again. |

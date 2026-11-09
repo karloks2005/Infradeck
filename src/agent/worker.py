@@ -20,12 +20,17 @@ import time
 
 from src.agent import diagnosis, jobs, settings, usage, verify
 from src.agent.providers import get_provider, key_configured
+from src.agent.providers.base import MAX_RETRIES, TIMEOUT_SECONDS
+from src.agent.masking import mask_text
 from src.backend.config import REDIS_URL
 from src.backend.db import SessionLocal
 from src.backend.models import IncidentAlert
 
-# A diagnosis can take two model calls, each with its own retries; past this the job is given up and retried later.
-JOB_TIMEOUT_SECONDS = 300
+# Past this a job is given up and retried later. A diagnosis stops looking things up at its deadline; after that
+# come at most three model calls (one still running, the answer, and one more if the answer was unusable), each
+# with its own retries. The job's time covers all of that, so a slow diagnosis is never run twice at once (#209).
+MODEL_CALL_SECONDS = TIMEOUT_SECONDS * (MAX_RETRIES + 1)
+JOB_TIMEOUT_SECONDS = diagnosis.DEADLINE_SECONDS + 3 * MODEL_CALL_SECONDS
 POLL_SECONDS = 5
 # How often the conditions the agent gave are checked against the data (see verify.py).
 WATCH_SECONDS = 60
@@ -98,7 +103,8 @@ def process(redis_client, raw: str, handlers=None, timeout: float = JOB_TIMEOUT_
     try:
         status_text, note_text = run_with_timeout(handler, job, timeout)
     except Exception as exc:
-        return jobs.retry_or_fail(redis_client, raw, job, f"{type(exc).__name__}: {exc}", round((time.monotonic() - started) * 1000))
+        # The provider's own words, which Admin shows in the list of recent jobs: masked like the usage records.
+        return jobs.retry_or_fail(redis_client, raw, job, mask_text(f"{type(exc).__name__}: {exc}"), round((time.monotonic() - started) * 1000))
     jobs.finish(redis_client, raw, job, status_text, note_text, round((time.monotonic() - started) * 1000))
     return status_text
 
