@@ -132,7 +132,9 @@ def test_a_metric_under_its_threshold_long_enough_holds(db):
     condition = {"type": "metric_below_for", "target": "metric:main", "threshold": 80, "minutes": 10, "label": "memory in use"}
 
     result = verify.evaluate(db, db.get(IncidentAlert, 60), condition, NOW)
-    assert result["holds"] and result["text"] == "memory in use stays under 80 for 10 min"
+    assert result["holds"] and result["text"] == "memory in use stays under 80 for 10 min"   # a report from before units were kept
+    assert verify.describe({**condition, "unit": "%"}) == "memory in use stays under 80% for 10 min"
+    assert verify.describe({**condition, "unit": "MB", "threshold": 3500}) == "memory in use stays under 3500 MB for 10 min"
 
 
 def test_the_rule_does_not_reopen_what_the_agent_closed_until_the_hold_ends_or_it_breaks(db):

@@ -314,7 +314,7 @@ export function EmptyFleet({ overview, isAdmin, onChanged }) {
         <div className="card grid divide-y divide-line sm:grid-cols-2 sm:divide-x xl:grid-cols-4 xl:divide-y-0">
           {PROMISES.map(([title, text]) => <div key={title} className="px-[18px] py-4"><h3 className="m-0 text-[13px] font-semibold text-paper">{title}</h3><p className="mb-0 mt-2 text-xs leading-[19px] text-muted">{text}</p></div>)}
         </div>
-        <p className="mb-0 mt-3.5 text-xs text-muted">Everything stays on this machine. The agent only sends data to your model provider when you ask it something, and you can turn that off in Admin.</p>
+        <p className="mb-0 mt-3.5 text-xs text-muted">Everything stays on this machine. The agent only sends data to your model provider when it diagnoses an incident or you ask it something, and only once an admin has saved an API key. Both can be turned off in Admin.</p>
       </section>
     </div>
   )

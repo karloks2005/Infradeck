@@ -205,6 +205,15 @@ def test_a_diagnosis_is_saved_as_a_new_version_and_counted(db):
     assert shown["version"] == 2 and shown["signals"][0]["evidence"][1]["id"] == "check:1"
 
 
+def test_a_watched_metric_keeps_its_unit_from_the_evidence(db):
+    watched = {"type": "metric_below_for", "target": "metric:main", "threshold": 3500, "minutes": 10}
+    provider = FakeProvider(answer(signals=[{"text": "Memory hits the limit.", "evidence": ["metric:main"], "holds": True}], verify=watched))
+
+    report = diagnosis.diagnose(db, db.get(IncidentAlert, 42), provider)
+
+    assert json.loads(report.body)["verify"]["unit"] == "MB"   # so the page says "under 3500 MB", not "under 3500"
+
+
 def test_an_unusable_answer_is_asked_for_once_more(db):
     provider = FakeProvider("not json", valid_answer())
 

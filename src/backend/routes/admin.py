@@ -15,7 +15,7 @@ from ...agent import jobs as agent_jobs, settings as agent_settings, usage as ag
 from ...agent import providers as agent_providers
 from ..config import APP_VERSION, SESSION_COOKIE_NAME
 from ..db import engine, get_db
-from ..models import ChatMessage, HostMetric, IncidentAlert, Invite, Server, User
+from ..models import ChatMessage, HostMetric, IncidentAlert, Invite, User
 
 router = APIRouter()
 
