@@ -227,6 +227,26 @@ def test_a_provider_error_is_counted_and_raised_so_the_job_is_retried(db):
     assert run.status == "error" and db.query(AgentReport).count() == 0
 
 
+def test_a_provider_error_is_stored_without_the_key_it_repeats(db):
+    leaked = RuntimeError("Error code: 401 - Incorrect API key provided: sk-proj-" + "a" * 40)
+    with pytest.raises(RuntimeError):
+        diagnosis.diagnose(db, db.get(IncidentAlert, 42), FakeProvider(leaked))
+
+    error = db.query(AgentRun).one().error
+    assert "Incorrect API key" in error and "a" * 40 not in error   # admins see what went wrong, not the key (#209)
+
+
+def test_after_its_deadline_a_diagnosis_must_answer_and_its_job_has_time_for_that(db, monkeypatch):
+    monkeypatch.setattr(diagnosis, "DEADLINE_SECONDS", 0)
+    provider = FakeProvider(valid_answer())
+
+    assert diagnosis.diagnose(db, db.get(IncidentAlert, 42), provider).status == "ok"
+    assert provider.started[0]["tools"] and provider.allowed == [False]   # tools listed, but no more look-ups
+    # The answer after the deadline (and one still running, and one retry) fits in the job's time, so a slow diagnosis
+    # isn't started a second time while the first one runs (#209).
+    assert worker.JOB_TIMEOUT_SECONDS >= 300 + 3 * worker.MODEL_CALL_SECONDS
+
+
 def test_the_worker_diagnoses_and_reports_back(db, monkeypatch):
     monkeypatch.setattr(worker, "SessionLocal", lambda: db)
     monkeypatch.setattr(db, "close", lambda: None)

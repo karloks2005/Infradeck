@@ -151,8 +151,10 @@ The budget is a number of tool calls per answer, set in **Admin › Incident age
 - The model then gets one more step with tools not allowed (`allow_tools=False`), so it has to answer. The tool list
   itself stays the same for the whole conversation, because changing it would make the provider's cache and Claude's
   earlier thinking invalid.
-- The same happens when the month's spending cap is reached during an investigation, or (chat only) after 45
-  seconds, so the reply comes back before the web server gives up waiting (120 seconds).
+- The same happens when the month's spending cap is reached during an investigation, after 45 seconds in the chat,
+  so the reply comes back before the web server gives up waiting (120 seconds), and after 5 minutes in a diagnosis.
+  The worker gives a diagnosis job enough time for the answer on top of that (`worker.JOB_TIMEOUT_SECONDS`, 14
+  minutes), so a slow diagnosis is never started a second time while the first one still runs.
 - A model that still asks for tools after being told to answer is stopped and the answer fails, so a loop can't run
   on. In the worst case a diagnosis makes its budget plus two model calls (plus one for an answer that has to be
   asked for again).
@@ -249,8 +251,9 @@ with a real result from the tools' test database.
 **Wording.** Change the functions in `steps.py`; reports pick it up at once, chat replies saved before keep their
 old wording. Keep each line to facts the tool returned, never an interpretation.
 
-**The budget, the deadline, the extra steps.** `settings.TOOL_BUDGETS`, `chat.DEADLINE_SECONDS` and
-`investigate.EXTRA_STEPS`. The deadline must leave room for one more model call inside nginx's 120 seconds.
+**The budget, the deadline, the extra steps.** `settings.TOOL_BUDGETS`, `chat.DEADLINE_SECONDS`,
+`diagnosis.DEADLINE_SECONDS` and `investigate.EXTRA_STEPS`. The chat's deadline must leave room for one more model
+call inside nginx's 120 seconds; the worker's job time follows the diagnosis deadline by itself.
 
 **The prompts.** `DIAGNOSIS_PROMPT.md` and `SYSTEM_PROMPT.md`, sections `[TOOLS]`. They tell the model to start
 wide, cite tool IDs, give a specific reason, and never claim a look-up it didn't make.
