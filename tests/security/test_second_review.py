@@ -173,9 +173,9 @@ def test_a_correct_password_below_the_limit_still_works_and_clears_the_count(app
 
 def test_chat_messages_are_limited_per_user_per_hour(app):
     client = sign_in(app)
-    client.post("/conversations", json={"conversation_id": "c1"})
+    client.post("/conversations", json={"conversation_id": "c1-u1"})
 
-    codes = [client.post("/agent/chat", json={"conversation_id": "c1", "message": f"hello {i}"}).status_code for i in range(main.CHAT_MESSAGE_LIMIT + 3)]
+    codes = [client.post("/agent/chat", json={"conversation_id": "c1-u1", "message": f"hello {i}"}).status_code for i in range(main.CHAT_MESSAGE_LIMIT + 3)]
 
     assert codes[:main.CHAT_MESSAGE_LIMIT] == [200] * main.CHAT_MESSAGE_LIMIT and codes[-3:] == [429] * 3
 
@@ -184,7 +184,7 @@ def test_a_user_can_only_hold_so_many_conversations(app, monkeypatch):
     monkeypatch.setattr(main, "MAX_CONVERSATIONS_PER_USER", 5)
     monkeypatch.setattr(main, "CONVERSATION_CREATE_LIMIT", 10_000)
     client = sign_in(app)
-    codes = [client.post("/conversations", json={"conversation_id": f"c{i}"}).status_code for i in range(main.MAX_CONVERSATIONS_PER_USER + 3)]
+    codes = [client.post("/conversations", json={"conversation_id": f"c{i}-u1"}).status_code for i in range(main.MAX_CONVERSATIONS_PER_USER + 3)]
 
     assert codes[:main.MAX_CONVERSATIONS_PER_USER] == [200] * main.MAX_CONVERSATIONS_PER_USER and set(codes[-3:]) <= {409, 429}
     with app.Session() as db:
@@ -194,7 +194,7 @@ def test_a_user_can_only_hold_so_many_conversations(app, monkeypatch):
 def test_creating_conversations_is_rate_limited_too(app, monkeypatch):
     monkeypatch.setattr(main, "MAX_CONVERSATIONS_PER_USER", 10_000)
     client = sign_in(app)
-    codes = [client.post("/conversations", json={"conversation_id": f"c{i}"}).status_code for i in range(main.CONVERSATION_CREATE_LIMIT + 2)]
+    codes = [client.post("/conversations", json={"conversation_id": f"c{i}-u1"}).status_code for i in range(main.CONVERSATION_CREATE_LIMIT + 2)]
 
     assert codes[-2:] == [429, 429]
 

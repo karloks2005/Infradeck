@@ -63,6 +63,11 @@ def create_conversation(payload: main.ConversationRequest, session_id: Annotated
     if not user:
         raise HTTPException(status_code=401, detail="Session is invalid or expired.")
     main.enforce_limit(main.redis_client, scope="conversation-user", subject=user["id"], limit=main.CONVERSATION_CREATE_LIMIT, window_seconds=3600)
+    # IDs are unique across all accounts and the page builds them from the account's id ("general-u1",
+    # "incident-42-u1"), so each must end with its creator's: otherwise anyone could take another person's ID first
+    # and lock them out of their own chat (#201).
+    if not payload.conversation_id.endswith(f"-u{user['id']}"):
+        raise HTTPException(status_code=400, detail="Conversation ID is not valid.")
     if db.query(Conversation).filter(Conversation.id == payload.conversation_id).first():
         raise HTTPException(status_code=409, detail="Conversation already exists.")
     if db.query(func.count(Conversation.id)).filter(Conversation.user_id == user["id"]).scalar() >= main.MAX_CONVERSATIONS_PER_USER:

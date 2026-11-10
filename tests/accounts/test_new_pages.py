@@ -440,7 +440,7 @@ def _fake_agent(monkeypatch, tokens=(1000, 200), fail=None):
     monkeypatch.setattr(main, "is_agent_chat_enabled", lambda db: True)
 
 
-def _ask(client, conversation="c1"):
+def _ask(client, conversation="c1-u1"):
     client.post("/conversations", json={"conversation_id": conversation, "title": "t"})
     return client.post("/agent/chat", json={"conversation_id": conversation, "message": "Why did it restart?", "incident_id": 42})
 
@@ -502,7 +502,7 @@ def test_the_daily_limit_counts_messages_per_person(app, monkeypatch):
     owner.put("/admin/settings", json={"agent_daily_chat_limit": 2})
 
     assert [_ask(owner).status_code for _ in range(3)] == [200, 200, 429]
-    assert _ask(signed_in(app, 2), conversation="c2").status_code == 200   # someone else still can
+    assert _ask(signed_in(app, 2), conversation="c2-u2").status_code == 200   # someone else still can
 
 
 def test_a_failed_call_is_recorded_without_tokens(app, monkeypatch):
@@ -618,13 +618,31 @@ def test_hidden_diagnoses_stay_hidden_from_users_in_the_page_the_overview_and_no
     assert outbox and all(b"Agent:" not in message[1] for message in outbox)
 
 
+def test_nobody_can_take_another_persons_conversation_id(app, monkeypatch):
+    monkeypatch.setattr(main, "send_agent_message", lambda *args, **kwargs: Answer("ok"))
+    monkeypatch.setattr(main, "get_provider", lambda db: object())
+    monkeypatch.setattr(main, "is_agent_chat_enabled", lambda db: True)
+    owner, viewer = signed_in(app, 1), signed_in(app, 3)
+
+    # The IDs the page builds for the owner (#201): the viewer can't create them first, nor one that only looks alike.
+    for taken in ("general-u1", "incident-42-u1", "general-u11", "general"):
+        assert viewer.post("/conversations", json={"conversation_id": taken}).status_code == 400, taken
+    assert viewer.post("/conversations", json={"conversation_id": "general-u3"}).status_code == 200   # their own is fine
+
+    assert owner.post("/conversations", json={"conversation_id": "general-u1"}).status_code == 200
+    assert owner.post("/agent/chat", json={"conversation_id": "general-u1", "message": "hi"}).status_code == 200
+    assert viewer.post("/agent/chat", json={"conversation_id": "general-u1", "message": "hi"}).status_code in (403, 404)
+    assert viewer.delete("/conversations/general-u1").status_code == 404   # deleting still only touches your own
+    assert [item["id"] for item in owner.get("/conversations").json()["conversations"]] == ["general-u1"]
+
+
 def test_chat_is_for_admins_unless_allowed_per_user(app, monkeypatch):
     monkeypatch.setattr(main, "send_agent_message", lambda *args, **kwargs: Answer("ok"))
     monkeypatch.setattr(main, "get_provider", lambda db: object())
     monkeypatch.setattr(main, "is_agent_chat_enabled", lambda db: True)
     owner, viewer = signed_in(app, 1), signed_in(app, 3)
-    viewer.post("/conversations", json={"conversation_id": "v1"})
-    ask = lambda: viewer.post("/agent/chat", json={"conversation_id": "v1", "message": "hi"})  # noqa: E731
+    viewer.post("/conversations", json={"conversation_id": "v1-u3"})
+    ask = lambda: viewer.post("/agent/chat", json={"conversation_id": "v1-u3", "message": "hi"})  # noqa: E731
 
     assert ask().status_code == 403 and viewer.get("/agent/config").json()["may_chat"] is False          # admins only, the default
     assert owner.put("/admin/settings", json={"agent_chat_access": "per_user", **confirmed(app, owner)}).status_code == 200
@@ -692,10 +710,10 @@ def test_a_chat_message_looks_things_up_and_the_look_ups_outlive_the_conversatio
     assert provider.started[0]["tools"] and json.loads(provider.results[0][0].content)["hostname"] == "alpha"
     assert app.db.query(AgentRun).count() == 2
     looked = app.db.query(AuditLog).filter(AuditLog.event_type == "agent_tool_call").one()
-    assert (looked.user_id, looked.conversation_id, looked.task_title) == (1, "c1", "Why did it restart?")
+    assert (looked.user_id, looked.conversation_id, looked.task_title) == (1, "c1-u1", "Why did it restart?")
     assert owner.get("/dashboard/summary").json()["agent_lookups"] == 1
 
-    assert owner.delete("/conversations/c1").status_code == 200
+    assert owner.delete("/conversations/c1-u1").status_code == 200
     kept = app.db.query(AuditLog).filter(AuditLog.event_type == "agent_tool_call").one()
     assert kept.conversation_id is None
 
