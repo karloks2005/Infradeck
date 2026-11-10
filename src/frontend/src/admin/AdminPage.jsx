@@ -123,6 +123,8 @@ function Servers({ overview }) {
 function Users({ me }) {
   const { data, error, setData, reload } = useLoaded('/admin/users')
   const [state, run] = useAction()
+  // Letting someone chat sends more data to the AI provider, so turning it on is confirmed like the agent's switches (#202).
+  const [confirming, setConfirming] = useState(null)
   const [inviting, setInviting] = useState(false)
   const [form, setForm] = useState({ email: '', role: 'user' })
   const [link, setLink] = useState(null)
@@ -142,7 +144,7 @@ function Users({ me }) {
                 <td className="pl-[18px]"><span className="flex items-center gap-3"><span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-line bg-raised text-[11px] font-semibold" style={{ color: user.avatar_color || undefined }}>{initials(user.name)}</span><span className="min-w-0"><span className="block truncate font-medium text-paper">{user.name}{user.id === me.id && <span className="ml-2 text-xs font-normal text-muted">you</span>}</span><span className="block truncate text-xs text-muted">{user.email}</span></span></span></td>
                 <td>{fixed ? <span className="text-paper">{user.role_name}</span> : <select className="select h-8" aria-label={`Role of ${user.name}`} value={user.role} onChange={(event) => change(user, { role: event.target.value })}><option value="admin">Admin</option><option value="user">Viewer</option></select>}</td>
                 <td><span className={`chip ${user.two_factor ? 'chip-ok' : ''}`}>{user.two_factor ? 'On' : 'Off'}</span></td>
-                {data.agent_chat_access === 'per_user' && <td>{user.role === 'admin' ? <span className="text-xs text-muted">always</span> : <Switch label={`Agent chat for ${user.name}`} checked={user.agent_chat_enabled} disabled={state.busy} onChange={(on) => change(user, { agent_chat_enabled: on })} />}</td>}
+                {data.agent_chat_access === 'per_user' && <td>{user.role === 'admin' ? <span className="text-xs text-muted">always</span> : <Switch label={`Agent chat for ${user.name}`} checked={user.agent_chat_enabled} disabled={state.busy} onChange={(on) => (on ? setConfirming({ user, change: { title: `Agent chat for ${user.name}`, from: 'Off', to: 'On', intro: 'Letting someone chat with the agent lets them send questions and incident facts to an outside model.', action: 'Verify and turn on', detail: 'Their questions and the incident facts will be sent to', target: 'the AI provider' } }) : change(user, { agent_chat_enabled: false }))} />}</td>}
                 <td className="text-soft">{!user.is_active ? 'disabled' : user.sessions > 0 && user.id === me.id ? 'now' : ago(user.last_seen_at)}</td>
                 <td className="whitespace-nowrap pr-[18px] text-right">{!fixed && <>
                   {user.sessions > 0 && <button type="button" className="link" onClick={() => run(async () => { await post(`/admin/users/${user.id}/sign-out`); reload() })}>Sign out</button>}
@@ -181,6 +183,7 @@ function Users({ me }) {
         <span>Owners and admins change settings. Viewers see everything but can't acknowledge, resolve or change anything. <Outcome state={state} /></span>
         {!inviting && <button type="button" className="btn btn-sm" onClick={() => { setLink(null); setInviting(true) }}><Icon name="plus" size={13} />Invite user</button>}
       </div>
+      {confirming && <ConfirmDialog change={confirming.change} user={me} onConfirm={async (fields) => setData(await apiRequest(`/admin/users/${confirming.user.id}`, { method: 'PATCH', body: JSON.stringify({ agent_chat_enabled: true, ...fields }) }))} onClose={() => setConfirming(null)} />}
     </div>
   )
 }

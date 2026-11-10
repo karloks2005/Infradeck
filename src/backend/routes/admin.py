@@ -50,6 +50,9 @@ def admin_update_user(user_id: main.PathId, payload: main.UserUpdateRequest, ses
         raise HTTPException(status_code=403, detail="The owner's account can't be changed here.")
     if account.id == admin["id"]:
         raise HTTPException(status_code=403, detail="You can't change your own role or switch yourself off.")
+    if payload.agent_chat_enabled is True and not account.agent_chat_enabled:
+        # Lets one more person send questions and incident facts to the AI provider (#202).
+        reauth.require(db, admin, payload.reauth_token, payload.code)
     changes = []
     if payload.role is not None and payload.role != account.role:
         account.role = payload.role
