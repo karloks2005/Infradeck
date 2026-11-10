@@ -469,8 +469,9 @@ URL, a keyword or a value in a JSON reply, a TCP port, a TLS certificate, a DNS 
   password again, and every try counts toward the lockout, the right password included. A limited
   (set-up-only) session lasts 30 minutes, not a day.
 - **Turning the agent on is confirmed with the password and a two-factor code.** Choosing the agent's provider,
-  model or API key, switching the chat or automatic diagnosis on, opening the chat to other users and raising a
-  look-up budget from 0 all start
+  model or API key, switching the chat or automatic diagnosis on, opening the chat to other users (setting Chat
+  access to "Per user", and allowing one more user the chat in Admin › Users) and raising a look-up budget
+  from 0 all start
   sending data from the servers to an outside model, so someone with a stolen admin session can't do it alone.
   The password is checked first (`POST /auth/reauth`) and gives a token that lasts five minutes, belongs to that
   session, allows five codes and is used up by the change; every try counts toward the two-factor lockout, and an

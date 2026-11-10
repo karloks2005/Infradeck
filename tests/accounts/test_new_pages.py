@@ -647,7 +647,7 @@ def test_chat_is_for_admins_unless_allowed_per_user(app, monkeypatch):
     assert ask().status_code == 403 and viewer.get("/agent/config").json()["may_chat"] is False          # admins only, the default
     assert owner.put("/admin/settings", json={"agent_chat_access": "per_user", **confirmed(app, owner)}).status_code == 200
     assert ask().status_code == 403                                                                       # per user, but not allowed yet
-    users = owner.patch("/admin/users/3", json={"agent_chat_enabled": True}).json()
+    users = owner.patch("/admin/users/3", json={"agent_chat_enabled": True, **confirmed(app, owner)}).json()
     assert next(user for user in users["users"] if user["id"] == 3)["agent_chat_enabled"] is True and users["agent_chat_access"] == "per_user"
     assert ask().status_code == 200 and viewer.get("/agent/config").json()["may_chat"] is True
     owner.put("/admin/settings", json={"agent_chat_access": "admins_only"})
@@ -675,6 +675,23 @@ def test_turning_the_agent_on_needs_the_password_and_a_code(app):
         assert owner.put("/admin/settings", json={**body, **confirmed(app, owner)}).status_code == 200
     settings = owner.get("/admin/settings").json()
     assert settings["agent_auto_diagnose"] and settings["agent_chat_enabled"] and settings["agent_chat_access"] == "per_user"
+
+
+def test_letting_one_user_chat_needs_the_password_and_a_code_but_stopping_does_not(app):
+    owner = signed_in(app, 1)
+    owner.put("/admin/settings", json={"agent_chat_access": "per_user", **confirmed(app, owner)})
+    allowed = lambda: app.db.get(User, 3).agent_chat_enabled  # noqa: E731
+
+    assert owner.patch("/admin/users/3", json={"agent_chat_enabled": True}).status_code == 403   # a stolen session alone can't (#202)
+    app.db.expire_all()
+    assert not allowed()
+    assert owner.patch("/admin/users/3", json={"agent_chat_enabled": True, **confirmed(app, owner)}).status_code == 200
+    app.db.expire_all()
+    assert allowed()
+    assert owner.patch("/admin/users/3", json={"agent_chat_enabled": False}).status_code == 200  # stopping needs nothing
+    app.db.expire_all()
+    assert not allowed()
+    assert owner.patch("/admin/users/3", json={"role": "admin"}).status_code == 200            # other changes as before
 
 
 def test_the_look_up_budgets_are_checked_audited_and_raising_one_from_0_is_confirmed(app):

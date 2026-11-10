@@ -1759,8 +1759,11 @@ INVITE_TTL = timedelta(days=7)
 class UserUpdateRequest(BaseModel):
     role: Literal["admin", "user"] | None = None
     is_active: bool | None = None
-    # Whether they may use the agent chat when chat access is "per user".
+    # Whether they may use the agent chat when chat access is "per user". Turning it on sends more data to the AI
+    # provider, so it is confirmed with the password and a code (reauth.py), like the agent's other switches.
     agent_chat_enabled: bool | None = None
+    reauth_token: str | None = Field(default=None, max_length=100)
+    code: str | None = Field(default=None, max_length=64)
 
 
 class InviteRequest(BaseModel):
