@@ -1496,7 +1496,7 @@ agent's look-up steps) are plain JavaScript with no dependencies, so they have t
 Node's built-in runner:
 
 ```bash
-cd src/frontend && node --test        # Node 20 or newer; nothing to install
+cd src/frontend && node --test        # Node 24 or newer; nothing to install
 ```
 
 | File | Tests | What they protect |

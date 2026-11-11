@@ -3,7 +3,7 @@ infradeck: a self-hosted dashboard for monitoring homelab machines. One machine 
 
 ## Stack
 - Backend: Python 3.12, FastAPI + Uvicorn, SQLAlchemy + Alembic, PostgreSQL 16 (psycopg), Redis (sessions, rate limits, agent job queue). Tests: pytest.
-- Frontend: React 19, react-router-dom 7, Vite 8, Tailwind CSS v4, oxlint, Node 20, served by nginx. Tests: `node --test`.
+- Frontend: React 19, react-router-dom 7, Vite 8, Tailwind CSS v4, oxlint, Node 24, served by nginx. Tests: `node --test`.
 - Collectors: Python 3.12, standard library only.
 - Infra: Docker Compose, nginx (frontend + collector-gate), optional Traefik/Caddy, signed collector images on GHCR (cosign), GitHub Actions CI.
 

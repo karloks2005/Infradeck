@@ -19,7 +19,7 @@ DATABASE_URL=sqlite:///./dev.db REDIS_URL=redis://localhost:6379/0 \
 
 ## Frontend dev server
 
-Node 20 (`.nvmrc`). The Vite dev server proxies `/api` to `localhost:8060` (set `BACKEND_URL` to point it elsewhere),
+Node 24 (`.nvmrc`). The Vite dev server proxies `/api` to `localhost:8060` (set `BACKEND_URL` to point it elsewhere),
 matching the production nginx setup.
 
 ```bash
@@ -45,7 +45,7 @@ pytest
 ```
 
 No Docker, PostgreSQL or Redis is needed; the suite takes about two minutes. The chart
-helpers have their own tests that need only Node 20 or newer: `cd src/frontend && node --test`. See
+helpers have their own tests that need only Node 24 or newer: `cd src/frontend && node --test`. See
 [TESTS.md](../TESTS.md) for how the tests work, what they don't cover, and what every
 test is for.
 
