@@ -487,6 +487,9 @@ URL, a keyword or a value in a JSON reply, a TCP port, a TLS certificate, a DNS 
 - **The login cookie is `Secure` by default.** `SESSION_COOKIE_SECURE` defaults to `true` (an empty value
   too), so a backend run outside the compose files never sends the cookie over plain HTTP by accident; only
   the development compose file sets `false`.
+- **The browser keeps almost nothing.** The dashboard stores only your user ID, role and whether two-factor
+  setup is pending in `localStorage`, to pick the pages it shows before `/auth/me` answers. Your name and
+  email aren't stored there, so they aren't left behind when a session expires.
 - **Upgrade.** Sessions written in the old format no longer work (everyone signs in once) and are deleted from
   Redis at start, so the old session IDs don't linger there.
 - **The backend** trusts `X-Forwarded-For` from any address that can reach it (`--forwarded-allow-ips *`). That
