@@ -42,7 +42,9 @@ function App() {
 
   useEffect(() => {
     try {
-      if (user) window.localStorage.setItem(AUTH_KEY, JSON.stringify(user))
+      // Only what the first render needs (which pages to allow); the name and email come from /auth/me on load,
+      // so they aren't left in the browser after a session expires.
+      if (user) window.localStorage.setItem(AUTH_KEY, JSON.stringify({ id: user.id, role: user.role, setup_required: user.setup_required }))
       else window.localStorage.removeItem(AUTH_KEY)
     } catch {
       // Private windows: the sign-in just isn't remembered across reloads.

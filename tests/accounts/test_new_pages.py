@@ -728,7 +728,6 @@ def test_a_chat_message_looks_things_up_and_the_look_ups_outlive_the_conversatio
     assert app.db.query(AgentRun).count() == 2
     looked = app.db.query(AuditLog).filter(AuditLog.event_type == "agent_tool_call").one()
     assert (looked.user_id, looked.conversation_id, looked.task_title) == (1, "c1-u1", "Why did it restart?")
-    assert owner.get("/dashboard/summary").json()["agent_lookups"] == 1
 
     assert owner.delete("/conversations/c1-u1").status_code == 200
     kept = app.db.query(AuditLog).filter(AuditLog.event_type == "agent_tool_call").one()

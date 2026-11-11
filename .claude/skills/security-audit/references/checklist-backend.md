@@ -106,10 +106,10 @@
 
 ## 6. Izlazne veze (SSRF) i integracije
 
-- [ ] Webhook/alarm URL-ovi (`ADMIN_ALERT_WEBHOOK_URL`, kanali u `alerts.py`/`rules.py`):
-      tko ih može postaviti (samo env ili i API)? Ako ih postavlja korisnik/admin preko API-ja:
-      shema samo http(s), blokiranje loopback/link-local/privatnih adresa i metadata IP-a,
-      provjera nakon DNS razrješenja, bez praćenja preusmjeravanja na unutarnje adrese, timeout.
+- [ ] Kanali obavijesti (`notify.py`: ntfy, Discord, webhook, email) postavljaju se preko API-ja
+      po korisniku: shema samo http(s), loopback/link-local/metadata uvijek odbijeni, privatne
+      LAN adrese samo za admine, provjera nakon DNS razrješenja i spajanje na provjerenu adresu
+      (DNS rebinding), bez praćenja preusmjeravanja, timeout. Provjeri i SMTP put.
 - [ ] Sadržaj odlazne poruke ne sadrži tajne (tokene, hashove) ni neocišćene tuđe stringove u
       kontekstu gdje se interpretiraju (Slack/markdown/HTML/email zaglavlja → injekcija).
 - [ ] Nema `requests`/`httpx` poziva prema URL-u iz zahtjeva bez gornjih zaštita.

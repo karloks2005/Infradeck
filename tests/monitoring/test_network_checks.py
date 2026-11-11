@@ -336,7 +336,7 @@ def db():
 
 
 def _ingest(db, **host):
-    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=5, host=host), authorization=f"Bearer {TOKEN}", session_id=None, db=db)
+    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=5, host=host), authorization=f"Bearer {TOKEN}", db=db)
 
 
 def _l(proto, port, scope="any"):

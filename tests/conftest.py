@@ -3,6 +3,9 @@ import os
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+# The test client speaks plain HTTP and doesn't come through the collector gate; tests of the strict mode set it themselves.
+os.environ.setdefault("SESSION_COOKIE_SECURE", "false")
+os.environ.setdefault("COLLECTOR_ACCESS", "open")
 
 import pytest
 

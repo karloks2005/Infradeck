@@ -31,7 +31,7 @@ def db():
 
 
 def _ingest(db, containers=(), **host):
-    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=5, host=host, containers=list(containers)), authorization=f"Bearer {TOKEN}", session_id=None, db=db)
+    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=5, host=host, containers=list(containers)), authorization=f"Bearer {TOKEN}", db=db)
 
 
 def _c(name, status="running", **extra):

@@ -11,7 +11,7 @@ Every setting below is listed, with no values, in [`example.env`](../example.env
 | `POSTGRES_PASSWORD` | *(required)* | PostgreSQL password. |
 | `POSTGRES_DB` / `POSTGRES_USER` | `infradeck` / `infradeck` | Name of the database and its user. Installs from before the rename can keep `homelab` (see [SETUP_DATABASES.md](../SETUP_DATABASES.md)). |
 | `REDIS_PASSWORD` | *(required)* | Redis password. Redis holds the login sessions, so nothing that can merely reach it may use it. Use letters and digits only (`openssl rand -hex 24`) because it is put into a URL. |
-| `SESSION_COOKIE_SECURE` | `false` (dev), `true` (server file) | Send the login cookie over HTTPS only. |
+| `SESSION_COOKIE_SECURE` | `true`; the dev compose file sets `false` | Send the login cookie over HTTPS only. Empty counts as `true`. Set `false` only when you open the dashboard over plain HTTP. |
 | `SESSION_TTL_SECONDS` | `86400` | Session lifetime without *Remember me*. |
 | `SESSION_COOKIE_NAME` | `homie_session` | Name of the sign-in cookie. Change it only if it clashes with another app on the same domain. |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_STARTTLS` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | empty / `587` / `true` / empty / empty / empty | Email for incident notifications. Email is off unless `SMTP_HOST` and `SMTP_FROM` are set. |
@@ -35,7 +35,7 @@ Every setting below is listed, with no values, in [`example.env`](../example.env
 | `COLLECTOR_PUBLIC_URL` | empty | What **Connect a server** tells new machines to use, e.g. `http://<vpn-address>:8081/api`. |
 | `COLLECTOR_IMAGE` / `DOCKER_PROXY_IMAGE` | empty | Digest-pinned images remote machines install. **Connect a server** needs both. |
 | `JOIN_TOKEN_TTL_SECONDS` | `900` | How long a generated join token stays valid. |
-| `COLLECTOR_ACCESS` | `open` (dev), `strict` (server file) | `strict` makes the backend answer collector endpoints only when they came through the collector gate. |
+| `COLLECTOR_ACCESS` | `strict`; the dev compose file sets `open` | `strict` makes the backend answer collector endpoints only when they came through the collector gate. `open` is for a stack with a single listener, like the dev one. |
 | `INFRADECK_ENROLL_KEY` | empty | Lets the stack's own collector skip approval. |
 | `INFRADECK_SERVER_NAME` | host's hostname | Name shown for the stack's own machine. |
 | `DOMAIN` | `localhost` | Domain for the optional Caddy profile. |

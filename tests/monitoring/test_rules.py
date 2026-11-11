@@ -30,7 +30,7 @@ def db(monkeypatch):
 
 
 def _ingest(db, **host):
-    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=5, host=host), authorization=f"Bearer {TOKEN}", session_id=None, db=db)
+    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=5, host=host), authorization=f"Bearer {TOKEN}", db=db)
 
 
 def _active(db):

@@ -1,7 +1,8 @@
 # Kontrolna lista: collector, docker proxy, system helper (`src/collector/**`), incident agent (`src/agent/**`)
 
-Čitaj `collector.py`, `docker_proxy.py`, `system_helper.py`, `health_checks.py`, `service.py`,
-`prompts.py`, `main.py`, `utils.py` i `SYSTEM_PROMPT.md` u cijelosti. Docker proxy i system
+Čitaj `collector.py`, `docker_proxy.py`, `system_helper.py` te za agenta `src/agent/` (`tools/`,
+`investigate.py`, `diagnosis.py`, `chat.py`, `masking.py`, `safety.py`, `providers/`, `worker.py`,
+`usage.py`, oba prompta) u cijelosti. Docker proxy i system
 helper drže privilegije: najveća pažnja ide njima.
 
 ## 1. Docker proxy (`docker_proxy.py`): drži root-ekvivalent
@@ -67,19 +68,33 @@ helper drže privilegije: najveća pažnja ide njima.
 - [ ] Ograničenja količine prijavljenih podataka (kontejneri, portovi, događaji) na strani
       kolektora, ne samo backenda.
 
-## 4. LLM asistent (`service.py`, `prompts.py`, `SYSTEM_PROMPT.md`, `health_checks.py`)
+## 4. Incident agent (`src/agent/`)
 
-Dokumentirano: nema putanje za shell, samo tri fiksne provjere (`server_health`,
-`container_health`, `daily_checkup`), webhook samo na `ADMIN_ALERT_WEBHOOK_URL`.
+Dokumentirano (`docs/assistant.md`, `docs/agent-investigation.md`, SECURITY.md): agent nema
+shell ni pristup hostu. Ima zatvoren popis read-only alata (`tools/__init__.py`: `server_info`,
+`host_metrics`, `list_containers`, `container_history`, `disk_usage`, `events`,
+`compare_to_baseline`, `find_incidents`, `fleet_snapshot`, `check_results`, `network_state`)
+koji čitaju samo bazu Infradecka. Petlja (`investigate.py`) ima budžet poziva, rok i mjesečni
+limit troška. Preporučene naredbe su samo tekst koji `safety.py` provjerava; ništa se ne izvršava.
 
-- [ ] **Alati su doista fiksni:** parametri alata validirani bijelom listom; nema alata s
-      proizvoljnim stringom koji završava u naredbi, putanji, URL-u ili SQL-u. Nema
-      dinamičkog dodavanja alata iz podataka.
-- [ ] **Prompt injection:** podaci koji ulaze u kontekst modela (imena kontejnera, linije
-      loga, poruke grešaka, rezultati provjera, tekst korisnika) mogu sadržavati upute.
-      Što najgore može model napraviti ako ih posluša? (Pozvati dopuštene provjere, poslati
-      webhook, otkriti sistemski prompt/konverzaciju.) Webhook i alarmi ne smiju nositi
-      tajne, a model ne smije moći promijeniti odredište.
+- [ ] **Alati su doista fiksni:** `run` odbija nepoznato ime, argumenti se provjeravaju prema
+      shemi prije čitanja; nema argumenta koji završava u naredbi, putanji, URL-u ili SQL-u
+      izvan ORM-a. Rezultat je ograničen (`bounds.py`, `MAX_RESULT_CHARS`) i ne sadrži ništa
+      što vide samo admini (IP adrese, korisnici, audit log), jer isti odgovor dobiva svatko.
+- [ ] **Maskiranje:** sve što ide pružatelju (rezultati alata, kontekst incidenta, poruke
+      korisnika u chatu, greške u `usage`/`worker`) prolazi `masking.py`. Traži put koji ga
+      zaobilazi (novi alat, novo polje, poruka greške pružatelja koja se sprema ili prikazuje).
+- [ ] **Prompt injection:** podaci koji ulaze u kontekst modela (imena kontejnera, događaji,
+      greške provjera, tekst korisnika) mogu sadržavati upute. Što najgore model može ako ih
+      posluša? (Potrošiti budžet, citirati krive činjenice, preporučiti štetnu naredbu.)
+      Provjeri da `check_answer` prihvaća samo ID-eve činjenica iz stvarnih rezultata, da
+      `safety.py` hvata destruktivne i skrivene znakove (bidi, zero-width) i da se naredba
+      koja briše podatke nikad ne preporučuje.
+- [ ] **Pružatelj i ključ:** ključ šifriran (`secrets_box`), nikad u odgovoru API-ja, logu ni
+      audit zapisu; adrese pružatelja fiksne u kodu (korisnik ne može postaviti `base_url`);
+      promjena pružatelja, ključa i uključivanje chata traže reauth (lozinka + 2FA).
+- [ ] **Posao u pozadini:** worker (`jobs.py`, `worker.py`) ima ukupni rok i ne može ostaviti
+      posao zauvijek u stanju "running"; red u Redisu ne prima nepouzdane podatke kao kod.
 - [ ] **Izlaz modela se ne tretira kao pouzdan:** prikazuje se kao tekst (frontend ne radi
       `dangerouslySetInnerHTML`/neprovjeren markdown s HTML-om), ne ulazi u SQL/naredbe/URL-ove.
 - [ ] **Konverzacije su vezane uz korisnika** (IDOR: čitanje/brisanje tuđih konverzacija
@@ -91,6 +106,5 @@ Dokumentirano: nema putanje za shell, samo tri fiksne provjere (`server_health`,
       ispisati).
 - [ ] Pozivi prema Docker API-ju idu samo kroz proxy (`DOCKER_SOCKET_PATH`); backend ne montira
       `docker.sock`. Provjeri compose i kod.
-- [ ] Webhook: samo `ADMIN_ALERT_WEBHOOK_URL` iz okoline; bez toga nikakav zahtjev; payload
-      bez neocijenjenog sadržaja koji bi napravio injekciju u primatelju (Slack mrkdwn,
-      mention-i `@channel` iz imena kontejnera).
+- [ ] Agent nema izlaznih veza osim prema pružatelju; obavijesti šalje backend
+      (`notify.py`, vidi `checklist-backend.md` §6), a model ne bira odredište ni sadržaj.
