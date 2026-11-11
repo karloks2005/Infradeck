@@ -1,5 +1,5 @@
-# Runs the backend tests, the frontend helper tests and the frontend linter on every pull request and on pushes
-# to main. Needs no services: the backend tests use an in-memory database and fakes (see TESTS.md).
+# Runs the backend tests, the frontend helper tests, the frontend linter and the frontend build on every pull
+# request and on pushes to main. Needs no services: the backend tests use an in-memory database and fakes (see TESTS.md).
 # Third-party actions are pinned to commit hashes; update them deliberately.
 name: Tests
 
