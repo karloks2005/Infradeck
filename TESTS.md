@@ -169,7 +169,7 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 | [`test_history.py`](#test_historypy) | 36 | The history API behind long-range charts: which level of detail answers each range, point limits, gaps, and agreement with the raw samples. |
 | [`test_indexes.py`](#test_indexespy) | 9 | The database indexes on the metrics tables: only the ones queries use, none duplicated. |
 | [`test_migrations.py`](#test_migrationspy) | 5 | Database migrations: new and pre-migration databases both end at the latest revision with the models' schema. |
-| [`test_ingest_validation.py`](#test_ingest_validationpy) | 178 | What collectors report is checked and bounded: numbers, names, filesystems, spacing of check-ins. |
+| [`test_ingest_validation.py`](#test_ingest_validationpy) | 179 | What collectors report is checked and bounded: numbers, names, filesystems, spacing of check-ins. |
 | [`test_input_limits.py`](#test_input_limitspy) | 38 | Size and shape limits on request bodies, the audit-log endpoint, and safe defaults. |
 | [`test_nginx_headers.py`](#test_nginx_headerspy) | 4 | The development and server nginx send the same security headers, HSTS only on the server one. |
 | [`test_network_checks.py`](#test_network_checkspy) | 94 | The host's real network totals, listening-port inventory, optional internet check, firewall fingerprints, and the validation of all of it. |
@@ -855,6 +855,7 @@ Nothing a collector reports is trusted: numbers, names and filesystems are check
 | `test_the_next_check_in_is_accepted_when_the_slot_has_passed` | Once the spacing has passed, check-ins work again. |
 | `test_the_spacing_is_never_shorter_than_the_minimum` | Even with a 15-second interval the spacing is at least 5 seconds. |
 | `test_someone_without_the_token_cannot_use_up_a_servers_slot` | A request with a wrong token is refused (401) without using up the real collector's slot. |
+| `test_a_signed_in_admin_cannot_send_metrics_in_place_of_a_collector` | An admin session with a wrong or missing token, or for an unknown server, gets 401 and nothing is stored. |
 | `test_a_redis_outage_does_not_stop_check_ins` | If Redis is down the limit is skipped and monitoring continues. |
 | `test_one_server_with_a_flood_of_alerts_cannot_hide_everyone_elses` | 100 alerts from one server show at most 10, so another server's single alert stays visible; the total count stays true. |
 | `test_one_query_never_reads_more_raw_rows_than_the_backstop` | A history query stops at the row cap. |

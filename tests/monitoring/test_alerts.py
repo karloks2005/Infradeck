@@ -26,7 +26,7 @@ def db():
 
 
 def _ingest(db, containers):
-    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=5, containers=containers), authorization=f"Bearer {TOKEN}", session_id=None, db=db)
+    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=5, containers=containers), authorization=f"Bearer {TOKEN}", db=db)
 
 
 def _container(name, status="running", health=None, restarts=0):

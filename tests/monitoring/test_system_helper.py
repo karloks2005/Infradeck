@@ -177,7 +177,7 @@ def db():
 
 def _ingest(db, **host):
     host = {"boot_id": BOOT, "oom_kill_total": 0, "kernel_tainted": 0, "ntp_synced": True, "reboot_required": False, **host}
-    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=5, host=host), authorization=f"Bearer {TOKEN}", session_id=None, db=db)
+    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=5, host=host), authorization=f"Bearer {TOKEN}", db=db)
 
 
 def _event(kind="oom_kill", key="boot-a:oom:1.000000", minutes_ago=5, detail="The kernel OOM killer stopped java (pid 1)"):

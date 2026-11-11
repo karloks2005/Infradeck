@@ -333,7 +333,8 @@ What this still depends on:
   add other containers to its network, `front`, and that includes your reverse proxy: attach the frontend to
   the proxy's network instead, see [Other reverse proxies](docs/deployment.md#other-reverse-proxies)).
 - Anyone on your VPN can reach the gate. With a valid join token they can request to join, and an
-  admin still has to approve them; ingest additionally needs a server's token.
+  admin still has to approve them; ingest additionally needs a server's token. A signed-in session, even an
+  admin's, can't send metrics in a collector's place.
 - Rotating a collector token means re-adding that server.
 
 ## Data from collectors is untrusted

@@ -243,12 +243,20 @@ def test_the_spacing_is_never_shorter_than_the_minimum(app, spaced):
     assert ingest(app, 1, {"host": {}}).headers["Retry-After"] == "5"
 
 
-def test_someone_without_the_token_cannot_use_up_a_servers_slot(app, spaced, monkeypatch):
-    monkeypatch.setattr(main, "_require_admin", lambda session_id, db: (_ for _ in ()).throw(main.HTTPException(status_code=401, detail="no")))
-
+def test_someone_without_the_token_cannot_use_up_a_servers_slot(app, spaced):
     assert ingest(app, 1, {"host": {}}, token="wrong").status_code == 401
 
     assert ingest(app, 1, {"host": {}}).status_code == 200                          # the real collector is not held up
+
+
+def test_a_signed_in_admin_cannot_send_metrics_in_place_of_a_collector(app):
+    # The fixture signs everyone in as an admin, so only the token can decide here.
+    for headers in ({"Authorization": "Bearer wrong"}, {"Authorization": ""}):
+        response = app.post("/monitoring/metrics/ingest", json={"server_id": 1, "host": {"cpu_utilization_pct": 99}}, headers=headers)
+        assert response.status_code == 401
+
+    assert app.post("/monitoring/metrics/ingest", json={"server_id": 99, "host": {}}).status_code == 401  # no hint which servers exist
+    assert latest(app) is None
 
 
 def test_a_redis_outage_does_not_stop_check_ins(app, spaced, monkeypatch):

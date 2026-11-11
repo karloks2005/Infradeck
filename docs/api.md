@@ -42,7 +42,7 @@ All paths are relative to `/api` when going through the frontend/nginx.
 | `POST /monitoring/collectors/register` | join token (rate limited) | Collector asks to join; returns a poll secret and pairing code. |
 | `POST /monitoring/collectors/register/poll` | poll secret | Collector checks approval; returns its token once approved. |
 | `POST /monitoring/collectors/enroll` | enrollment key | Join without approval. |
-| `POST /monitoring/metrics/ingest` | collector token | Collector reports host, container and system metrics. |
+| `POST /monitoring/metrics/ingest` | collector token | Collector reports host, container and system metrics. Only the server's own token is accepted (a signed-in session is not); a wrong token or unknown server gets 401. |
 | `GET /conversations`, `POST /conversations`, `DELETE /conversations/{id}`, `POST /agent/chat` | session | Chats with the incident agent (403 for users chat isn't allowed for). `POST /agent/chat` returns `message` and `steps` (as in a report); each message in `GET /conversations` carries its `steps`. A new conversation's `conversation_id` must end with `-u<your user id>` (the page uses `general-u<id>` and `incident-<incident id>-u<id>`), so nobody can take another person's ID first; anything else is refused with 400. |
 | `GET /logs`, `POST /logs` | session | Audit log. `POST /logs` adds an entry to your own log (level from a fixed list, message up to 2000 characters, at most 120 an hour); its source is always `dashboard`, and system event types such as `agent_tool_call` are refused. |
 

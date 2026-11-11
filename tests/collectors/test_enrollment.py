@@ -90,7 +90,7 @@ def test_offline_alert_raised_once_and_resolved_on_ingest(db):
     assert main.mark_offline_servers(db, now) == 0
     assert db.query(IncidentAlert).filter_by(status="active").count() == 1
 
-    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=5), authorization=f"Bearer {token}", session_id=None, db=db)
+    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=5), authorization=f"Bearer {token}", db=db)
 
     assert db.query(IncidentAlert).filter_by(status="active").count() == 0
 

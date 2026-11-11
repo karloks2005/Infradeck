@@ -30,7 +30,7 @@ def db(monkeypatch):
 
 
 def _ingest(db, server_id, **server):
-    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=server_id, server=server, host={"cpu_utilization_pct": 10, "ram_pct": 20, "disk_usage_pct": 30}), authorization=f"Bearer token-{server_id}", session_id=None, db=db)
+    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=server_id, server=server, host={"cpu_utilization_pct": 10, "ram_pct": 20, "disk_usage_pct": 30}), authorization=f"Bearer token-{server_id}", db=db)
 
 
 def test_dashboard_host_is_listed_first_and_flagged(db):
@@ -79,7 +79,7 @@ def test_collector_sends_flag_only_when_configured(monkeypatch):
 
 def _ingest_containers(db, server_id, names):
     containers = [{"container_id": f"id-{name}", "name": name, "status": "running"} for name in names]
-    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=server_id, host={"cpu_utilization_pct": 1}, containers=containers), authorization=f"Bearer token-{server_id}", session_id=None, db=db)
+    monitoring_routes.ingest_metrics(main.MetricsIngestRequest(server_id=server_id, host={"cpu_utilization_pct": 1}, containers=containers), authorization=f"Bearer token-{server_id}", db=db)
 
 
 def _overview_server(db, server_id):

@@ -443,16 +443,12 @@ def update_check_interval(server_id: main.PathId, payload: dict, session_id: Ann
     return {"id": server.id, "check_interval_seconds": server.check_interval_seconds}
 
 @router.post("/monitoring/metrics/ingest", dependencies=[Depends(main.require_collector_listener)])
-def ingest_metrics(payload: main.MetricsIngestRequest, authorization: Annotated[str | None, Header()] = None, session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None, db=Depends(get_db), request: Request = None):
+def ingest_metrics(payload: main.MetricsIngestRequest, authorization: Annotated[str | None, Header()] = None, db=Depends(get_db), request: Request = None):
+    """A collector reports its host, container and system metrics. Only the server's own collector token is accepted."""
     server = db.query(main.Server).filter(main.Server.id == payload.server_id).first()
-    if not server:
-        raise main.HTTPException(status_code=404, detail="Server not found.")
     token = authorization.removeprefix("Bearer ").strip() if authorization and authorization.startswith("Bearer ") else None
-    token_hash = hashlib.sha256(token.encode()).hexdigest() if token else None
-    if server.collector_token_hash and token_hash and hmac.compare_digest(server.collector_token_hash, token_hash):
-        pass
-    else:
-        main._require_admin(session_id, db)
+    if not server or not token or not server.collector_token_hash or not hmac.compare_digest(server.collector_token_hash, hashlib.sha256(token.encode()).hexdigest()):
+        raise main.HTTPException(status_code=401, detail="Unknown collector.")
     main._enforce_ingest_spacing(server)
     updates_before = main._load_json(server.system_info)
     main._apply_server_fields(db, server, payload.server)
