@@ -41,15 +41,24 @@ One machine runs the dashboard. Every other machine runs a small collector that 
 - **An optional AI incident agent that only reads.** It diagnoses warning and critical incidents from masked data and proposes fixes. It never runs commands on your servers.
 - **Add a server with one command and one click.**
 
+### What it isn't
+
+- **Not a remote control.** Nothing in Infradeck restarts containers, runs commands or changes your servers; it only reads and reports. The agent's fixes are suggestions you carry out yourself.
+- **Not a log collector.** It doesn't gather container or application logs, only metrics, Docker state and system events.
+- **Not a high-resolution time-series database.** Each check-in (every 15 s to 15 min) is a snapshot; between check-ins nothing is measured. See [Metrics](docs/metrics.md).
+- **Not for every platform.** Collectors run in Docker on Linux hosts.
+- **Not a hosted service.** You run it yourself; your data leaves your machines only if you set up notifications or the incident agent.
+
 ## Quick start
 
 Try it on one machine with Docker Compose:
 
-<!-- TODO: verify these commands -->
 ```bash
 git clone https://github.com/karloks2005/infradeck.git
 cd infradeck
 cp example.env .env
+# Compose refuses to start without these two passwords; this fills them with random values.
+sed -i "s/^POSTGRES_PASSWORD=$/POSTGRES_PASSWORD=$(openssl rand -hex 32)/; s/^REDIS_PASSWORD=$/REDIS_PASSWORD=$(openssl rand -hex 24)/" .env
 docker compose up -d --build
 ```
 
@@ -204,13 +213,14 @@ Everything is in [`docs/`](docs/README.md):
 | [The containers](docs/containers.md) | What each container does and why it's there. |
 | [Deploying](docs/deployment.md) · [Adding servers](docs/adding-servers.md) · [Configuration](docs/configuration.md) · [Troubleshooting](docs/troubleshooting.md) | Installing, running and fixing it. |
 | [Development](docs/development.md) · [Database schema](docs/database.md) · [API](docs/api.md) · [Incident agent](docs/assistant.md) | For contributors. |
+| [Changelog](CHANGELOG.md) | What changed in each release, and what to do when upgrading. |
 
 ## Development and tests
 
 Backend (Python 3.12) and frontend (Node 20) can run without Docker; see [Development](docs/development.md).
 
 ```bash
-source venv/bin/activate && pip install -r requirements-dev.txt && pytest     # backend, about two minutes
+source venv/bin/activate && pip install -r requirements-dev.txt && pytest     # backend, about four minutes
 cd src/frontend && node --test                                                # chart and logic helpers, nothing to install
 ```
 

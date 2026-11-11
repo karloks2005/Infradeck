@@ -4,8 +4,8 @@ Infradeck ships with an automated test suite. This page explains how to run it, 
 covers (and what it doesn't), and what every single test is for, so you can decide
 whether a failure matters before you upgrade or change your setup.
 
-- **1608 test cases** from 867 test functions, plus 45 small tests of the frontend helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
-- **About two minutes** to run. No Docker, PostgreSQL, Redis, network or root access needed.
+- **1632 test cases** from 882 test functions, plus 45 small tests of the frontend helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
+- **About four minutes** to run. No Docker, PostgreSQL, Redis, network or root access needed.
 - **Safe to run next to a live install.** The tests use a throwaway in-memory database
   and fakes; they never touch your running containers or your data. (Two collector
   tests read this machine's `/proc` and root filesystem, read-only.)
@@ -134,11 +134,11 @@ side and the backend's side in one file, because the feature only works when bot
 | `tests/collectors/` | Adding and trusting collectors (enrollment, approval, pending servers, the dashboard's own machine), what they report and how it is validated, the filesystems they report, the read-only Docker proxy, and the version they report. |
 | `tests/monitoring/` | What is watched and how it turns into incidents: the alert engine and its rules, system, container and network checks, the system helper and the container details. |
 | `tests/history/` | Long-term history: rollups, the history API, statistics and the database indexes behind them. |
-| `tests/assistant/` | The AI assistant: its providers, read-only tools, fixed health checks, error messages and conversations. |
-| `tests/security/` | Tests written from security reviews that cut across areas: request size limits, the second review's findings and the nginx security headers. |
+| `tests/assistant/` | The incident agent: its providers, read-only tools, investigation, diagnoses, worker, error messages and conversations. |
+| `tests/security/` | Tests written from security reviews that cut across areas: request size limits, every route needing a sign-in, the second review's findings and the nginx security headers. |
 
 `tests/conftest.py` (settings every test shares) and `tests/fakes.py` (the fake Redis) stay at the top.
-The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
+The frontend's helper tests are separate, in `src/frontend/tests/` (see [Frontend helper tests](#frontend-helper-tests)).
 
 ## What each test file protects
 
@@ -157,14 +157,19 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 | [`test_agent_watch.py`](#test_agent_watchpy) | 10 | Reusing a recent diagnosis, and watching the fix until the agent resolves the incident. |
 | [`test_agent_worker.py`](#test_agent_workerpy) | 13 | The agent's job queue and worker: one job per opened or worsened incident after the commit, retries, time limit, restarts. |
 | [`test_alerts.py`](#test_alertspy) | 10 | The incident engine: one incident per problem, resolve, container rules. |
+| [`test_availability.py`](#test_availabilitypy) | 75 | Availability checks: what a check may be, how results from collectors are combined, when incidents open and resolve, tests from the form, and the page's uptime and heartbeat. |
 | [`test_auth_backend.py`](#test_auth_backendpy) | 50 | Accounts, passwords, the first-account setup token, and the cross-site request check. |
+| [`test_collector_checks.py`](#test_collector_checkspy) | 58 | The collector's side of availability checks: only well-formed checks run, timeouts hold, no page content is reported, and calls to the dashboard never follow redirects. |
 | [`test_collector_mounts.py`](#test_collector_mountspy) | 1 | Which filesystems the collector reports. |
 | [`test_container_detail.py`](#test_container_detailpy) | 18 | Per-container details and parsing of Docker's stats. |
+| [`test_container_stats.py`](#test_container_statspy) | 10 | The Statistics page's container views, the period before a range, container swap, CPU spikes and installed updates. |
 | [`test_conversations.py`](#test_conversationspy) | 1 | Deleting one assistant conversation leaves the others alone. |
 | [`test_container_checks.py`](#test_container_checkspy) | 126 | Docker health, container exit codes, inventory and image changes, memory-leak trends, and the validation of everything a collector sends about containers. |
+| [`test_dashboard_data.py`](#test_dashboard_datapy) | 23 | What the Overview reads: machine facts from collectors (never trusted), sparklines, the all-clear summary and the event timeline. |
 | [`test_dashboard_host.py`](#test_dashboard_hostpy) | 8 | The "this machine" logic, history charts, container list and incident counts. |
 | [`test_docker_proxy.py`](#test_docker_proxypy) | 119 | The read-only Docker proxy: what it allows, refuses and hides, and how it limits its own clients. |
-| [`test_enrollment.py`](#test_enrollmentpy) | 10 | Enrollment keys, collector credentials and offline-server detection. |
+| [`test_endpoints_require_auth.py`](#test_endpoints_require_authpy) | 4 | Every route is public on purpose or refuses a request with no session or token. |
+| [`test_enrollment.py`](#test_enrollmentpy) | 11 | Enrollment keys, collector credentials and offline-server detection. |
 | [`test_enrollment_limits.py`](#test_enrollment_limitspy) | 12 | Limits on the enrollment key: rate limits, the server cap, and a warning when credentials are replaced. |
 | [`test_history.py`](#test_historypy) | 36 | The history API behind long-range charts: which level of detail answers each range, point limits, gaps, and agreement with the raw samples. |
 | [`test_indexes.py`](#test_indexespy) | 9 | The database indexes on the metrics tables: only the ones queries use, none duplicated. |
@@ -173,6 +178,8 @@ The chart helper tests for the frontend are separate, in `src/frontend/tests/`.
 | [`test_input_limits.py`](#test_input_limitspy) | 38 | Size and shape limits on request bodies, the audit-log endpoint, and safe defaults. |
 | [`test_nginx_headers.py`](#test_nginx_headerspy) | 4 | The development and server nginx send the same security headers, HSTS only on the server one. |
 | [`test_network_checks.py`](#test_network_checkspy) | 94 | The host's real network totals, listening-port inventory, optional internet check, firewall fingerprints, and the validation of all of it. |
+| [`test_new_pages.py`](#test_new_pagespy) | 69 | The Agent, Account and Admin pages: incidents, API tokens, notification channels, invitations, rule switches, the agent's settings and spending, and confirming with the password and a code. |
+| [`test_notify_pinning.py`](#test_notify_pinningpy) | 4 | Notifications connect to the address that was checked, so DNS rebinding can't point them inwards. |
 | [`test_pending_collectors.py`](#test_pending_collectorspy) | 28 | Adding servers: approval, join tokens, strict mode, re-pairing safety. |
 | [`test_rollups.py`](#test_rollupspy) | 31 | Summarised history: hourly, daily, weekly and monthly rollups, catching up, gaps, and purging only what has been summarised. |
 | [`test_retention.py`](#test_retentionpy) | 12 | How long history is kept: check-ins a week, hourly summaries and events for the setting, coarser summaries forever, in chunks. |
@@ -289,6 +296,13 @@ out of their own install.
 | `test_listing_and_ending_sessions_still_work_with_digests` | Listing sessions and ending another one still work, and the ended one stops working. |
 | `test_old_format_session_data_is_removed_at_start_and_new_data_is_kept` | At start, old-format session, pending-login, attempt and index records are deleted; live sessions are kept. |
 | `test_the_cleanup_of_old_session_data_never_stops_the_backend_from_starting` | If Redis fails during that cleanup, nothing is raised. |
+| `test_a_session_lasts_a_day_unless_you_ask_to_stay_signed_in` | A normal sign-in lasts a day; "Keep me signed in" makes it 30 days, is logged, and the long session still shows in the session list so it can be ended. |
+| `test_a_limited_setup_session_is_short_even_when_staying_signed_in_was_ticked` | Someone who still has to set up two-factor gets the short setup session even if they ticked "Keep me signed in". |
+| `test_the_choice_to_stay_signed_in_is_kept_across_the_two_factor_step_on_the_server` | The "Keep me signed in" choice is made at the password step and kept on the server; the code step can't change it. |
+| `test_the_sign_in_page_learns_the_installs_name_and_nothing_private` | `/auth/config` gives the sign-in page only the install's name, whether registration is open, the server count and the version. |
+| `test_an_admin_can_name_the_install_and_reset_the_name` | An admin can rename the install (trimmed, at most 60 characters) and reset it to the default; a non-admin can't. |
+| `test_a_new_install_has_no_name_yet` | Before the first account exists the install has no name, and setup is required. |
+| `test_redis_keys_from_before_the_rename_move_to_the_new_prefix_once` | After the rename from `homelab:` to `infradeck:`, sessions and sent-alert markers move to the new prefix once, keeping their expiry and never overwriting newer keys. |
 
 ### test_admin.py
 
@@ -534,6 +548,51 @@ The incident engine and the container rules.
 | `test_container_sync_leaves_other_rules_alone` | Updating container incidents never touches other incidents, such as "server offline". |
 | `test_overview_lists_critical_first_with_hostname_and_true_count` | The dashboard's incident list shows the most severe first, includes the server name, and reports the true total even when the list is capped. |
 
+### test_availability.py
+
+Availability checks (HTTP, keyword, JSON, TCP, TLS, DNS, ping): what a check may be, how the collectors' results are
+taken in and combined, when an incident opens and resolves, and what the page shows. If these fail, a site could be
+reported up while it is down, or a check could be pointed somewhere it shouldn't.
+
+| Test | What it checks |
+|---|---|
+| `test_a_check_that_isnt_well_formed_is_refused_with_a_reason` *(24 inputs)* | Unknown types, empty or overlong names, non-HTTP or malformed targets, unknown servers, out-of-range intervals, timeouts and retries, bad status codes, rules or tags are refused with a reason. |
+| `test_a_short_interval_brings_the_timeout_down_with_it` | A timeout longer than the interval allows is lowered to fit it. |
+| `test_only_admins_add_change_pause_or_delete_checks` | Non-admins can see checks but can't add, change, pause or delete them. |
+| `test_a_collector_gets_only_the_checks_of_its_own_server` | Each collector is handed only the active checks assigned to its server, with only the fields it needs. |
+| `test_check_results_need_the_servers_own_collector_token` | Check results need that server's own token; another server's token, a wrong one or none get 401, and more than 500 results at once are refused. |
+| `test_results_a_collector_has_no_business_reporting_are_dropped` | Results for another server's check, too old, from the future, badly typed or junk are dropped; oversized numbers and text are cleaned before storing. |
+| `test_with_rule_all_one_server_failing_is_not_down_but_both_is` | With rule "all", one failing server isn't an outage; when every server fails, a critical incident names them. |
+| `test_with_rule_all_a_server_yet_to_report_holds_off_down_but_an_offline_one_does_not` | With rule "all", a server that hasn't reported yet holds off "down", but an offline server doesn't. |
+| `test_retries_must_all_fail_before_a_check_counts_as_down` | A check stays pending until every retry has failed; then it is down and the incident says what failed and where. |
+| `test_with_rule_any_one_server_failing_is_enough` | With rule "any", one failing server is enough, at the check's chosen severity. |
+| `test_coming_back_up_resolves_the_incident` | A passing result after an outage marks the check up and resolves its incident. |
+| `test_a_check_whose_results_stop_turns_stale_instead_of_staying_up` | When results stop while the collector still checks in, the check turns stale instead of staying up; the incident stays open until results show it fixed. |
+| `test_a_new_check_stays_quiet_for_ten_minutes` | A new check shows its state but opens no incident for its first ten minutes. |
+| `test_switching_the_rule_off_keeps_the_state_but_opens_no_incident` | With the check rule switched off, the state still changes but no incident opens. |
+| `test_an_upside_down_check_is_up_while_the_service_is_unreachable` | An upside-down check is up while the service is unreachable and down when it answers. |
+| `test_pausing_resolves_the_incident_and_resuming_starts_over` | Pausing resolves the incident and stops sending the check to collectors; resuming starts over. |
+| `test_deleting_a_check_resolves_its_incident_and_removes_its_history` | Deleting a check resolves its incident and removes its results. |
+| `test_removing_a_server_takes_it_out_of_its_checks` | Removing a server takes it out of its checks; a check left with no server is paused. |
+| `test_an_incident_from_a_check_has_its_own_rule_kind` | Check incidents have their own rule kind, so they can be switched off on the Rules page. |
+| `test_the_page_shows_the_heartbeat_uptime_and_counts` | The page shows the heartbeat strip, 24-hour uptime, latest response time, the counts and which servers can run checks. |
+| `test_a_failure_within_the_retries_shows_as_retrying` | A failure still within its retries shows as "retrying" in the strip, not "down". |
+| `test_a_certificate_close_to_expiring_is_listed` | A TLS certificate close to expiry is listed with its days left. |
+| `test_completed_hours_are_rolled_up_and_old_raw_results_dropped` | Completed hours are summarised once, raw results older than a week are dropped, and uptime still adds up from the summaries. |
+| `test_the_detail_has_the_response_per_server_ninety_days_and_the_times_it_went_down` | The detail page has response times per server, 90 days of uptime and the 24-hour average; an unknown check is 404. |
+| `test_the_detail_lists_when_a_check_went_down_and_came_back` | The detail page lists when the check went down and came back, newest first. |
+| `test_a_test_goes_to_the_collectors_and_their_results_come_back` | Test on the form is handed to each collector once, their results come back per server, and nothing is saved. |
+| `test_a_collector_cant_answer_a_test_it_wasnt_given` | A collector can't answer a test that was given to another server. |
+| `test_only_servers_that_can_run_checks_are_asked` | Only servers whose collector can run checks are asked to test; with none, the test is refused. |
+| `test_a_test_is_checked_like_a_check_and_only_admins_run_it` | A test is validated like a check, and only admins can run one or read its result. |
+| `test_an_upside_down_test_passes_when_the_service_is_unreachable` | An upside-down test passes when the service is unreachable. |
+| `test_the_new_types_validate_and_store_their_options` *(7 inputs)* | TLS, DNS, JSON and ping checks are accepted and store their own options (expiry warning, record type, resolver, JSON path and comparison). |
+| `test_a_malformed_check_of_the_new_types_is_refused` *(11 inputs)* | Bad hosts, warning days, record types, resolvers, JSON paths and comparisons, and ping targets with a port are refused. |
+| `test_a_tls_check_sends_its_warn_days_to_the_collector` | A TLS check reaches the collector with its target and warning days, and nothing it doesn't need. |
+| `test_credentials_in_a_check_url_are_refused` | A check address with a user name and password in it is refused. |
+| `test_a_non_admin_sees_the_target_without_its_query_or_credentials` | Non-admins see a check's address without its query string, so a token in it stays with admins. |
+| `test_the_incident_description_does_not_leak_the_query_string` | The incident description names the address without its query string. |
+
 ### test_auth_backend.py
 
 Accounts, passwords, first-run protection and the cross-site check.
@@ -568,6 +627,39 @@ Accounts, passwords, first-run protection and the cross-site check.
 | `test_non_browser_clients_and_safe_methods_are_not_affected` | Collectors and `curl` (which send neither header) and read-only requests are never blocked by this check. |
 | `test_the_real_app_refuses_a_cross_site_post_before_any_handler_runs` | The real application rejects a forged cross-site request with 403 before any endpoint logic runs. |
 
+### test_collector_checks.py
+
+The collector's side of availability checks, run against a real local web server and TCP port. If these fail, a
+collector could run a malformed check, hang on a slow service, or send a page's content back to the dashboard.
+
+| Test | What it checks |
+|---|---|
+| `test_a_check_that_isnt_well_formed_is_not_run` *(17 inputs)* | Checks with an unknown type, bad ID, interval, timeout, target, status codes, keyword or TCP address are not run. |
+| `test_an_accepted_status_is_up_with_a_response_time` | An accepted HTTP status is up, with its code and response time. |
+| `test_a_status_outside_the_accepted_codes_is_down_with_the_code` | A status outside the accepted codes is down with the code; adding it to the accepted list makes it up. |
+| `test_redirects_are_followed_only_when_asked_and_only_to_http` | Redirects are followed only when the check asks, and never to a non-HTTP address. |
+| `test_a_keyword_check_looks_in_the_page_but_reports_none_of_it` | A keyword check finds the word (case-insensitive unless asked) but never reports any of the page. |
+| `test_head_is_used_only_for_plain_http_checks` | HEAD is used only for plain HTTP checks; keyword checks need the body, so they use GET. |
+| `test_an_unreachable_service_is_down_with_a_short_reason` | A closed port gives "Connection refused" for HTTP and TCP checks. |
+| `test_a_server_that_answers_a_byte_at_a_time_cant_stretch_the_timeout` | A service that answers a byte at a time is cut off at the check's timeout, for HTTP and TLS. |
+| `test_an_open_tcp_port_is_up` | An open TCP port is up, with a response time. |
+| `test_the_runner_runs_due_checks_and_reports_them` | The runner fetches its checks, runs those that are due, reports only the expected fields and schedules the next run. |
+| `test_results_that_couldnt_be_sent_wait_for_the_next_report` | Results that couldn't be sent are kept for the next report. |
+| `test_checks_from_the_dashboard_are_validated_and_capped` | Checks from the dashboard are validated and capped at the maximum; an empty answer clears them. |
+| `test_a_test_from_the_form_runs_once_at_once_and_goes_back_on_its_own` | A test from the form runs once, straight away, is reported on its own and isn't kept as a check. |
+| `test_a_test_that_isnt_well_formed_is_not_run` | Only the first few tests are looked at, and malformed ones are not run. |
+| `test_validate_check_accepts_the_new_types` *(5 inputs)* | TLS, ping, DNS and JSON checks are accepted with their options. |
+| `test_validate_check_rejects_malformed_new_types` *(7 inputs)* | Malformed TLS, ping, DNS and JSON checks are rejected. |
+| `test_json_walk_reaches_nested_values_and_raises_when_missing` | A JSON path reaches nested values and list items, and a missing one is an error. |
+| `test_json_match_compares_safely` *(8 inputs)* | JSON comparisons (equals, contains, greater, less, exists) work and never fail on odd values. |
+| `test_parse_dns_reads_an_a_record_and_flags_nxdomain` | A DNS answer is read; no answer is an empty list and a missing name is an error. |
+| `test_system_resolver_reads_resolv_conf` | Without a chosen resolver, the first `nameserver` in `resolv.conf` is used. |
+| `test_ping_returns_a_clean_result_whether_or_not_icmp_is_permitted` | Ping gives a well-formed result, with a reason when it fails, whether or not ICMP is allowed. |
+| `test_run_check_dispatches_by_type` | Each check is run by the function for its type, and the result carries the check's ID. |
+| `test_validate_check_rejects_credentials_in_a_url` | A check address with a user name and password is rejected; a query string is allowed. |
+| `test_a_call_to_the_dashboard_never_follows_a_redirect_with_the_token` | A redirect from the dashboard address is never followed, so the collector token can't reach another host; the error names only the new address. |
+| `test_a_huge_answer_from_the_dashboard_is_refused` | An answer from the dashboard larger than the limit is refused, and a non-HTTP dashboard address is rejected. |
+
 ### test_collector_mounts.py
 
 | Test | What it checks |
@@ -591,6 +683,24 @@ Accounts, passwords, first-run protection and the cross-site check.
 | `test_cpu_state_for_containers_that_are_gone_is_dropped` | Remembered readings for containers that no longer exist are discarded. |
 | `test_container_usage_parses_docker_stats` | Docker's raw statistics are converted correctly into CPU %, memory used and percentage (ignoring reclaimable cache), network and disk totals, and process count. |
 | `test_format_ports_lists_published_bindings` | Published ports are shown as `8080->80/tcp`, once even if both IPv4 and IPv6 are bound, and unpublished ports are skipped. |
+
+### test_container_stats.py
+
+The Statistics page's views of every container at once, comparing a range with the one before it, and a few
+collector readings behind them. If these fail, the busiest container or a spike could be shown wrong.
+
+| Test | What it checks |
+|---|---|
+| `test_a_day_is_summed_from_the_check_ins_and_ranked_by_average_cpu` | A day's container usage (average and peak CPU, memory, restarts, time down, sparkline) comes from the check-ins, busiest first. |
+| `test_a_week_gives_the_same_answer_from_summaries_as_from_check_ins` | A week gives the same figures from hourly summaries as from the raw check-ins. |
+| `test_the_busiest_container_is_named_for_each_period` | The busiest container is named for each minute of an hour. |
+| `test_the_busiest_container_over_a_week_comes_from_hourly_summaries_plus_what_is_not_summarised_yet` | Over a week, the busiest container per hour comes from the summaries plus the hours not summarised yet. |
+| `test_the_period_before_a_range_can_be_asked_for` | The history for the period just before a range can be asked for (not for "all"). |
+| `test_the_endpoints_answer_and_refuse_what_makes_no_sense` | The container, busiest and previous-period endpoints answer, and refuse unknown servers and ranges. |
+| `test_container_swap_is_read_from_its_cgroup_and_only_for_real_ids` | A container's swap is read from its cgroup, only for a real container ID (no path tricks). |
+| `test_swap_per_container_is_averaged_over_the_range_and_survives_summarising` | Swap per container is averaged over the range and comes out the same after summarising. |
+| `test_cpu_spikes_have_a_length_even_when_shorter_than_a_chart_point` | CPU spikes are measured to the minute even when shorter than a chart point; ranges too long for raw data say so. |
+| `test_installed_updates_become_an_event_once` | Installed package updates become one event, with the kernel waiting for a reboot when there is one; the first report is only a baseline. |
 
 ### test_conversations.py
 
@@ -702,6 +812,33 @@ validation of container data, because everything a collector reports is untruste
 | `test_a_fit_needs_distinct_points` | The straight-line fit refuses degenerate input and computes slope and fit quality correctly. |
 | `test_the_new_thresholds_have_safe_defaults_and_are_validated` | The new thresholds (slow Docker, leak window, rate and growth) have safe defaults, and out-of-range, fractional, text or boolean values are rejected. |
 
+### test_dashboard_data.py
+
+What the Overview page reads: machine facts from collectors (never trusted), sparklines, the all-clear summary and
+a server's event timeline. If these fail, a collector could put junk on the page or the timeline could mislead.
+
+| Test | What it checks |
+|---|---|
+| `test_system_info_keeps_known_fields_and_drops_the_rest` | Machine facts keep only known fields with sane values: temperatures, interfaces (as network addresses), mount devices and open firewall ports. |
+| `test_malformed_system_info_never_breaks_a_check_in` *(5 inputs)* | Malformed machine facts never break a check-in. |
+| `test_containers_carry_their_project_ports_and_volumes` | Containers carry their Compose project, ports, volumes and start time; a non-text project is dropped. |
+| `test_a_pending_collector_shows_what_it_found_and_can_be_named` | A waiting server shows only known details, can be given a free name on approval, and keeps that name whatever the machine calls itself. |
+| `test_keeping_the_machines_own_name_does_not_lock_it` | Approving with the machine's own name doesn't lock it. |
+| `test_downsample_averages_and_keeps_gaps` | Downsampling averages points and keeps gaps as gaps. |
+| `test_sparklines_cover_recent_samples_only` | Server and container sparklines and the live chart cover only the recent window. |
+| `test_longest_quiet_stretch_is_the_biggest_gap_between_incidents` | The longest quiet stretch is the biggest gap between incidents, overlapping ones merged. |
+| `test_quiet_summary_names_the_last_incident_and_ignores_notices` | The all-clear summary names the last real incident and ignores notices. |
+| `test_overview_reports_quiet_only_when_nothing_needs_attention` | The Overview reports all-clear only when nothing is open, and counts open incidents by severity. |
+| `test_events_merge_recorded_events_with_alerts_newest_first` | A server's timeline merges recorded events, incidents and collector gaps, newest first, with durations. |
+| `test_firewall_allowed_names_only_ports_that_are_listening` | The collector reads `ufw` and `nftables` rules and names only allowed ports something listens on. |
+| `test_updates_come_from_the_files_apt_leaves_behind` | Pending updates, security updates, automatic updates and a newer kernel come from apt's files. |
+| `test_interfaces_report_their_network_and_traffic_since_the_last_look` | Network interfaces report their network and the traffic since the last look; loopback, virtual and idle ones are skipped. |
+| `test_port_owners_name_the_process_behind_each_listening_port` | The system helper names the process behind each listening port, with odd characters made harmless. |
+| `test_the_collector_only_trusts_a_fresh_well_formed_port_owners_file` | The collector uses the helper's port-owners file only when it is fresh, well formed and not a symlink. |
+| `test_docker_disk_usage_and_port_owners_are_validated_before_they_are_stored` | Docker disk usage, disk errors and port owners are validated before storing; no list at all differs from an empty one. |
+| `test_disk_error_counter_sums_the_disks_that_have_one` | Disk I/O errors are summed over the disks that report them; none reporting gives no value. |
+| `test_docker_disk_usage_is_asked_for_rarely_and_survives_an_old_proxy` | Docker disk usage is asked for rarely, and the last figure stays when an older proxy refuses. |
+
 ### test_dashboard_host.py
 
 | Test | What it checks |
@@ -738,6 +875,21 @@ tested hardest (91 cases). If any of these fail, do not run the proxy until it i
 | `test_collector_still_supports_the_plain_socket_path` | The collector still works without Docker access (it just reports no containers). |
 | `test_a_stalled_client_is_dropped` | A client that connects and sends nothing is disconnected after the timeout instead of holding the connection open. |
 | `test_connections_beyond_the_limit_are_closed_until_a_slot_frees` | Connections beyond the limit are closed at once, and served again as soon as an earlier one ends. |
+| `test_the_six_read_requests_are_allowed` *(7 inputs)* | The read requests the collector needs (container list, inspect, stats, version, disk usage) are allowed, including a short container ID and one-shot stats. |
+| `test_version_output_keeps_only_the_version_numbers` | `/version` is reduced to the Docker and API version numbers; everything else is dropped. |
+| `test_disk_usage_is_reduced_to_totals_with_no_names` | `/system/df` is reduced to totals (image and build-cache sizes, unused counts) with no image, container or volume names; odd input gives zeros or nothing. |
+
+### test_endpoints_require_auth.py
+
+A guard against adding an endpoint and forgetting its sign-in check. If these fail, a route answers without a
+session or token.
+
+| Test | What it checks |
+|---|---|
+| `test_every_route_is_either_public_or_rejects_an_unauthenticated_request` | Every route either is on the public list or refuses a request with no session or token. |
+| `test_the_public_list_only_names_routes_that_exist` | The public list names only routes that exist, so a renamed route can't stay public by accident. |
+| `test_public_routes_are_session_exempt` | Every public route is also exempt from the sign-in gate, or it would be blocked. |
+| `test_the_baseline_gate_blocks_non_exempt_paths_without_a_session` | The sign-in gate refuses a non-exempt path without a session before any handler runs, and lets an exempt one through. |
 
 ### test_enrollment.py
 
@@ -753,6 +905,7 @@ tested hardest (91 cases). If any of these fail, do not run the proxy until it i
 | `test_collector_prefers_saved_credentials_over_enrolling` | A collector that already has saved credentials uses them and doesn't enroll again. |
 | `test_collector_enrolls_and_saves_when_no_credentials` | Without credentials, the collector enrolls, saves its token, and the file is readable only by its owner (mode 600). |
 | `test_machine_id_read_from_host_root` | The collector identifies the machine from the host's `/etc/machine-id`. |
+| `test_a_collector_from_before_the_rename_keeps_its_credentials_and_settings` | A collector that still has its credentials in the old `homelab-collector` folder keeps using them; `INFRADECK_STATE_DIR` overrides the location. |
 
 ### test_enrollment_limits.py
 
@@ -997,6 +1150,80 @@ parsers odd, huge or hostile content.
 | `test_the_network_lists_are_bounded` | The dashboard's listener list is capped at 200 and the event list at 15. |
 | `test_network_events_are_kept_for_the_history_retention` | Network events are kept for the history setting: 40 days old stays, 400 days old goes. |
 | `test_crafted_event_keys_cannot_raise_incidents_for_closed_or_loopback_ports` | Malformed or misleading stored event keys cannot raise an incident for a port that isn't open or isn't exposed. |
+
+### test_new_pages.py
+
+What the Agent, Account and Admin pages rest on: incidents you can act on, API tokens with a narrow reach,
+notification channels that can't be pointed inwards, invitations, rule switches, the agent's settings and spending,
+and the password-and-code confirmation. If these fail, a token or a viewer could do more than they should, or a
+notification could reach this machine.
+
+| Test | What it checks |
+|---|---|
+| `test_the_inbox_lists_open_incidents_most_severe_first_and_says_who_may_act` | The incident inbox lists open incidents, most severe first, and says whether you may act on them. |
+| `test_a_diagnosis_is_built_from_the_stored_samples` | An incident's diagnosis is built from stored samples: evidence chart, signals, steps, note and timeline; an unknown incident is 404. |
+| `test_a_container_name_never_becomes_part_of_a_command_unless_it_is_plain` | A container name goes into a suggested command only when it is plain; otherwise a placeholder is used. |
+| `test_only_admins_acknowledge_mute_and_resolve_and_each_is_logged` | Only admins acknowledge, mute, unmute and resolve; a muted incident leaves the counts, each action is logged, and odd mute lengths are refused. |
+| `test_the_overview_carries_the_agents_note_for_each_incident` | The Overview shows the agent's one-line note and the reference for each incident. |
+| `test_a_token_is_shown_once_stored_as_a_hash_and_reads_but_does_not_write` | An API token is shown once, stored as a hash, can read but not act, and records when it was last used. |
+| `test_no_token_reaches_the_account_admin_or_anything_that_changes_servers` *(9 inputs)* | Even an owner's write token can't reach the account, admin pages, sessions, chats or anything that changes servers. |
+| `test_a_write_token_acknowledges_but_only_for_an_admin_and_never_sees_pending_servers` | A write token can acknowledge only while its owner is an admin, follows role changes, and never sees waiting servers. |
+| `test_expired_revoked_and_unknown_tokens_are_refused` | Expired, revoked and unknown tokens are refused, and nobody can revoke someone else's. |
+| `test_profile_and_preferences_keep_only_what_is_valid` | Profile and preferences keep only valid values: user name, colour, theme, time zone and quiet hours; a taken user name is 409. |
+| `test_channels_cannot_point_inwards_and_only_admins_reach_the_local_network` | Notification channels can't point at this machine, other schemes or addresses with a password; only admins may use the LAN; targets are stored encrypted and shown shortened. |
+| `test_an_address_that_later_resolves_inwards_is_refused_at_send_time` | A channel whose name later resolves to a metadata or private address is refused when sending. |
+| `test_incidents_are_sent_once_following_routing_quiet_hours_and_muting` | Each incident is sent once, following routing, quiet hours and muting; "resolved" goes out only when asked for. |
+| `test_a_new_incident_is_sent_however_many_came_before_it_that_day` | A new incident is sent however many came before it that day, and still only once. |
+| `test_users_are_listed_and_changed_but_not_the_owner_or_yourself` | Admins list and change users, but not the owner or themselves; a disabled user is signed out at once. |
+| `test_an_invitation_lets_one_person_in_while_registration_is_closed` | An invitation lets one address register once while registration is closed, stored as a hash. |
+| `test_two_factor_can_be_required_of_everyone` | Requiring two-factor for everyone limits sign-ins without it to the setup page. |
+| `test_a_rule_can_be_switched_off_and_the_table_shows_how_often_each_fired` | A rule can be switched off (unknown ones are ignored), and the Rules table shows how often each fired. |
+| `test_every_threshold_the_old_admin_page_could_change_can_still_be_changed` | Every threshold can still be changed and every rule switched off. |
+| `test_image_change_and_removal_incidents_can_be_switched_off` | Image-change and container-removed incidents can be switched off like any other rule. |
+| `test_a_server_is_renamed_and_keeps_the_name_and_the_install_describes_itself` | An admin can rename a server and change its interval within limits, and the System page describes the install. |
+| `test_admin_tests_the_agent_connection_and_the_key_never_comes_back` | An admin can test the agent's connection, and the API key never comes back in any answer. |
+| `test_a_failed_agent_connection_test_explains_itself_without_the_key` | A failed connection test says why without including the key. |
+| `test_the_agent_provider_refuses_odd_input` *(6 inputs)* | Unknown providers, odd model names and malformed API keys are refused. |
+| `test_only_admins_choose_the_agent_provider_and_remove_its_key` | Only admins choose the provider or remove its key. |
+| `test_without_secrets_key_no_api_key_is_stored` | Without `SECRETS_KEY` no API key is stored, and the answer says why. |
+| `test_saving_and_removing_the_agent_key_is_audited_without_the_key` | Saving and removing the key are logged without the key itself. |
+| `test_every_chat_call_is_counted_with_its_tokens_and_cost` | Every chat call is recorded with its tokens, time and cost, and only admins see the usage. |
+| `test_calls_made_before_a_price_was_entered_are_priced_later` | Calls made before a price was entered are priced once it is. |
+| `test_the_monthly_budget_pauses_the_chat_and_tells_the_admins_once` | The monthly budget pauses the chat before the model is called and tells the admins once; removing it lets the chat run again. |
+| `test_the_daily_limit_counts_messages_per_person` | The daily chat limit counts messages per person. |
+| `test_a_failed_call_is_recorded_without_tokens` | A failed call is recorded as an error without tokens or cost. |
+| `test_spending_settings_are_checked` *(5 inputs)* | Odd model names, negative or missing prices, a negative budget and a zero daily limit are refused. |
+| `test_admins_see_the_agent_workers_status` | Admins see whether the agent's worker is online and how many jobs wait. |
+| `test_an_incident_carries_the_agents_latest_report` | An incident carries the agent's latest report without its evidence pack, and the Overview line is its first sentence. |
+| `test_asking_for_a_new_diagnosis_queues_a_job` | Asking for a new diagnosis queues a job (admins only, and only with a key). |
+| `test_a_notification_waits_for_the_diagnosis_and_carries_it` | A notification waits for the agent's diagnosis and carries its summary. |
+| `test_after_three_minutes_it_goes_out_without_the_diagnosis` | After three minutes the notification goes out without the diagnosis. |
+| `test_without_a_diagnosis_on_the_way_nothing_waits` | Without a diagnosis on the way, notifications don't wait. |
+| `test_hidden_diagnoses_stay_hidden_from_users_in_the_page_the_overview_and_notifications` | When diagnoses are hidden from users, they stay hidden on the incident page, the Overview and in notifications; admins still see them. |
+| `test_nobody_can_take_another_persons_conversation_id` | A conversation ID must end with your own user ID, so nobody can take another person's first. |
+| `test_chat_is_for_admins_unless_allowed_per_user` | Chat is for admins unless it is allowed per user and switched on for that user; "admins only" wins. |
+| `test_live_refresh_is_a_display_choice_from_a_fixed_list` | Live refresh is a display choice from a fixed list; other values are ignored. |
+| `test_turning_the_agent_on_needs_the_password_and_a_code` | Turning on automatic diagnoses, chat or per-user chat needs the password and a two-factor code; turning off needs nothing. |
+| `test_letting_one_user_chat_needs_the_password_and_a_code_but_stopping_does_not` | Allowing one user to chat needs the password and a code; stopping it and other changes don't. |
+| `test_the_look_up_budgets_are_checked_audited_and_raising_one_from_0_is_confirmed` | Look-up budgets are checked and logged, and raising one from 0 needs confirmation. |
+| `test_a_chat_message_looks_things_up_and_the_look_ups_outlive_the_conversation` | A chat message can look things up; the steps are saved with the reply and the audit entries outlive the conversation. |
+| `test_choosing_the_provider_needs_confirmation_but_removing_the_key_does_not` | Choosing the provider and key needs confirmation; removing the key doesn't. |
+| `test_a_wrong_password_gives_no_token` | A wrong password gives no confirmation token and is logged. |
+| `test_without_two_factor_the_agent_cant_be_turned_on` | An admin without two-factor can't confirm, so can't turn the agent on. |
+| `test_a_wrong_code_says_how_many_tries_are_left_and_the_fifth_ends_it` | A wrong code says how many tries are left, and the fifth ends the confirmation. |
+| `test_a_token_works_once_and_only_in_its_own_session` | A confirmation token works once, and only in the session that asked for it. |
+
+### test_notify_pinning.py
+
+A notification connects to the address that was checked, not to whatever the name resolves to a moment later. If
+these fail, DNS rebinding could turn a public-looking channel into a request to this machine or the LAN.
+
+| Test | What it checks |
+|---|---|
+| `test_the_post_goes_to_the_checked_address_without_resolving_the_name_again` | The request goes to the checked address without resolving the name again, and the name still goes in the `Host` header. |
+| `test_a_name_that_changes_its_answer_is_resolved_once_and_the_checked_answer_is_used` | A name that changes its answer is resolved once, and the checked answer is used. |
+| `test_https_keeps_the_host_name_for_sni_and_the_certificate_check` | HTTPS keeps the host name for SNI and the certificate check. |
+| `test_a_proxy_from_the_environment_is_not_used` | A proxy set in the environment is not used. |
 
 ### test_pending_collectors.py
 
@@ -1264,9 +1491,9 @@ outdated collector "up to date", or the other way round.
 
 ## Frontend helper tests
 
-The chart helpers (axis ticks, gaps, histograms, the hour-by-weekday grid, donut slices, the
-"full in about N days" estimate, container and fleet rankings) are plain JavaScript with no
-dependencies, so they have tests that run with Node's built-in runner:
+The page helpers (chart maths, the Overview's and Statistics page's logic, fleet rankings and the
+agent's look-up steps) are plain JavaScript with no dependencies, so they have tests that run with
+Node's built-in runner:
 
 ```bash
 cd src/frontend && node --test        # Node 20 or newer; nothing to install
@@ -1276,6 +1503,8 @@ cd src/frontend && node --test        # Node 20 or newer; nothing to install
 |---|---|---|
 | `tests/chartMath.test.js` | 9 | Histogram bins and weights, the hour-by-weekday grid, donut fractions, the disk-full estimate (clear trends only), axis ticks, gaps staying gaps, weighted summaries, time labels and forecast wording. |
 | `tests/fleetLogic.test.js` | 7 | Container states, top-N rankings, disk ranking and colours, online detection, availability rows, readable durations, and incident columns that fill quiet days with zeros. |
+| `tests/dashboardLogic.test.js` | 13 | The Overview's helpers: number formats and forecasts, a server's worst state, the one action for each alert, published ports and their owners, which containers other machines can reach, port changes in plain lines, Compose groups, health verdicts, traffic across a reboot, the timeline, and the install commands. |
+| `tests/statisticsLogic.test.js` | 9 | The Statistics page's helpers: when a peak happened, gaps versus late starts, the busiest container at a moment, findings in plain words (and none for a quiet range), time at each level, percentiles and the disk projection, event marks, and the CSV export. |
 | `tests/stepsLogic.test.js` | 7 | The window of an agent's look-up in the viewer's clock (one day, several days, up to now, one moment, a time without a zone read as UTC, none or unreadable), and the look-up count leaving out refused calls. |
 
 The React components themselves (the page layout, tooltips, selection) have no automated tests;
