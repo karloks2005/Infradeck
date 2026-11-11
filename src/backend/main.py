@@ -1492,29 +1492,6 @@ def _enforce_report_spacing(server: Server) -> None:
         raise HTTPException(status_code=429, detail="Check results are arriving too often.", headers={"Retry-After": "2"})
 
 
-@app.get("/dashboard/summary")
-def dashboard_summary(
-    session_id: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
-    db=Depends(get_db),
-):
-    user = get_user_from_session(redis_client, session_id)
-    if not user:
-        raise HTTPException(status_code=401, detail="Session is invalid or expired.")
-
-    total_users = db.query(User).count()
-    total_logs = db.query(AuditLog).count()
-    error_logs = db.query(AuditLog).filter(AuditLog.level.in_(["ERROR", "WARN"])).count()
-    agent_lookups = db.query(AuditLog).filter(AuditLog.event_type == "agent_tool_call").count()
-
-    return {
-        "total_users": total_users,
-        "total_logs": total_logs,
-        "error_logs": error_logs,
-        "uptime": "99.97%",
-        "agent_lookups": agent_lookups,
-    }
-
-
 LOG_WRITE_LIMIT = 120
 CHAT_MESSAGE_LIMIT = 30          # messages to the assistant per user per hour (each can cost the admin's OpenAI quota)
 CONVERSATION_CREATE_LIMIT = 30   # new conversations per user per hour

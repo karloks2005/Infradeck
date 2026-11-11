@@ -304,7 +304,7 @@ def test_a_limited_session_is_refused_everywhere_except_the_two_factor_setup(app
     client = _signed_in()
     password_body = {"current_password": PASSWORD, "new_password": NEW_PASSWORD}
     for method, path, body in (("get", "/monitoring/overview", None), ("get", "/admin/settings", None), ("get", "/auth/sessions", None), ("get", "/agent/config", None),
-                               ("get", "/dashboard/summary", None), ("post", "/auth/password", password_body), ("delete", "/monitoring/servers/1", None),
+                               ("post", "/auth/password", password_body), ("delete", "/monitoring/servers/1", None),
                                ("post", "/monitoring/join-tokens", None), ("get", "/monitoring/enrollment-key", None), ("get", "/conversations", None),
                                ("get", "/logs", None), ("post", "/auth/sessions/revoke-others", None)):
         response = client.request(method.upper(), path, json=body) if body else getattr(client, method)(path)
