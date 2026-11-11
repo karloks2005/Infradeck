@@ -68,7 +68,8 @@ PostgreSQL database to run it there as well as on SQLite.
 ## Dependencies
 
 Every dependency is pinned to an exact version, so a rebuild installs the same set until a pin changes: Python
-packages in `requirements.txt` and `requirements-dev.txt`, the frontend in `src/frontend/package-lock.json`, base
+packages in `requirements.txt` and `requirements-dev.txt` (with the hash of every file, so pip refuses anything
+else), the frontend in `src/frontend/package-lock.json`, base
 images by tag and digest in `docker/*.Dockerfile` and the compose files, GitHub Actions by commit.
 
 Dependabot (`.github/dependabot.yml`) opens one grouped pull request per ecosystem every Monday. Merge it once CI
@@ -82,9 +83,12 @@ Python 3.12:
 ```bash
 docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/src -w /src python:3.12-slim sh -c '
   pip install -q --user pip-tools && export PATH=/tmp/.local/bin:$PATH &&
-  pip-compile -q --strip-extras --no-emit-index-url -o requirements.txt requirements.in &&
-  pip-compile -q --strip-extras --no-emit-index-url -o requirements-dev.txt requirements-dev.in'
+  pip-compile -q --generate-hashes --strip-extras --no-emit-index-url -o requirements.txt requirements.in &&
+  pip-compile -q --generate-hashes --strip-extras --no-emit-index-url -o requirements-dev.txt requirements-dev.in'
 ```
+
+Never edit the two `.txt` files by hand: they list a hash for every package, and pip installs nothing when a
+package has no hash or a different one. Keep `--generate-hashes` in both commands.
 
 Add `--upgrade-package <name>` to both `pip-compile` commands to move one package, or `--upgrade` for all of
 them. To pin a new base image, take the digest from `docker buildx imagetools inspect <image>:<tag>` and write
