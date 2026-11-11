@@ -217,7 +217,7 @@ Everything is in [`docs/`](docs/README.md):
 
 ## Development and tests
 
-Backend (Python 3.12) and frontend (Node 20) can run without Docker; see [Development](docs/development.md).
+Backend (Python 3.12) and frontend (Node 24) can run without Docker; see [Development](docs/development.md).
 
 ```bash
 source venv/bin/activate && pip install -r requirements-dev.txt && pytest     # backend, about four minutes
