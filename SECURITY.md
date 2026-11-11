@@ -296,7 +296,8 @@ check results) don't exist on the public side at all.
   `collector-gate` container instead, which publishes one port on your **VPN address** (set
   `COLLECTOR_BIND`, e.g. your OpenVPN server's tun address) and is not attached to your reverse
   proxy's network, so other apps can't reach it. The backend refuses collector endpoints unless they
-  arrived through the gate (`COLLECTOR_ACCESS=strict`), as a second layer.
+  arrived through the gate (`COLLECTOR_ACCESS=strict`, the backend's default; only the development compose
+  file sets `open`), as a second layer.
 - **Bind to the VPN address, not `0.0.0.0` plus a firewall rule.** Docker's published ports bypass
   `ufw` and similar firewalls, so a "deny from outside" rule does not protect them.
 - **Join tokens.** The Connect a server button creates a random single-use token that expires
@@ -483,6 +484,9 @@ URL, a keyword or a value in a JSON reply, a TCP port, a TLS certificate, a DNS 
   sessions. Note what this does and doesn't do: hashing protects against *reading* Redis. It does not stop
   someone who can *write* to it, because they can pick a secret and store its hash; the password and the
   network separation are what stop that.
+- **The login cookie is `Secure` by default.** `SESSION_COOKIE_SECURE` defaults to `true` (an empty value
+  too), so a backend run outside the compose files never sends the cookie over plain HTTP by accident; only
+  the development compose file sets `false`.
 - **Upgrade.** Sessions written in the old format no longer work (everyone signs in once) and are deleted from
   Redis at start, so the old session IDs don't linger there.
 - **The backend** trusts `X-Forwarded-For` from any address that can reach it (`--forwarded-allow-ips *`). That

@@ -21,7 +21,8 @@ DATABASE_URL = os.getenv(
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_SECONDS", "86400"))
 SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "homie_session")
-SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true"
+# The safe values are the defaults (an empty value counts as unset); the development compose file turns them off.
+SESSION_COOKIE_SECURE = (os.getenv("SESSION_COOKIE_SECURE") or "true").lower() == "true"
 # When false (the default), only the first account can be created, so a fresh install can still be set up and
 # nobody else can sign themselves up. Set to true only if everyone who can reach the dashboard may get an account.
 ALLOW_REGISTRATION = os.getenv("ALLOW_REGISTRATION", "false").lower() == "true"
@@ -39,7 +40,7 @@ CORS_ORIGINS = [
 
 # "strict" makes the collector endpoints answer only requests that arrived through the VPN or
 # internal listener (see docker/nginx.strict.conf); "open" keeps the single-listener behaviour.
-COLLECTOR_ACCESS = os.getenv("COLLECTOR_ACCESS", "open").lower()
+COLLECTOR_ACCESS = (os.getenv("COLLECTOR_ACCESS") or "strict").lower()
 # What the Connect a server panel shows: the collector listener's address on your VPN, and the
 # pinned images remote hosts install. All optional.
 COLLECTOR_PUBLIC_URL = os.getenv("COLLECTOR_PUBLIC_URL", "").strip().rstrip("/")
