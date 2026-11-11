@@ -14,7 +14,7 @@ razilaze, **vjeruj kodu** i to prijavi kao nalaz o dokumentaciji.
 | Collector | `src/collector/collector.py` | `/proc` hosta, host FS read-only (`/hostfs`), Docker proxy, backend preko HTTP-a | pokreće se na udaljenim hostovima, može biti kompromitiran |
 | Docker proxy | `src/collector/docker_proxy.py` | Docker socket (uid 0), Unix socket prema collectoru | drži root-ekvivalentan pristup; mora ostati minimalan |
 | System helper (opcionalno) | `src/collector/system_helper.py` | kernel log, wtmp, `CAP_SYSLOG` | privilegiran; njegov izlaz je nepouzdan |
-| LLM asistent | `src/agent/chat.py`, `prompts.py`, `SYSTEM_PROMPT.md`, `health_checks.py` | fiksni read-only provjere, opcionalni webhook | ulaz uključuje podatke s hosta |
+| Incident agent (LLM) | `src/agent/` (`tools/`, `investigate.py`, `diagnosis.py`, `chat.py`, `masking.py`, `safety.py`, `providers/`, `worker.py`) | read-only alati nad bazom Infradecka; vanjski LLM pružatelj (Anthropic, OpenAI, Gemini) s ključem šifriranim u bazi | ulaz uključuje podatke s hosta; sve što ide pružatelju prolazi `masking.py` |
 | CI | `.github/workflows/images.yml` | GHCR, cosign | opskrbni lanac za slike koje hostovi izvršavaju |
 
 Izvan repozitorija (nisu u opsegu, ali ih treba imati na umu kao pretpostavke): Traefik pred

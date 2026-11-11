@@ -25,7 +25,7 @@ tek kad korisnik to izričito zatraži.
 | `collector` | `src/collector/**` (collector, docker_proxy, system_helper) |
 | `infra` | `docker/**`, `*compose*.yml`, `example.env`, `.github/**`, `.gitignore`, `.dockerignore` |
 | `frontend` | `src/frontend/**` |
-| `assistant` | Incident agent: `src/agent/**` (providers, chat, prompts, health_checks, jobs, worker, usage), `SYSTEM_PROMPT.md`, konverzacije u backendu |
+| `assistant` | Incident agent: `src/agent/**` (providers, tools, investigate, diagnosis, chat, masking, safety, jobs, worker, usage), `SYSTEM_PROMPT.md`, `DIAGNOSIS_PROMPT.md`, konverzacije u backendu |
 | `<path>` | taj put (datoteka ili direktorij) plus ono što ga poziva |
 | `diff` | samo neprihvaćene promjene (`git diff` + `git diff --staged`) pročitane u kontekstu cijelih datoteka |
 
