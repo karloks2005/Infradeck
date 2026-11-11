@@ -550,6 +550,25 @@ PostgreSQL also `FOWNER` (to set the mode). The database process keeps none of t
 clears them. Without the hand-over, an existing `redis_data` volume written by an older version (when Redis
 ran as root) would no longer be writable.
 
+## Build and release supply chain
+
+What runs on your machines is built from pinned inputs, and a release can't be swapped after the fact.
+
+- **Everything is pinned.** Python packages to exact versions *and* their SHA-256 hashes (`requirements.txt`,
+  `requirements-dev.txt`), so pip refuses a package that isn't byte for byte the one that was locked, even
+  from a tampered mirror or proxy. The frontend's `package-lock.json` carries npm's integrity hashes. Base
+  images are pinned by tag and digest, GitHub Actions by commit.
+- **Updates are reviewed.** Dependabot opens one grouped pull request per ecosystem a week, and CI runs on it
+  before anything is merged.
+- **CI doesn't keep its token.** Both workflows check out the code with `persist-credentials: false`, so the
+  GitHub token isn't left in `.git` for later steps (and `.dockerignore` keeps `.git` out of the images).
+- **Release tags are protected.** Pushing a `v*` tag publishes signed collector images. Two repository rulesets
+  guard those tags: only a repository admin can create one, and nobody can move or delete one, so `v1.0.0`
+  always names the same code. Changing a published tag means switching the ruleset off on purpose
+  (Settings → Rules → Rulesets).
+- **Images are signed.** The collector, Docker proxy and system helper images are signed with cosign (keyless,
+  tied to the workflow's identity) and published with provenance and an SBOM. Hosts install them by digest.
+
 ## Other exposure to be aware of
 
 - The collector mounts the host filesystem read-only at `/hostfs` to read disk usage and a few

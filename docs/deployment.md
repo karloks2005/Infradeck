@@ -123,6 +123,10 @@ git tag "v$(cat VERSION)" && git push origin "v$(cat VERSION)"
 For a new version, change `VERSION` in a pull request first and tag after it is merged. The workflow refuses a
 tag that doesn't match `VERSION`, so the images never report a different version than their tag.
 
+Release tags are protected by two repository rulesets (Settings → Rules → Rulesets): only a repository admin can
+create a `v*` tag, and nobody can move or delete one. Check the commit before you tag: to retag, you have to
+switch the "never moved or deleted" ruleset off first. Prefer a new patch version instead.
+
 1. Open the workflow run's summary and copy the `COLLECTOR_IMAGE=…` and
    `DOCKER_PROXY_IMAGE=…` lines into `.env`.
 2. Make the three packages **public** (GitHub → your profile → Packages → each of `infradeck/collector`,
