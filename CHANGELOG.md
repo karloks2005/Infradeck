@@ -34,6 +34,10 @@ The first public release. Earlier 0.x versions were private pre-releases.
   you can review and end, and read-only or write API tokens.
 - **Adding servers.** One command and one click: a join token, then approval on the dashboard. Collector
   images are signed with cosign and pinned by digest.
+- **Published images.** Every Infradeck image (backend, frontend, collector, Docker proxy, system helper) is
+  built by the release workflow for amd64 and arm64, signed with cosign and published on GHCR. A server install
+  is a checkout of the release tag plus `docker compose pull && docker compose up -d`; nothing is built on the
+  server unless you add `deploy/build.yml`.
 
 ### Security
 
@@ -69,5 +73,9 @@ that may need your attention:
 - **`GET /dashboard/summary`** was removed.
 - **Collectors.** Update them with a freshly generated command to get hard time limits on checks and the refusal
   to follow a redirect from the dashboard's address.
+- **Images are pulled, not built.** Check out the tag (`git fetch --tags && git checkout v1.0.0`) and run
+  `docker compose pull && docker compose up -d` instead of `git pull` and `--build`. Your volumes stay as they
+  are. To keep building on the server, add `deploy/build.yml` to `COMPOSE_FILE`. Afterwards `docker image prune`
+  removes the old local `infradeck-*` images.
 
 [1.0.0]: https://github.com/karloks2005/infradeck/releases/tag/v1.0.0

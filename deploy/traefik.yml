@@ -1,7 +1,7 @@
 # Publishes the server stack through an existing Traefik (step by step: docs/deploy-traefik.md).
 # Add it after the server file in .env:
 #   COMPOSE_FILE=docker-compose.server.yml:deploy/traefik.yml
-# Then a plain `docker compose up -d --build` uses both. All values come from .env: DASHBOARD_DOMAIN
+# Then a plain `docker compose pull && docker compose up -d` uses both. All values come from .env: DASHBOARD_DOMAIN
 # (required), TRAEFIK_ROUTER, TRAEFIK_ENTRYPOINT, TRAEFIK_CERT_RESOLVER and TRAEFIK_NETWORK (defaults shown).
 # Also set TRUSTED_PROXIES to the subnet of Traefik's network, so each client keeps its own address.
 services:

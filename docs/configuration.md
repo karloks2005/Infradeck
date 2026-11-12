@@ -40,7 +40,7 @@ Every setting below is listed, with no values, in [`example.env`](../example.env
 | `INFRADECK_SERVER_NAME` | host's hostname | Name shown for the stack's own machine. |
 | `DOMAIN` | `localhost` | Domain for the optional Caddy profile. |
 | `COMPOSE_FILE` | – | On a server: `docker-compose.server.yml`, with Traefik `docker-compose.server.yml:deploy/traefik.yml`, so plain `docker compose` uses them. |
-| `LIVE_GRAPH_REFRESH_INTERVAL_SECONDS` | `3` | How often the dashboard refreshes (server file; applied when the frontend image is built). |
+| `LIVE_GRAPH_REFRESH_INTERVAL_SECONDS` | `3` | How often the dashboard refreshes by default. Applies only when the frontend is built from source (`deploy/build.yml`); the published image uses 3 s. Each user can change it in **Account → Display**. |
 | `INFRADECK_CHECK_INTERVAL_SECONDS` | `60` | Initial check interval of the stack's own collector (server file); the dashboard setting overrides it. |
 
 ## Collector (environment of the collector container)

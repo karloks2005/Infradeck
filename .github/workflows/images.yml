@@ -1,9 +1,9 @@
-# Builds the collector, Docker proxy and system helper images and publishes them to GHCR, signed
-# with cosign (keyless, using this workflow's identity). Runs when a version tag is pushed; the tag must match
+# Builds every Infradeck image (backend, frontend, collector, Docker proxy, system helper) and publishes them to
+# GHCR, signed with cosign (keyless, using this workflow's identity). Runs when a version tag is pushed; the tag must match
 # the VERSION file:
 #   git tag v0.1.0 && git push origin v0.1.0
-# Remote hosts install from these images, pinned by digest, so no code is ever fetched from the
-# dashboard. Third-party actions are pinned to commit hashes; update them deliberately.
+# The server stack runs these images (docker-compose.server.yml names the version), and remote hosts install the
+# collector ones pinned by digest, so no code is ever fetched from the dashboard. Third-party actions are pinned to commit hashes; update them deliberately.
 name: Publish images
 
 on:
@@ -22,6 +22,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - { name: backend, dockerfile: docker/backend.Dockerfile }
+          - { name: frontend, dockerfile: docker/frontend.Dockerfile }
           - { name: collector, dockerfile: docker/collector.Dockerfile }
           - { name: docker-proxy, dockerfile: docker/docker-proxy.Dockerfile }
           - { name: system-helper, dockerfile: docker/system-helper.Dockerfile }
@@ -66,8 +68,12 @@ jobs:
       - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
       - name: Sign the image
         run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
-      - name: Digest to put in .env
+      # The collector and Docker proxy digests go into .env for Connect a server; the others are only listed.
+      - name: Digest
         run: |
           VAR=$(echo "${{ matrix.name }}" | tr 'a-z-' 'A-Z_')
           echo "### ${{ matrix.name }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "\`${VAR}_IMAGE=${IMAGE}@${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+          case "${{ matrix.name }}" in
+            collector|docker-proxy) echo "\`${VAR}_IMAGE=${IMAGE}@${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "\`${IMAGE}@${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY" ;;
+          esac

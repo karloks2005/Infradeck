@@ -81,14 +81,14 @@ To try **Connect a server** on the same machine, set `COLLECTOR_IMAGE` and `DOCK
 
 The server stack (`docker-compose.server.yml`) publishes the dashboard through the reverse proxy you already run (a ready-made **Traefik** file is in [`deploy/`](deploy)). Collector endpoints are served only on a separate listener bound to your **VPN address**.
 
-1. `cp example.env .env`, then set `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `DASHBOARD_DOMAIN`, `TRUSTED_PROXIES` and `COMPOSE_FILE=docker-compose.server.yml` (with Traefik: `docker-compose.server.yml:deploy/traefik.yml`, plus your Traefik names).
+1. Clone the repository, check out a release (`git checkout v<version>`), `cp example.env .env`, then set `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `DASHBOARD_DOMAIN`, `TRUSTED_PROXIES` and `COMPOSE_FILE=docker-compose.server.yml` (with Traefik: `docker-compose.server.yml:deploy/traefik.yml`, plus your Traefik names).
    > `COMPOSE_FILE` matters: without it Compose runs the development stack.
 2. Generate `SECRETS_KEY` (needed for two-factor sign-in) and set `COLLECTOR_BIND` / `COLLECTOR_PUBLIC_URL` for your VPN.
-3. `docker compose up -d --build`, then register the first account with the setup token from the backend log.
+3. `docker compose pull && docker compose up -d` (the published, signed images of that release), then register the first account with the setup token from the backend log.
 4. Click **Connect a server** to add other machines.
 
 Every step, with the reasons and pitfalls: [Deploying on a server](docs/deployment.md), [Deploy behind Traefik](docs/deploy-traefik.md), [Adding servers](docs/adding-servers.md).
-To update: `git pull && docker compose up -d --build`.
+To update: `git fetch --tags && git checkout v<new-version> && docker compose pull && docker compose up -d`. To build from source instead, see [Building from source](docs/deployment.md#building-from-source).
 
 ## Features
 

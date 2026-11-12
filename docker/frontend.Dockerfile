@@ -1,4 +1,6 @@
-FROM node:24.22.3-alpine@sha256:98e4e60b35fd50143e1838da2957488c25aa3a3efbd48bb679923f77d6d3d873 AS build
+# The build stage runs on the builder's own platform: its output is plain JavaScript, the same for every
+# platform, so an arm64 image doesn't have to run npm under emulation.
+FROM --platform=$BUILDPLATFORM node:24.22.3-alpine@sha256:98e4e60b35fd50143e1838da2957488c25aa3a3efbd48bb679923f77d6d3d873 AS build
 
 WORKDIR /app
 

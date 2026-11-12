@@ -13,15 +13,15 @@ For the settings, see [Configuration](configuration.md).
 
 | Container | Image | Runs on | Required? | Job |
 |---|---|---|---|---|
-| `infradeck-frontend` | built from `docker/frontend.Dockerfile` (nginx) | dashboard machine | yes | Serves the web app and passes `/api` to the backend. |
-| `infradeck-backend` | built from `docker/backend.Dockerfile` (Python, FastAPI) | dashboard machine | yes | The API: sign-in, metrics intake, alerts, statistics, notifications, the assistant. |
+| `infradeck-frontend` | published, built from `docker/frontend.Dockerfile` (nginx) | dashboard machine | yes | Serves the web app and passes `/api` to the backend. |
+| `infradeck-backend` | published, built from `docker/backend.Dockerfile` (Python, FastAPI) | dashboard machine | yes | The API: sign-in, metrics intake, alerts, statistics, notifications, the assistant. |
 | `infradeck-postgres` | `postgres:16-alpine` | dashboard machine | yes | Everything that must be kept: accounts, servers, metric history, incidents, settings. |
 | `infradeck-redis` | `redis:7-alpine` | dashboard machine | yes | Short-lived state: sign-in sessions, rate-limit counters, pending two-factor logins, a small cache, the agent's job queue. |
 | `infradeck-agent-worker` | the backend image | dashboard machine | for the incident agent | Runs the agent's jobs (diagnoses) from the queue in Redis, apart from the API. |
-| `infradeck-collector` | built from `docker/collector.Dockerfile` | every monitored machine | yes, one per machine | Reads the machine's CPU, memory, disks, network and containers and sends them to the backend. |
-| `infradeck-docker-proxy` | built from `docker/docker-proxy.Dockerfile` | every monitored machine | yes, next to each collector | The only container with the Docker socket; answers six read-only questions. |
+| `infradeck-collector` | published, built from `docker/collector.Dockerfile` | every monitored machine | yes, one per machine | Reads the machine's CPU, memory, disks, network and containers and sends them to the backend. |
+| `infradeck-docker-proxy` | published, built from `docker/docker-proxy.Dockerfile` | every monitored machine | yes, next to each collector | The only container with the Docker socket; answers six read-only questions. |
 | `infradeck-collector-gate` | `nginx:alpine` | dashboard machine, server stack only | yes in `docker-compose.server.yml` | The only door to the collector endpoints, published on your VPN address. |
-| `infradeck-system-helper` | built from `docker/system-helper.Dockerfile` | any monitored machine | optional (`--profile system-events`) | Reads the kernel log and wtmp: OOM kills, kernel errors, crash vs clean shutdown. |
+| `infradeck-system-helper` | published, built from `docker/system-helper.Dockerfile` | any monitored machine | optional (`--profile system-events`) | Reads the kernel log and wtmp: OOM kills, kernel errors, crash vs clean shutdown. |
 | `infradeck-port-owners` | same image as the system helper | any monitored machine | optional (`--profile port-owners`) | Names the process behind each listening port in the Network tab. |
 | `infradeck-caddy` | `caddy:2-alpine` | dashboard machine, `compose.yml` only | optional (`--profile https`) | HTTPS with an automatic Let's Encrypt certificate when there is no Traefik. |
 
