@@ -1,0 +1,41 @@
+# Builds the server stack's images from this checkout instead of pulling the published, signed ones.
+# For trying changes that aren't released yet, or a fork. Add it after the server file in .env (and after your
+# proxy's file, if any):
+#   COMPOSE_FILE=docker-compose.server.yml:deploy/build.yml
+# Then build and start with `docker compose up -d --build`. Without this file, `docker compose pull` and
+# `docker compose up -d` run the published images of the version in docker-compose.server.yml.
+services:
+  backend:
+    build: { context: ., dockerfile: docker/backend.Dockerfile }
+    image: infradeck-backend:latest
+
+  agent-worker:
+    build: { context: ., dockerfile: docker/backend.Dockerfile }
+    image: infradeck-backend:latest
+
+  collector:
+    build: { context: ., dockerfile: docker/collector.Dockerfile }
+    image: infradeck-collector:latest
+
+  docker-proxy:
+    build: { context: ., dockerfile: docker/docker-proxy.Dockerfile }
+    image: infradeck-docker-proxy:latest
+
+  system-helper:
+    build: { context: ., dockerfile: docker/system-helper.Dockerfile }
+    image: infradeck-system-helper:latest
+
+  port-owners:
+    build: { context: ., dockerfile: docker/system-helper.Dockerfile }
+    image: infradeck-system-helper:latest
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        VITE_API_BASE_URL: /api
+        # Only a build from source applies it; the published image refreshes every 3 s (each user can change
+        # that in Account › Display).
+        VITE_LIVE_GRAPH_REFRESH_INTERVAL_SECONDS: ${LIVE_GRAPH_REFRESH_INTERVAL_SECONDS:-3}
+    image: infradeck-frontend:latest

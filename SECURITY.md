@@ -566,8 +566,11 @@ What runs on your machines is built from pinned inputs, and a release can't be s
   guard those tags: only a repository admin can create one, and nobody can move or delete one, so `v1.0.0`
   always names the same code. Changing a published tag means switching the ruleset off on purpose
   (Settings → Rules → Rulesets).
-- **Images are signed.** The collector, Docker proxy and system helper images are signed with cosign (keyless,
-  tied to the workflow's identity) and published with provenance and an SBOM. Hosts install them by digest.
+- **Images are signed.** Every Infradeck image (backend, frontend, collector, Docker proxy and system helper) is
+  built by the release workflow, signed with cosign (keyless, tied to the workflow's identity) and published
+  with provenance and an SBOM. The server stack pulls them by the release's version, and anyone can check the
+  signature (`cosign verify`, see [Checking the signatures](docs/deployment.md#checking-the-signatures)); remote
+  hosts install the collector images by digest. Nothing is built on the server unless you add `deploy/build.yml`.
 
 ## Other exposure to be aware of
 

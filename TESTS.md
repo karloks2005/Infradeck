@@ -4,7 +4,7 @@ Infradeck ships with an automated test suite. This page explains how to run it, 
 covers (and what it doesn't), and what every single test is for, so you can decide
 whether a failure matters before you upgrade or change your setup.
 
-- **1632 test cases** from 882 test functions, plus 45 small tests of the frontend helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
+- **1633 test cases** from 883 test functions, plus 45 small tests of the frontend helpers (see [Frontend helper tests](#frontend-helper-tests)) (some functions run once per input).
 - **About four minutes** to run. No Docker, PostgreSQL, Redis, network or root access needed.
 - **Safe to run next to a live install.** The tests use a throwaway in-memory database
   and fakes; they never touch your running containers or your data. (Two collector
@@ -189,7 +189,7 @@ The frontend's helper tests are separate, in `src/frontend/tests/` (see [Fronten
 | [`test_system_checks.py`](#test_system_checkspy) | 17 | Reboot, OOM, kernel-fault, clock and pending-reboot detection, and the System row's event list. |
 | [`test_system_helper.py`](#test_system_helperpy) | 35 | The optional system helper: kernel-log parsing, `wtmp`, crash detection, hostile input. |
 | [`test_trusted_proxies.py`](#test_trusted_proxiespy) | 17 | Whose `X-Forwarded-For` nginx believes: nobody by default, only addresses and CIDR ranges from `TRUSTED_PROXIES`. |
-| [`test_version.py`](#test_versionpy) | 3 | The dashboard and the collector report the version from the one `VERSION` file. |
+| [`test_version.py`](#test_versionpy) | 4 | The dashboard and the collector report the version from the `VERSION` file, and the server stack runs the images of that version. |
 
 ## Every test, explained
 
@@ -1480,14 +1480,16 @@ settings that decide whose `X-Forwarded-For` is believed. These tests run the re
 
 ### test_version.py
 
-The version is written once, in `VERSION` at the repository root. If these fail, the dashboard could call an
-outdated collector "up to date", or the other way round.
+The version is written in `VERSION` at the repository root, and the server compose file repeats it in its image
+tags. If these fail, the dashboard could call an outdated collector "up to date", or a release could run another
+release's images.
 
 | Test | What it checks |
 |---|---|
 | `test_the_dashboard_and_the_collector_report_the_version_in_the_version_file` | The backend and the collector both report the version in `VERSION`, and it looks like `1.2.3`. |
 | `test_the_collector_image_reads_the_version_file_next_to_it` | In the collector image, `VERSION` sits next to `collector.py` and is read from there. |
 | `test_a_collector_without_a_version_file_says_dev` | A collector copied somewhere without `VERSION` reports `dev` instead of failing. |
+| `test_the_server_stack_runs_the_published_images_of_this_version` | `docker-compose.server.yml` runs every Infradeck service from its published GHCR image tagged with the version in `VERSION`, builds none of them, and `deploy/build.yml` builds each of them from source. |
 
 ## Frontend helper tests
 

@@ -34,11 +34,17 @@ All commands below run on the server, in the `infradeck` folder from step 1.
 
 ## 1. Get the code
 
+Replace `<version>` with the release you want, for example `1.0.0` (see the repository's **Releases** page):
+
 ```bash
 git clone https://github.com/karloks2005/Infradeck.git infradeck
 cd infradeck
+git checkout v<version>
 cp example.env .env
 ```
+
+The stack runs that release's published, signed images; the checkout supplies the compose files and the nginx
+settings of the same version.
 
 `.env` holds your passwords and keys. Keep it on the server and never commit it.
 
@@ -78,7 +84,8 @@ Run `docker compose` without `-f` in this step and every later one. `-f` replace
 out `deploy/traefik.yml`, and Traefik stops serving the dashboard.
 
 ```bash
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 docker compose ps
 ```
 
@@ -199,25 +206,30 @@ TRUSTED_PROXIES=<traefik-subnet, see step 2>
 The dashboard's local port is `127.0.0.1:5173` again. Set `FRONTEND_PORT` if something on the server relies on
 another one.
 
-Update:
+Update to the new release, with `<new-version>` its number:
 
 ```bash
-git pull
-docker compose up -d --build
+git fetch --tags
+git checkout v<new-version>
+docker compose pull
+docker compose up -d
 ```
 
-Rebuild everything; a service you don't rebuild keeps running the old code. Check the result as in
-[Verify](#verify).
+Check the result as in [Verify](#verify). An install from before 1.0.0 built its images on the server; this
+pulls the published ones instead and keeps your volumes.
 
 ### Roll back
 
-Go back to the commit you ran before, and rebuild:
+Go back to the release you ran before:
 
 ```bash
-git log --oneline -5
-git checkout <previous-commit>
-docker compose up -d --build
+git checkout v<previous-version>
+docker compose pull
+docker compose up -d
 ```
+
+A version from before 1.0.0 has no published dashboard images: check out the commit you ran (`git log --oneline`)
+and run `docker compose up -d --build` instead.
 
 If that version still had the Traefik labels in `docker-compose.server.yml`, set
 `COMPOSE_FILE=docker-compose.server.yml` in `.env` first.
@@ -264,7 +276,8 @@ folder. The old volumes stay as they are, for rolling back.
    The labels mark the new volumes as the `infradeck` project's own, so Compose uses them without a warning.
 5. In the new folder, start the stack:
    ```bash
-   docker compose up -d --build
+   docker compose pull
+   docker compose up -d
    ```
    Check it as in [Verify](#verify). Accounts, history and the dashboard host's server are all still there.
 
@@ -283,7 +296,7 @@ old volumes (`docker volume rm <old-project>_postgres_data ...`) only once the n
 | Everyone is locked out after a few failed sign-ins | `TRUSTED_PROXIES` is empty or wrong, so all visitors share Traefik's address. | Set it as in step 2, then `docker compose up -d`. |
 | The frontend restarts over and over | `TRUSTED_PROXIES` contains something other than IP addresses and CIDR ranges, such as the network's name. | `docker compose logs frontend` names the bad value. Put the subnet from step 2 in `.env`, then `docker compose up -d`. |
 | `service "postgres" is not running`, although the dashboard works | The stack runs from another folder, so this folder is a different Compose project. | Find the folder with `docker compose ls` and run the command there. |
-| The frontend restarts over and over with `mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)` | The stack was updated without `--build`, so an old frontend image runs under the new settings. | `docker compose up -d --build`. |
+| The frontend restarts over and over with `mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)` | An old frontend image runs under the new settings. | `docker compose pull && docker compose up -d`. |
 
 More symptoms: [Troubleshooting](troubleshooting.md).
 

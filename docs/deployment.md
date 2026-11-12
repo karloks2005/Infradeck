@@ -17,10 +17,27 @@ The server stack works behind any reverse proxy. For some proxies there is also 
 | Traefik | `deploy/traefik.yml` | The Traefik labels (router, entrypoint, certificate resolver) and Traefik's Docker network. Step-by-step: [Deploy Infradeck behind Traefik](deploy-traefik.md). |
 | Anything else | nothing | Point your proxy at the dashboard port, `127.0.0.1:5173` (see [Other reverse proxies](#other-reverse-proxies)). |
 
+The server stack runs the **published, signed images** of one release from GHCR; nothing is built on the server.
+To build them from source instead (unreleased changes, a fork), add `deploy/build.yml` as well: see
+[Building from source](#building-from-source).
+
+## 0. Get a release
+
+Clone the repository and check out the release you want to run. The compose file names the images of that
+version, and the nginx settings it mounts come from the same checkout, so the two always match:
+
+```bash
+git clone https://github.com/karloks2005/infradeck.git
+cd infradeck
+git checkout v<version>
+```
+
+The releases are listed on the repository's **Releases** page.
+
 ## 1. Create `.env` on the server
 
 Nothing in `docker-compose.server.yml` needs editing: everything specific to you comes from
-`.env`, so `git pull` can always update the file. Start from the production template:
+`.env`, so checking out a newer release can always update the file. Start from the production template:
 
 ```bash
 cp example.env .env
@@ -70,8 +87,12 @@ into `.env`, delete the copy, and continue with `docker-compose.server.yml`.
 ## 3. Start it
 
 ```bash
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
+
+`pull` downloads the images of this release (amd64 and arm64); `up` starts them. To check that the images are the
+ones the release workflow built and signed, see [Checking the signatures](#checking-the-signatures).
 
 Open `https://<your-domain>` and register your account right away. The first
 account needs the **setup token** (`docker compose logs backend | grep "setup token"`,
@@ -112,15 +133,18 @@ Things to get right:
 
 Remote machines install the collector and the Docker proxy from container images,
 pinned by digest, so no code is ever downloaded from the dashboard. The
-[Publish images](../.github/workflows/images.yml) workflow builds them (amd64 and
-arm64), signs them with cosign and prints their digests. The version lives in one place, the `VERSION` file
-at the repository root; the dashboard and the collector both read it. Tag the version it holds:
+[Publish images](../.github/workflows/images.yml) workflow builds every Infradeck image (backend, frontend,
+collector, Docker proxy and system helper; amd64 and arm64), signs them with cosign and prints their digests.
+The version lives in the `VERSION` file at the repository root; the dashboard and the collector both read it,
+and `docker-compose.server.yml` repeats it in its image tags (a test fails if the two differ). Tag the version
+it holds:
 
 ```bash
 git tag "v$(cat VERSION)" && git push origin "v$(cat VERSION)"
 ```
 
-For a new version, change `VERSION` in a pull request first and tag after it is merged. The workflow refuses a
+For a new version, change `VERSION` and the image tags in `docker-compose.server.yml` in one pull request
+first, and tag after it is merged. The workflow refuses a
 tag that doesn't match `VERSION`, so the images never report a different version than their tag.
 
 Release tags are protected by two repository rulesets (Settings → Rules → Rulesets): only a repository admin can
@@ -129,34 +153,49 @@ switch the "never moved or deleted" ruleset off first. Prefer a new patch versio
 
 1. Open the workflow run's summary and copy the `COLLECTOR_IMAGE=…` and
    `DOCKER_PROXY_IMAGE=…` lines into `.env`.
-2. Make the three packages **public** (GitHub → your profile → Packages → each of `infradeck/collector`,
-   `infradeck/docker-proxy`, `infradeck/system-helper` → *Package settings* → *Change visibility*). New
+2. Make the five packages **public** (GitHub → your profile → Packages → each of `infradeck/backend`,
+   `infradeck/frontend`, `infradeck/collector`, `infradeck/docker-proxy`, `infradeck/system-helper` → *Package
+   settings* → *Change visibility*). New
    packages are private even when the repository is public, and machines can't pull private ones without
    credentials. Check from any machine that isn't signed in to GHCR:
    `docker manifest inspect ghcr.io/<owner>/infradeck/collector:<version>`.
-3. Rebuild the stack so the backend knows the images:
-   `docker compose up -d --build`.
+3. Restart the stack so the backend knows the images: `docker compose up -d`.
 
 **Connect a server** won't generate a command until both images are set.
 
 ## Updating
 
+Back up the database first (it stays in its Docker volume, but a backup costs nothing):
+
 ```bash
-git pull
-docker compose up -d --build
+docker compose exec -T postgres pg_dump -U infradeck -d infradeck -Fc > infradeck-before-update.dump
 ```
 
-Always rebuild **all** services (don't name individual ones). The backend,
-frontend, collector, Docker proxy and system helper each have their code built
-into their image, so a service that isn't rebuilt keeps running the old version.
-The database schema is updated automatically when the backend starts.
+Then check out the new release and pull its images:
+
+```bash
+git fetch --tags
+git checkout v<new-version>
+docker compose pull
+docker compose up -d
+```
+
+Your data lives in the stack's volumes, which an update never touches; don't run `docker compose down -v`, which
+deletes them. The database schema is updated automatically when the backend starts. Read the
+[changelog](../CHANGELOG.md) for anything a release asks you to do.
+
+**Upgrading from a version that built its images on the server** (before 1.0.0): add nothing; the steps above pull
+the published images instead. If you had added `--build` to your own scripts, drop it, or add
+`deploy/build.yml` to `COMPOSE_FILE` to keep building from source. The old local images (`infradeck-backend`,
+`infradeck-frontend` and the collector ones) are no longer used; remove them with `docker image prune` once
+everything runs.
 
 **Upgrading from a version where the frontend listened on port 80 inside its container:** it now listens on
 8080 and runs without root. The compose files, `deploy/traefik.yml` and the Caddy profile already use the new
 port; only a reverse proxy you configured yourself to reach `frontend:80` over a Docker network must change to
-`frontend:8080`. A proxy that uses the published port (`127.0.0.1:5173`) needs no change. Update with
-`docker compose up -d --build`: without `--build` the old frontend image runs under the new settings and keeps
-restarting with `mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)`.
+`frontend:8080`. A proxy that uses the published port (`127.0.0.1:5173`) needs no change. An old frontend image
+under the new settings keeps restarting with `mkdir() "/var/cache/nginx/client_temp" failed (13: Permission
+denied)`; `docker compose pull` (or `--build` with `deploy/build.yml`) replaces it.
 
 **Upgrading from a version with the Traefik labels in `docker-compose.server.yml`:** they moved to
 `deploy/traefik.yml`. Before you update, change `.env` to
@@ -177,7 +216,43 @@ freshly generated command on each machine (or pull the new digests into its
 compose project). Collectors started from `collector-compose.yml` need
 `docker compose -f collector-compose.yml up -d --build` after a `git pull`.
 
-<diagram - What each step updates: git pull → source on disk; docker compose up -d --build → backend, frontend, collector, docker-proxy and gate containers rebuilt and recreated; git tag → Publish images workflow → new digests → .env and a fresh Connect a server command for remote machines; show that skipping --build leaves the old image running>
+<diagram - What each step updates: git tag → Publish images workflow → signed images on GHCR and new digests; git checkout of the tag → compose file and nginx settings on disk; docker compose pull → that version's images; docker compose up -d → containers recreated on the same volumes; new digests → .env and a fresh Connect a server command for remote machines>
+
+### Checking the signatures
+
+Every image is signed by the release workflow with cosign, without a key: the signature is tied to the
+workflow's identity on GitHub. With [cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
+installed, check an image before you run it:
+
+<!-- TODO: verify against the first published release -->
+```bash
+cosign verify ghcr.io/karloks2005/infradeck/backend:<version> \
+  --certificate-identity "https://github.com/karloks2005/Infradeck/.github/workflows/images.yml@refs/tags/v<version>" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+It prints the verified signature as JSON, and fails if the image wasn't signed by that workflow for that tag.
+Repeat it for `frontend`, `collector`, `docker-proxy` and `system-helper`.
+
+### Building from source
+
+To run a commit that isn't released, or your own changes, build the images on the server. Add
+`deploy/build.yml` to `COMPOSE_FILE`, after the server file and your proxy's file:
+
+```bash
+COMPOSE_FILE=docker-compose.server.yml:deploy/traefik.yml:deploy/build.yml   # with Traefik
+COMPOSE_FILE=docker-compose.server.yml:deploy/build.yml                      # any other proxy
+```
+
+Then build and start, and repeat after every `git pull`:
+
+```bash
+docker compose up -d --build
+```
+
+Always build **all** services (don't name individual ones): a service that isn't rebuilt keeps running the old
+code. `LIVE_GRAPH_REFRESH_INTERVAL_SECONDS` applies only to a build like this; the published frontend refreshes
+every 3 seconds, and each user can change that in **Account → Display**.
 
 ## Other reverse proxies
 
