@@ -25,7 +25,6 @@
   <a href="docs/README.md">Docs</a>
 </p>
 
-<!-- TODO: make this first screenshot the Overview page with several servers -->
 <img alt="Infradeck screenshot" src="docs/images/infradeck-overview.png" />
 
 ## Why Infradeck
