@@ -1,140 +1,138 @@
-# Kontrolna lista: backend (`src/backend/**`)
-
-Čitaj `main.py`, `auth.py`, `totp.py`, `secrets_box.py`, `rate_limit.py`, `rules.py`,
+# Checklist: backend (`src/backend/**`)
+ 
+Read `main.py`, `auth.py`, `totp.py`, `secrets_box.py`, `rate_limit.py`, `rules.py`,
 `models.py`, `db.py`, `config.py`, `history.py`, `rollups.py`, `stats.py`, `alerts.py`,
-`seed_user.py`, `reset_2fa.py` u cijelosti. Za svaku stavku nađi kod koji je provodi.
-
-## 1. Autentikacija i autorizacija (najveći prioritet)
-
-- [ ] **Svaka ruta ima svjestan odgovor** na "tko smije?" (inventar ruta iz koraka 1). Ruta
-      koja zaboravi `Depends(...)` za auth je zadano **otvorena**: traži takve.
-- [ ] Razlika *anonimno / prijavljen / admin / kolektor* provodi se na serveru, nikad samo u
-      frontendu. Admin-only rute stvarno provjeravaju ulogu (ne samo prijavu).
-- [ ] **Ograničena sesija** (admin bez 2FA dok je politika uključena) stvarno može doći samo do
-      profila, postavljanja 2FA i odjave. Provjeri *svaku* rutu, ne samo ono što test pokriva,
-      uključujući nove rute dodane nakon te značajke.
-- [ ] **IDOR / horizontalna autorizacija:** rute s ID-evima (server, kontejner, konverzacija,
-      sesija, token, korisnik, pravilo, alarm) provjeravaju vlasništvo/ulogu. Posebno: popis
-      sesija po javnim ID-evima, brisanje tuđe sesije, konverzacije drugog korisnika.
-- [ ] **Mass assignment:** modeli zahtjeva ne dopuštaju polja kao `is_admin`, `role`,
-      `require_2fa`, `server_id`, `owner_id`. Provjeri Pydantic modele i `**body`/`setattr`.
-- [ ] Zadnji admin ne može obrisati/degradirati sam sebe do stanja bez admina (ili je to
-      namjerno i dokumentirano). Admin ne može eskalirati drugog bez provjere.
-- [ ] Prvi račun postaje admin: provjeri **sve** puteve (setup token, `ALLOW_REGISTRATION`,
-      utrka dvaju istodobnih zahtjeva, `ADMIN_BOOTSTRAP_TOKEN` usporedba, brisanje tokena nakon
-      prvog računa). Je li usporedba tokena konstantnog vremena (`hmac.compare_digest`)?
-
-## 2. Sesije, kolačići, CSRF
-
-- [ ] ID sesije: iz `secrets` (ne `random`/`uuid1`), dovoljna entropija, pohranjen hashiran ili
-      barem nikad vraćen pregledniku u tijelu odgovora. Rotacija pri promjeni privilegija
-      (prijava, 2FA, promjena lozinke).
-- [ ] Zastavice kolačića: `HttpOnly`, `Secure` (i u kojim uvjetima se gasi: provjeri da
-      zadana vrijednost nije nesigurna), `SameSite`, `Path`, istek.
-- [ ] Istek i odjava stvarno brišu sesiju na serveru; logout-everywhere radi.
-- [ ] **Provjera `Origin`/`Sec-Fetch-Site`** na POST/PUT/PATCH/DELETE: pokušaj zaobilaženja:
-      `Origin` s istim prefiksom (`https://dash.example.com.evil.tld`), različit port/shema,
-      `Origin: null`, nedostajući `Origin` + `Sec-Fetch-Site: same-site`, zaglavlje `Host`
-      pod kontrolom napadača, `CORS_ORIGINS` s džokerima. Radi li provjera za **sve** metode
-      i sve rute (middleware ili po ruti)? Postoji li izuzeće za puteve kolektora i može li ga
-      se zloupotrijebiti da bi se zaobišla provjera na ruti korisnika?
-- [ ] CORS: `allow_origins` nije `*` uz `allow_credentials=True`; nema refleksije proizvoljnog
-      `Origin`.
-
-## 3. Lozinke, 2FA, tokeni
-
-- [ ] Hashiranje lozinke: bcrypt/argon2 s razumnim troškom; granica 72 B provodi se (odbija,
-      ne skraćuje); nema lozinki u logovima; promjena lozinke traži staru lozinku (ili je
-      sesija svježa) i poništava ostale sesije.
-- [ ] **Timing/enumeracija računa:** prijava, reset, registracija vraćaju iste odgovore i
-      slično vrijeme za nepostojeći email i pogrešnu lozinku (fiktivni hash za nepostojeće
-      račune?).
-- [ ] **Rate limit** (`rate_limit.py`): ključ (IP, email) ne može se zaobići promjenom
-      zaglavlja (`X-Forwarded-For` iz nepouzdanog izvora), velikim/malim slovima ili
-      razmacima u emailu, unicode normalizacijom; memorija ograničena (napadač ne može
-      napuhati strukturu milijunima ključeva); rade li limiti pod više radnih procesa
-      (stanje u memoriji po procesu = efektivni limit × broj procesa)?
-- [ ] **TOTP** (`totp.py`): usporedba konstantnog vremena; prozor ±1; **zabrana ponovne
-      uporabe istog koda je atomarna** (jedinstveni indeks/UPDATE s uvjetom, ne
-      čitaj-pa-piši); brojač pokušaja po računu i po adresi ne resetira se ponovnim
-      početkom lozinke; međutoken (5 min) je jednokratan, vezan uz korisnika i ne vrijedi
-      kao sesija nigdje.
-- [ ] **Recovery kodovi:** entropija, hashirani, jednokratni *atomarno*, brišu se/ponovno
-      generiraju pri isključivanju 2FA.
-- [ ] `secrets_box.py`: Fernet ključ iz okoline, ponašanje bez ključa ne smije ostaviti
-      tajne u čistom tekstu; greška dekripcije ne curi detalje; ključ se ne logira.
-- [ ] **Tokeni servera i join tokeni:** generirani iz `secrets`, hashirani (SHA-256 je u redu
-      za tokene visoke entropije), usporedba konstantnog vremena ili pretraga po hashu,
-      jednokratnost i istek **atomarni**, ograničenje otvorenih tokena (20) provodi se i pod
-      paralelnim zahtjevima, brisanje servera poništava token.
-- [ ] Ponovno uparivanje postojećeg stroja (isti machine ID) traži `replace: true` na
-      serveru, ne samo u UI-ju; mogu li se vjerodajnice tuđeg servera prepisati bez toga?
-
-## 4. Ulazi koje šalje kolektor (nepouzdani)
-
-- [ ] Svaka ruta kolektora (register, poll, enroll, ingest, helper događaji) odbija se kad
-      zahtjev nije došao kroz gate (`X-Collector-Via` / `COLLECTOR_ACCESS=strict`); provjeri
-      da klijent ne može sam poslati to zaglavlje preko javne strane (nginx ga mora
-      prebrisati/ukloniti, backend ga ne smije slijepo vjerovati ako je backend dostupan
-      drugim kontejnerima).
-- [ ] Autentikacija kolektora: token po serveru; kolektor jednog servera ne može pisati
-      podatke drugog (`server_id` iz tokena, ne iz tijela zahtjeva!).
-- [ ] **Validacija:** tipovi, duljine, rasponi, strogi parsing vremena, `sha256:`+64 hex,
-      maks. 500 kontejnera, imena ≤128, ograničenja događaja po check-inu i po satu. Traži
-      polja koja se spremaju bez čišćenja (nova polja dodana kasnije često zaobiđu).
-- [ ] Veličina tijela zahtjeva ograničena (nginx `client_max_body_size` **i** Pydantic
-      `max_length`), dubina/veličina JSON-a, broj elemenata lista.
-- [ ] Idempotentnost/replay: ponovljeni check-in ne stvara duplicirane incidente ni neograničen
-      rast tablica. Hostilni podaci ne mogu "utišati" alarme drugih servera.
-
-## 5. Baza i injekcije
-
-- [ ] Svaki `text(...)`, `execute(f"...")`, `.format`, `%` ili spajanje stringova u SQL-u:
-      jesu li vrijednosti vezane parametrima? Dinamički `ORDER BY`, imena stupaca/metrika i
-      `LIMIT` iz zahtjeva idu samo kroz **bijelu listu**.
-- [ ] Imena kontejnera i putanje mountova ulaze u ključeve incidenata/cache ključeve: mogu
-      li se sudarati ili ubrizgati separator (`:`, `|`, newline) i spojiti dva incidenta?
-- [ ] LIKE upiti s korisničkim unosom (escape `%`/`_`), regex iz korisničkog unosa (ReDoS;
-      `rules.py` ima 593 retka pravila, provjeri koje izraze evaluira i je li to sigurno).
-- [ ] **`rules.py`: izvršava li se išta dinamički** (`eval`, `exec`, `compile`, `getattr` s
-      korisničkim imenom, `importlib`, šabloni stringova s korisničkim formatom)? Ako se
-      pravila/alarmi konfiguriraju korisnički, što sve konfiguracija smije izraziti?
-- [ ] Ograničenja stranica/`limit`, broj redaka, vremenski rasponi na `history`/`stats`
-      (fiksna lista raspona i metrika, ograničen cache, ključevi iz validiranih vrijednosti).
-- [ ] Transakcije: nema stanja u kojem pad usred operacije ostavlja račun bez 2FA ili sesiju
-      koja preživljava promjenu lozinke.
-
-## 6. Izlazne veze (SSRF) i integracije
-
-- [ ] Kanali obavijesti (`notify.py`: ntfy, Discord, webhook, email) postavljaju se preko API-ja
-      po korisniku: shema samo http(s), loopback/link-local/metadata uvijek odbijeni, privatne
-      LAN adrese samo za admine, provjera nakon DNS razrješenja i spajanje na provjerenu adresu
-      (DNS rebinding), bez praćenja preusmjeravanja, timeout. Provjeri i SMTP put.
-- [ ] Sadržaj odlazne poruke ne sadrži tajne (tokene, hashove) ni neocišćene tuđe stringove u
-      kontekstu gdje se interpretiraju (Slack/markdown/HTML/email zaglavlja → injekcija).
-- [ ] Nema `requests`/`httpx` poziva prema URL-u iz zahtjeva bez gornjih zaštita.
-
-## 7. Konfiguracija, tajne, logiranje, greške
-
-- [ ] `config.py`/okolina: nesigurne zadane vrijednosti (prazan `SECRETS_KEY`,
-      `ALLOW_REGISTRATION=true`, `COLLECTOR_ACCESS` ≠ strict, `DEBUG`, `CORS_ORIGINS=*`).
-      Zadano mora biti sigurno, a nesigurno mora zahtijevati namjernu promjenu.
-- [ ] Tajne se ne ispisuju u logove, iznimke ni odgovore (setup token se ispisuje **namjerno**
-      pri startu dok nema računa; provjeri da se ne ispisuje poslije). Nema stack traceova ni
-      SQL-a u HTTP odgovorima; nema `/docs`/`/openapi.json` izloženih na javnoj strani ako to
-      nije namjera (provjeri `FastAPI(docs_url=...)` i nginx).
-- [ ] **Log injection:** korisnički i kolektorski stringovi u logovima s novim redom/ANSI
-      sekvencama.
-- [ ] `seed_user.py` i `reset_2fa.py`: bez ugrađenih vjerodajnica, bez ispisa lozinke, ne
-      mogu se pokrenuti preko API-ja, ne ostavljaju tajne u povijesti ljuske (argumenti).
-- [ ] Pokretanje: backend se ne pokreće s `--reload`/debug u produkcijskoj slici; radi kao
-      neprivilegirani korisnik (vidi infra listu).
-
-## 8. Dostupnost (DoS jednim korisnikom)
-
-- [ ] Skupi endpointi (statistika, flota, povijest, eksport) imaju ograničenje rada i cache;
-      nema neograničenih petlji nad podacima koje kontrolira kolektor.
-- [ ] Dugotrajne operacije ne blokiraju event loop (sinkroni DB/CPU rad u `async def`
-      ruti blokira sve zahtjeve: jedan spor zahtjev = zastoj).
-- [ ] Rast podataka: tablice koje se pune iz check-inova imaju gornju granicu ili retenciju;
-      zabilježi ako je rast neograničen (poznato za sažetke povijesti).
+`seed_user.py`, `reset_2fa.py` in full. For each item, find the code that enforces it.
+ 
+## 1. Authentication and authorization (highest priority)
+ 
+- [ ] **Every route has a deliberate answer** to "who may call this?" (route inventory from
+      step 1). A route that forgets the auth `Depends(...)` is **open** by default: look for
+      these.
+- [ ] The *anonymous / logged in / admin / collector* distinction is enforced on the server,
+      never only in the frontend. Admin-only routes actually check the role (not just login).
+- [ ] A **restricted session** (admin without 2FA while the policy is on) can really reach
+      only the profile, 2FA setup and logout. Check *every* route, not just what the test
+      covers, including new routes added after that feature.
+- [ ] **IDOR / horizontal authorization:** routes with IDs (server, container, conversation,
+      session, token, user, rule, alert) check ownership/role. In particular: listing
+      sessions by public ID, deleting another user's session, another user's conversations.
+- [ ] **Mass assignment:** request models do not accept fields like `is_admin`, `role`,
+      `require_2fa`, `server_id`, `owner_id`. Check the Pydantic models and `**body`/`setattr`.
+- [ ] The last admin cannot delete/demote themselves into a state with no admin (or this is
+      intentional and documented). An admin cannot escalate another user without checks.
+- [ ] The first account becomes admin: check **all** paths (setup token,
+      `ALLOW_REGISTRATION`, a race between two concurrent requests, `ADMIN_BOOTSTRAP_TOKEN`
+      comparison, token removal after the first account). Is the token comparison
+      constant-time (`hmac.compare_digest`)?
+## 2. Sessions, cookies, CSRF
+ 
+- [ ] Session ID: from `secrets` (not `random`/`uuid1`), enough entropy, stored hashed or at
+      least never returned to the browser in a response body. Rotated on privilege change
+      (login, 2FA, password change).
+- [ ] Cookie flags: `HttpOnly`, `Secure` (and under what conditions it is turned off: check
+      that the default is not insecure), `SameSite`, `Path`, expiry.
+- [ ] Expiry and logout actually delete the session on the server; logout-everywhere works.
+- [ ] **`Origin`/`Sec-Fetch-Site` check** on POST/PUT/PATCH/DELETE: try to bypass it with an
+      `Origin` sharing the prefix (`https://dash.example.com.evil.tld`), a different
+      port/scheme, `Origin: null`, a missing `Origin` + `Sec-Fetch-Site: same-site`, an
+      attacker-controlled `Host` header, `CORS_ORIGINS` with wildcards. Does the check apply
+      to **all** methods and all routes (middleware or per route)? Is there an exemption for
+      collector paths, and can it be abused to bypass the check on a user route?
+- [ ] CORS: `allow_origins` is not `*` together with `allow_credentials=True`; no reflection
+      of an arbitrary `Origin`.
+## 3. Passwords, 2FA, tokens
+ 
+- [ ] Password hashing: bcrypt/argon2 with a reasonable cost; the 72-byte limit is enforced
+      (rejects, does not truncate); no passwords in logs; changing the password requires the
+      old password (or a fresh session) and invalidates other sessions.
+- [ ] **Timing/account enumeration:** login, reset and registration return the same responses
+      and similar timing for a nonexistent email and a wrong password (dummy hash for
+      nonexistent accounts?).
+- [ ] **Rate limit** (`rate_limit.py`): the key (IP, email) cannot be bypassed by changing
+      headers (`X-Forwarded-For` from an untrusted source), upper/lower case or whitespace in
+      the email, or unicode normalization; memory is bounded (an attacker cannot inflate the
+      structure with millions of keys); do the limits hold with multiple worker processes
+      (per-process in-memory state = effective limit × number of processes)?
+- [ ] **TOTP** (`totp.py`): constant-time comparison; ±1 window; **the ban on reusing the same
+      code is atomic** (unique index/conditional UPDATE, not read-then-write); the per-account
+      and per-address attempt counter is not reset by restarting the password step; the
+      intermediate token (5 min) is single-use, bound to the user, and never valid as a
+      session anywhere.
+- [ ] **Recovery codes:** entropy, hashed, single-use *atomically*, deleted/regenerated when
+      2FA is disabled.
+- [ ] `secrets_box.py`: Fernet key from the environment; behaviour without a key must not
+      leave secrets in plaintext; a decryption error does not leak details; the key is never
+      logged.
+- [ ] **Server tokens and join tokens:** generated from `secrets`, hashed (SHA-256 is fine for
+      high-entropy tokens), constant-time comparison or lookup by hash, single-use and expiry
+      are **atomic**, the cap on open tokens (20) holds under concurrent requests, deleting a
+      server invalidates its token.
+- [ ] Re-pairing an existing machine (same machine ID) requires `replace: true` on the server,
+      not only in the UI; can another server's credentials be overwritten without it?
+## 4. Inputs sent by the collector (untrusted)
+ 
+- [ ] Every collector route (register, poll, enroll, ingest, helper events) is rejected when
+      the request did not come through the gate (`X-Collector-Via` /
+      `COLLECTOR_ACCESS=strict`); check that a client cannot send that header itself from the
+      public side (nginx must overwrite/strip it, and the backend must not trust it blindly if
+      the backend is reachable from other containers).
+- [ ] Collector authentication: one token per server; one server's collector cannot write
+      another server's data (`server_id` from the token, not from the request body!).
+- [ ] **Validation:** types, lengths, ranges, strict time parsing, `sha256:` + 64 hex, max 500
+      containers, names ≤128, event limits per check-in and per hour. Look for fields that
+      are stored without sanitizing (fields added later often slip past).
+- [ ] Request body size is limited (nginx `client_max_body_size` **and** Pydantic
+      `max_length`), JSON depth/size, number of list elements.
+- [ ] Idempotency/replay: a repeated check-in does not create duplicate incidents or unbounded
+      table growth. Hostile data cannot "silence" other servers' alerts.
+## 5. Database and injection
+ 
+- [ ] Every `text(...)`, `execute(f"...")`, `.format`, `%` or string concatenation in SQL: are
+      the values bound as parameters? Dynamic `ORDER BY`, column/metric names and `LIMIT`
+      from the request go only through an **allowlist**.
+- [ ] Container names and mount paths go into incident keys/cache keys: can they collide, or
+      can a separator (`:`, `|`, newline) be injected to merge two incidents?
+- [ ] LIKE queries with user input (escape `%`/`_`), regex from user input (ReDoS; `rules.py`
+      has 593 lines of rules, check which expressions it evaluates and whether that is safe).
+- [ ] **`rules.py`: is anything executed dynamically** (`eval`, `exec`, `compile`, `getattr`
+      with a user-supplied name, `importlib`, string templates with a user-supplied format)?
+      If rules/alerts are user-configurable, what can the configuration express?
+- [ ] Page/`limit` caps, row counts, time ranges on `history`/`stats` (a fixed list of ranges
+      and metrics, bounded cache, keys built from validated values).
+- [ ] Transactions: no state where a failure mid-operation leaves an account without 2FA or a
+      session that survives a password change.
+## 6. Outbound connections (SSRF) and integrations
+ 
+- [ ] Notification channels (`notify.py`: ntfy, Discord, webhook, email) are configured via
+      the API per user: http(s) scheme only, loopback/link-local/metadata always rejected,
+      private LAN addresses for admins only, check after DNS resolution and connect to the
+      checked address (DNS rebinding), no following redirects, timeout. Check the SMTP path
+      too.
+- [ ] Outgoing message content contains no secrets (tokens, hashes) and no unsanitized
+      third-party strings in a context where they are interpreted (Slack/markdown/HTML/email
+      headers → injection).
+- [ ] No `requests`/`httpx` calls to a URL from the request without the protections above.
+## 7. Configuration, secrets, logging, errors
+ 
+- [ ] `config.py`/environment: insecure defaults (empty `SECRETS_KEY`,
+      `ALLOW_REGISTRATION=true`, `COLLECTOR_ACCESS` ≠ strict, `DEBUG`, `CORS_ORIGINS=*`). The
+      default must be secure, and anything insecure must require a deliberate change.
+- [ ] Secrets are not written to logs, exceptions or responses (the setup token is printed
+      **on purpose** at startup while there are no accounts; check that it is not printed
+      afterwards). No stack traces or SQL in HTTP responses; no `/docs`/`/openapi.json`
+      exposed on the public side unless intended (check `FastAPI(docs_url=...)` and nginx).
+- [ ] **Log injection:** user and collector strings in logs with newlines/ANSI sequences.
+- [ ] `seed_user.py` and `reset_2fa.py`: no built-in credentials, no printing of passwords,
+      cannot be triggered via the API, do not leave secrets in shell history (arguments).
+- [ ] Startup: the backend does not run with `--reload`/debug in the production image; it runs
+      as an unprivileged user (see the infra checklist).
+## 8. Availability (single-user DoS)
+ 
+- [ ] Expensive endpoints (statistics, fleet, history, export) have work limits and caching;
+      no unbounded loops over collector-controlled data.
+- [ ] Long-running operations do not block the event loop (synchronous DB/CPU work in an
+      `async def` route blocks every request: one slow request = a stall).
+- [ ] Data growth: tables filled from check-ins have an upper bound or retention; note it if
+      growth is unbounded (known for history rollups).
+ 

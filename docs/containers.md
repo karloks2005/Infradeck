@@ -154,8 +154,7 @@ image's start script gets a few as root to prepare the data folder (see [SECURIT
   whole file for each write. (The tests do use SQLite, because they run in one process.)
 - *Time-series queries.* Statistics group, average and take maximums over millions of samples;
   PostgreSQL's indexes and planner do that well.
-- *Reliability.* Transactions, crash recovery and standard backup tools (`pg_dump`, see
-  [SETUP_DATABASES.md](../SETUP_DATABASES.md)).
+- *Reliability.* Transactions, crash recovery and standard backup tools (`pg_dump`).
 - *Why not a dedicated time-series database (InfluxDB, Prometheus).* Accounts, incidents and metrics would
   then live in two databases with two backup routines. With rollups and retention, PostgreSQL is fast
   enough for the scale this project is built for.

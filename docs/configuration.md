@@ -9,7 +9,7 @@ Every setting below is listed, with no values, in [`example.env`](../example.env
 | Variable | Default | Description |
 |---|---|---|
 | `POSTGRES_PASSWORD` | *(required)* | PostgreSQL password. |
-| `POSTGRES_DB` / `POSTGRES_USER` | `infradeck` / `infradeck` | Name of the database and its user. Installs from before the rename can keep `homelab` (see [SETUP_DATABASES.md](../SETUP_DATABASES.md)). |
+| `POSTGRES_DB` / `POSTGRES_USER` | `infradeck` / `infradeck` | Name of the database and its user. |
 | `REDIS_PASSWORD` | *(required)* | Redis password. Redis holds the login sessions, so nothing that can merely reach it may use it. Use letters and digits only (`openssl rand -hex 24`) because it is put into a URL. |
 | `SESSION_COOKIE_SECURE` | `true`; the dev compose file sets `false` | Send the login cookie over HTTPS only. Empty counts as `true`. Set `false` only when you open the dashboard over plain HTTP. |
 | `SESSION_TTL_SECONDS` | `86400` | Session lifetime without *Remember me*. |

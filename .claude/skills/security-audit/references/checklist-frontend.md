@@ -1,82 +1,78 @@
-# Kontrolna lista: frontend (`src/frontend/**`)
-
-Čitaj `src/App.jsx` (velik), `StatisticsPage.jsx`, `FleetStatistics.jsx`,
+# Checklist: frontend (`src/frontend/**`)
+ 
+Read `src/App.jsx` (large), `StatisticsPage.jsx`, `FleetStatistics.jsx`,
 `ContainerStatistics.jsx`, `ServerInsights.jsx`, `charts.jsx`, `distributions.jsx`,
 `*Logic.js`, `chartMath.js`, `main.jsx`, `index.html`, `vite.config.js`, `package.json`.
-
+ 
 ## 1. XSS
-
-Dashboard prikazuje podatke koje kontrolira napadač (imena kontejnera, putanje mountova,
-poruke događaja, tekst asistenta, imena servera). **Stored XSS u admin kontekstu = preuzimanje
-dashboarda**, pa je ovo glavna stavka.
-
-- [ ] Pretraži: `dangerouslySetInnerHTML`, `innerHTML`, `outerHTML`, `insertAdjacentHTML`,
-      `document.write`, `eval`, `new Function`, `setTimeout("string")`, `srcdoc`, `postMessage`
-      bez provjere origina. Svako pojavljivanje prati do izvora podatka.
-- [ ] **Markdown/rich tekst** (izlaz asistenta, opisi): koristi li se biblioteka? Je li HTML
-      isključen ili sanitiziran (DOMPurify s restriktivnom konfiguracijom)? Linkovi iz
-      markdowna filtriraju `javascript:`/`data:`.
-- [ ] **Atributi s URL-om iz podataka:** `href`, `src`, `action`, `formAction`: shema samo
-      `http(s)` (i `mailto` ako treba). `target="_blank"` ima `rel="noopener noreferrer"`.
-- [ ] SVG iz podataka (grafovi koji ugrađuju stringove u SVG, `<text>`, `<title>`, `<a>`):
-      React escapea tekst, ali provjeri ručno sastavljene SVG stringove i `style` objekte
-      s podacima.
-- [ ] CSS injekcija: vrijednosti iz podataka u `style`/`className` konstruiranima iz stringova.
-- [ ] Prototype pollution: spajanje objekata iz JSON-a s kolektora (`Object.assign`, spread
-      u ključeve iz podataka, `obj[key] = ...` s ključem iz podataka, `__proto__`).
-
-## 2. Autentikacija i tajne u pregledniku
-
-- [ ] Tokeni/sesije se **ne** drže u `localStorage`/`sessionStorage`/URL-u (sesija je
-      HttpOnly kolačić). Provjeri što se sprema u `localStorage` (osjetljivi podaci, tokeni,
-      TOTP, recovery kodovi).
-- [ ] Recovery kodovi i TOTP tajna: prikazuju se samo jednom, ne spremaju se u stanje koje
-      preživljava navigaciju, ne završavaju u URL-u ni logu konzole (`console.log`).
-- [ ] Nema API ključeva, `SECRETS_KEY`-a ni internih URL-ova ugrađenih u bundle
-      (`import.meta.env.VITE_*` je **javno**). Pretraži `VITE_`.
-- [ ] Frontend ne donosi sigurnosne odluke koje backend ne provjerava (skrivanje admin
-      gumba nije kontrola pristupa; to pokriva backend lista, ovdje samo zabilježi).
-- [ ] Odjava briše stanje u memoriji; nema keširanja osjetljivih odgovora (nginx/`Cache-Control`
-      za API).
-
-## 3. Generiranje naredbi za instalaciju ("Connect a server")
-
-Panel generira naredbu koju korisnik kopira i izvršava na udaljenom stroju. Ona sadrži
-join token i digest slike.
-
-- [ ] Sve vrijednosti u naredbi (token, digest, URL, `COLLECTOR_BIND`, ime) su **validirane ili
-      citirane za ljusku**. Vrijednost s `;`, `$(...)`, `` ` ``, `'`, novim redom ili razmakom
-      ne smije izaći iz navodnika. Provjeri odakle vrijednosti dolaze (konfiguracija
-      dashboarda, odgovor API-ja) i kako se spajaju u string.
-- [ ] Naredba ne koristi `curl | sh` ni nepinirane slike; digest je obavezan, a prikaz
-      jasno razlikuje što korisnik izvršava.
-- [ ] Token se prikazuje jednom, ima vidljiv istek, a "Kopiraj" ne ostavlja ga u povijesti
-      stanja.
-
-## 4. Mrežne pozivne točke i CSRF
-
-- [ ] `fetch` pozivi za mijenjanje stanja šalju kolačić (`credentials`) samo prema vlastitom
-      originu; nema poziva prema proizvoljnim URL-ovima iz podataka.
-- [ ] Nema otvorenog preusmjeravanja (`window.location = param`), nema `redirect`/`next`
-      parametra bez provjere da je relativan put.
-- [ ] Rukovanje greškama ne ispisuje stack/tajne korisniku; odgovori API-ja koji sadrže
-      tuđe stringove prikazuju se kao tekst.
-
-## 5. CSP i build
-
-- [ ] Frontend radi pod strogim CSP-om bez `unsafe-inline` za skripte (nema inline `<script>`
-      u `index.html`, nema `eval` u bundle-u). Novi izvori koji traže proširenje CSP-a
-      moraju biti dokumentirani.
-- [ ] `vite.config.js`: dev proxy/`server.host` ne izlaže dev server; `build.sourcemap` u
-      produkciji isključen ili namjeran; nema `define` s tajnama.
-- [ ] `index.html`: bez vanjskih skripti/fontova bez SRI-ja; bez inline handlera.
-- [ ] Ovisnosti (`package.json`): neobične ili nepotrebne, `postinstall` skripte; vidi infra
-      listu za audit alate.
-
-## 6. Dostupnost kao sigurnost
-
-- [ ] Renderiranje ne pada ni ne zamrzava preglednik na hostilnim podacima: vrlo dugi
-      stringovi, tisuće kontejnera, `NaN`/`Infinity`/negativni brojevi u grafovima
-      (`chartMath.js`, `fleetLogic.js`, `containerLogic.js`), prazni nizovi, nepoznata polja.
-      Pad cijele aplikacije zbog jednog loše oblikovanog zapisa = napadač s kolektorom može
-      onesposobiti dashboard.
+ 
+The dashboard displays attacker-controlled data (container names, mount paths, event
+messages, assistant text, server names). **Stored XSS in an admin context = dashboard
+takeover**, so this is the main item.
+ 
+- [ ] Search for: `dangerouslySetInnerHTML`, `innerHTML`, `outerHTML`, `insertAdjacentHTML`,
+      `document.write`, `eval`, `new Function`, `setTimeout("string")`, `srcdoc`,
+      `postMessage` without an origin check. Trace every occurrence back to the data source.
+- [ ] **Markdown/rich text** (assistant output, descriptions): is a library used? Is HTML
+      disabled or sanitized (DOMPurify with a restrictive configuration)? Links from markdown
+      filter out `javascript:`/`data:`.
+- [ ] **URL attributes from data:** `href`, `src`, `action`, `formAction`: `http(s)` scheme
+      only (plus `mailto` if needed). `target="_blank"` has `rel="noopener noreferrer"`.
+- [ ] SVG from data (charts that embed strings in SVG, `<text>`, `<title>`, `<a>`): React
+      escapes text, but check hand-built SVG strings and `style` objects with data.
+- [ ] CSS injection: data values in `style`/`className` built from strings.
+- [ ] Prototype pollution: merging objects from collector JSON (`Object.assign`, spread into
+      keys from data, `obj[key] = ...` with a key from data, `__proto__`).
+## 2. Authentication and secrets in the browser
+ 
+- [ ] Tokens/sessions are **not** kept in `localStorage`/`sessionStorage`/the URL (the session
+      is an HttpOnly cookie). Check what is stored in `localStorage` (sensitive data, tokens,
+      TOTP, recovery codes).
+- [ ] Recovery codes and the TOTP secret: shown only once, not stored in state that survives
+      navigation, never end up in the URL or the console log (`console.log`).
+- [ ] No API keys, `SECRETS_KEY` or internal URLs baked into the bundle
+      (`import.meta.env.VITE_*` is **public**). Search for `VITE_`.
+- [ ] The frontend makes no security decisions that the backend does not check (hiding an
+      admin button is not access control; the backend checklist covers that, here just note
+      it).
+- [ ] Logout clears in-memory state; sensitive responses are not cached (nginx/`Cache-Control`
+      for the API).
+## 3. Generating install commands ("Connect a server")
+ 
+The panel generates a command that the user copies and runs on a remote machine. It
+contains the join token and the image digest.
+ 
+- [ ] Every value in the command (token, digest, URL, `COLLECTOR_BIND`, name) is **validated
+      or shell-quoted**. A value containing `;`, `$(...)`, `` ` ``, `'`, a newline or a space
+      must not break out of the quotes. Check where the values come from (dashboard
+      configuration, API response) and how they are concatenated into the string.
+- [ ] The command does not use `curl | sh` or unpinned images; the digest is mandatory, and
+      the display makes it clear what the user is running.
+- [ ] The token is shown once, has a visible expiry, and "Copy" does not leave it in state
+      history.
+## 4. Network call sites and CSRF
+ 
+- [ ] State-changing `fetch` calls send the cookie (`credentials`) only to the app's own
+      origin; no calls to arbitrary URLs taken from data.
+- [ ] No open redirect (`window.location = param`), no `redirect`/`next` parameter without a
+      check that it is a relative path.
+- [ ] Error handling does not show stack traces/secrets to the user; API responses containing
+      third-party strings are displayed as text.
+## 5. CSP and build
+ 
+- [ ] The frontend works under a strict CSP without `unsafe-inline` for scripts (no inline
+      `<script>` in `index.html`, no `eval` in the bundle). New sources that require widening
+      the CSP must be documented.
+- [ ] `vite.config.js`: the dev proxy/`server.host` does not expose the dev server;
+      `build.sourcemap` is off in production or intentional; no `define` with secrets.
+- [ ] `index.html`: no external scripts/fonts without SRI; no inline handlers.
+- [ ] Dependencies (`package.json`): unusual or unnecessary ones, `postinstall` scripts; see
+      the infra checklist for audit tools.
+## 6. Availability as security
+ 
+- [ ] Rendering does not crash or freeze the browser on hostile data: very long strings,
+      thousands of containers, `NaN`/`Infinity`/negative numbers in charts (`chartMath.js`,
+      `fleetLogic.js`, `containerLogic.js`), empty arrays, unknown fields. A whole-app crash
+      caused by one malformed record = an attacker with a collector can disable the
+      dashboard.
+ 

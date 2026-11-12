@@ -1,4 +1,8 @@
 design/
+# Third-party security checklists without a license: never published.
+.claude/skills/claude-red/
+# Personal Claude Code settings.
+src/.claude/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

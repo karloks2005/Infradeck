@@ -1,130 +1,140 @@
-# Kontrolna lista: infrastruktura, repozitorij, ovisnosti
-
-Čitaj `docker/*` (Dockerfile-ove, `nginx*.conf`, `Caddyfile`, `postgres/init/*.sql`),
+# Checklist: infrastructure, repository, dependencies
+ 
+Read `docker/*` (Dockerfiles, `nginx*.conf`, `Caddyfile`, `postgres/init/*.sql`),
 `compose.yml`, `docker-compose.server.yml`, `collector-compose.yml`, `example.env`,
 `.dockerignore`, `.gitignore`, `.github/workflows/*.yml`, `requirements*.txt`,
 `src/frontend/package.json` + lockfile.
-
-## 1. Dockerfile-ovi
-
-- [ ] `USER` je neprivilegiran u svakoj slici koja to može (docker-proxy i system-helper su
-      iznimke zbog socketa/capabilityja: provjeri da je to jedino mjesto i da je obrazloženo).
-- [ ] Bazne slike: pinirane (digest ili barem točna verzija), ne `latest`; minimalne.
-- [ ] Nema tajni u slojevima (`ARG`/`ENV` s tokenima, `COPY .env`, `.git`, `dev.db`, ključevi);
-      `.dockerignore` isključuje `.env*`, `.git`, `venv`, `*.db`, testove, `node_modules`.
-- [ ] Nema `curl | sh`, `pip install` bez pinova/hashova za produkcijske ovisnosti, `apt` bez
-      `--no-install-recommends` i čišćenja; build ne izvršava nepouzdani kod s mreže.
-- [ ] `HEALTHCHECK`/`CMD` ne pokreće debug način (`--reload`, `--debug`).
-- [ ] Frontend slika: izgrađena u multi-stage, u produkciji nema `node_modules`, dev servera
-      ni source mapa koje otkrivaju izvorni kod ako to nije namjera.
-
-## 2. Compose datoteke
-
-Za **svaki servis** zapiši: korisnik, `cap_drop`/`cap_add`, `read_only`,
+ 
+## 1. Dockerfiles
+ 
+- [ ] `USER` is unprivileged in every image that allows it (docker-proxy and system-helper are
+      exceptions because of the socket/capabilities: check that these are the only places and
+      that they are justified).
+- [ ] Base images: pinned (digest or at least an exact version), not `latest`; minimal.
+- [ ] No secrets in layers (`ARG`/`ENV` with tokens, `COPY .env`, `.git`, `dev.db`, keys);
+      `.dockerignore` excludes `.env*`, `.git`, `venv`, `*.db`, tests, `node_modules`.
+- [ ] No `curl | sh`, no `pip install` without pins/hashes for production dependencies, no
+      `apt` without `--no-install-recommends` and cleanup; the build does not execute
+      untrusted code from the network.
+- [ ] `HEALTHCHECK`/`CMD` does not start debug mode (`--reload`, `--debug`).
+- [ ] Frontend image: built multi-stage; production has no `node_modules`, dev server, or
+      source maps exposing the source code unless intended.
+## 2. Compose files
+ 
+For **every service**, record: user, `cap_drop`/`cap_add`, `read_only`,
 `security_opt: no-new-privileges`, `privileged`, `network_mode`, `pid`, `ports`, `volumes`,
 `environment`/`secrets`.
-
-- [ ] **Objavljeni portovi** vezani su na konkretnu adresu (`127.0.0.1:` ili VPN adresa), ne na
-      `0.0.0.0`, osim namjerno javnog frontenda. Docker zaobilazi `ufw`: firewall pravilo nije
-      zaštita. Backend, Postgres i docker-proxy nemaju objavljenih portova u server stogu.
-- [ ] **`/var/run/docker.sock` montiran samo u docker-proxy**, nigdje drugdje (backend,
-      collector, frontend, helper). Isto za `/`, `/etc`, `/root`, `/home`, `/var/lib/docker`.
-- [ ] Mountovi hosta su `:ro` gdje je moguće; `/hostfs` je read-only; nema `rw` mounta
-      povjerljivih direktorija.
-- [ ] Volumen s Unix socketom docker-proxyja dijele **samo** proxy i collector.
-- [ ] `cap_drop: [ALL]` kao zadano; svaki `cap_add` obrazložen (samo `CAP_SYSLOG` za helper).
-      Nema `privileged`, `pid: host`, `network_mode: host`, `ipc: host`, `devices` bez razloga.
-- [ ] `read_only: true` + `tmpfs` za potrebno; `no-new-privileges` na svemu.
-- [ ] Mrežna segmentacija: collector-gate nije na mreži reverse proxyja; backend nije na
-      mreži kojoj imaju pristup tuđe aplikacije; Postgres samo na internoj mreži;
-      `internal: true` gdje izlaz nije potreban.
-- [ ] **Zadane/placeholder tajne:** u compose/`example.env` nema stvarnih ili zadano slabih
-      lozinki (`changeme`, `postgres`, `admin`) koje bi ostale u produkciji; obavezne
-      vrijednosti koriste `${VAR:?poruka}` da stog ne krene bez njih.
-- [ ] Slike u compose-u za udaljene hostove pinirane po digestu (`COLLECTOR_IMAGE`,
-      `DOCKER_PROXY_IMAGE`), a panel ne generira naredbu bez njih.
-- [ ] Postgres: lozinke ne u compose-u u čistom tekstu ako se može `secrets:`/env iz `.env`;
-      nema objavljenog 5432.
-- [ ] Healthchecki ne otkrivaju tajne; restart politike ne skrivaju petlju rušenja.
-
+ 
+- [ ] **Published ports** are bound to a specific address (`127.0.0.1:` or the VPN address),
+      not `0.0.0.0`, except for the intentionally public frontend. Docker bypasses `ufw`: a
+      firewall rule is not protection. The backend, Postgres and docker-proxy have no
+      published ports in the server stack.
+- [ ] **`/var/run/docker.sock` is mounted only into docker-proxy**, nowhere else (backend,
+      collector, frontend, helper). The same goes for `/`, `/etc`, `/root`, `/home`,
+      `/var/lib/docker`.
+- [ ] Host mounts are `:ro` wherever possible; `/hostfs` is read-only; no `rw` mounts of
+      sensitive directories.
+- [ ] The volume holding the docker-proxy Unix socket is shared **only** by the proxy and the
+      collector.
+- [ ] `cap_drop: [ALL]` by default; every `cap_add` justified (only `CAP_SYSLOG` for the
+      helper). No `privileged`, `pid: host`, `network_mode: host`, `ipc: host` or `devices`
+      without a reason.
+- [ ] `read_only: true` + `tmpfs` where needed; `no-new-privileges` on everything.
+- [ ] Network segmentation: the collector gate is not on the reverse proxy's network; the
+      backend is not on a network that other apps can reach; Postgres only on an internal
+      network; `internal: true` where egress is not needed.
+- [ ] **Default/placeholder secrets:** compose/`example.env` contain no real or weak default
+      passwords (`changeme`, `postgres`, `admin`) that would remain in production; required
+      values use `${VAR:?message}` so the stack does not start without them.
+- [ ] Images in compose for remote hosts are pinned by digest (`COLLECTOR_IMAGE`,
+      `DOCKER_PROXY_IMAGE`), and the panel does not generate a command without them.
+- [ ] Postgres: passwords not in plaintext in compose if `secrets:`/env from `.env` is
+      possible; no published 5432.
+- [ ] Healthchecks do not reveal secrets; restart policies do not hide a crash loop.
 ## 3. nginx (`nginx.conf`, `nginx.strict.conf`, `nginx.collector.conf`)
-
-- [ ] **Javna strana vraća 404 za sve collector endpointe** (register, poll, enroll, ingest,
-      helper). Provjeri točne `location` blokove: prefiks vs. točno, regex, razlike u
-      kosoj crti, velika/mala slova, `//`, `/./`, `%2f`, `..;/`. Najgori slučaj: put koji
-      nginx ne prepoznaje kao zabranjen, a backend ga normalizira u collector endpoint.
-- [ ] `X-Collector-Via` (i slična interna zaglavlja) **postavlja** samo gate, a javna strana
-      ga **briše/prepisuje** (`proxy_set_header X-Collector-Via "";`).
-- [ ] `real_ip` / `X-Forwarded-For`: `set_real_ip_from` samo privatni/Docker rasponi,
-      `real_ip_recursive` ispravno; nema povjerenja u XFF s javne strane; backend dobiva
-      stvarni klijentski IP za rate limit.
-- [ ] **`add_header` nasljeđivanje:** `add_header` u `location` bloku *poništava* sve
-      `add_header` iz `server`/`http` razine. Provjeri da svaki `location` koji ima vlastiti
-      `add_header` (cache, CORS) ponavlja sigurnosna zaglavlja (CSP, nosniff, frame, HSTS),
-      i da su dodana s `always` kako bi vrijedila i za greške.
-- [ ] CSP: bez `unsafe-inline`/`unsafe-eval` za `script-src`, `default-src 'self'`,
-      `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`;
-      dopušteni `style` inline je poznata cijena (React style atributi).
-- [ ] HSTS samo na strict/javnoj konfiguraciji; `server_tokens off`.
-- [ ] `client_max_body_size` ograničen po lokaciji; `client_body_timeout`, `proxy_*_timeout`,
-      `limit_req`/`limit_conn` na osjetljivim rutama (login, enroll) kao drugi sloj.
-- [ ] `proxy_pass`: pazi na kosu crtu na kraju (promjena normalizacije puta), prosljeđuju se
-      samo potrebna zaglavlja, `proxy_set_header Host` ispravan (backend koristi `Host` za
-      provjeru Origina), WebSocket upgrade samo gdje treba.
-- [ ] Nema `autoindex on`, `alias` bez kose crte (traversal), poslužuje li se išta osim
-      statičkih datoteka SPA-a (`.map`, `.env`, `.git`)? `try_files` ne otkriva skrivene datoteke.
-- [ ] TLS konfiguracija (ako je nginx terminira): protokoli ≥ TLS1.2, bez slabih šifri.
-      Ako TLS terminira Traefik, navedi to kao pretpostavku, ne nalaz.
-- [ ] `Caddyfile`: je li to ostatak/dev konfiguracija? Ako je u produkcijskom putu, pregledaj
-      jednako strogo kao nginx.
-
+ 
+- [ ] **The public side returns 404 for all collector endpoints** (register, poll, enroll,
+      ingest, helper). Check the exact `location` blocks: prefix vs. exact, regex, trailing
+      slash differences, upper/lower case, `//`, `/./`, `%2f`, `..;/`. Worst case: a path that
+      nginx does not recognize as forbidden but that the backend normalizes into a collector
+      endpoint.
+- [ ] `X-Collector-Via` (and similar internal headers) is **set** only by the gate, and the
+      public side **clears/overwrites** it (`proxy_set_header X-Collector-Via "";`).
+- [ ] `real_ip` / `X-Forwarded-For`: `set_real_ip_from` only for private/Docker ranges,
+      `real_ip_recursive` correct; no trust in XFF from the public side; the backend gets the
+      real client IP for rate limiting.
+- [ ] **`add_header` inheritance:** an `add_header` in a `location` block *discards* all
+      `add_header` directives from the `server`/`http` level. Check that every `location`
+      with its own `add_header` (cache, CORS) repeats the security headers (CSP, nosniff,
+      frame, HSTS), and that they are added with `always` so they apply to errors too.
+- [ ] CSP: no `unsafe-inline`/`unsafe-eval` for `script-src`, `default-src 'self'`,
+      `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'self'`,
+      `form-action 'self'`; allowing inline `style` is a known cost (React style attributes).
+- [ ] HSTS only on the strict/public configuration; `server_tokens off`.
+- [ ] `client_max_body_size` limited per location; `client_body_timeout`,
+      `proxy_*_timeout`, `limit_req`/`limit_conn` on sensitive routes (login, enroll) as a
+      second layer.
+- [ ] `proxy_pass`: watch the trailing slash (it changes path normalization); only the
+      necessary headers are forwarded; `proxy_set_header Host` is correct (the backend uses
+      `Host` for the Origin check); WebSocket upgrade only where needed.
+- [ ] No `autoindex on`, no `alias` without a trailing slash (traversal); is anything served
+      besides the SPA's static files (`.map`, `.env`, `.git`)? `try_files` does not expose
+      hidden files.
+- [ ] TLS configuration (if nginx terminates it): protocols ≥ TLS 1.2, no weak ciphers. If
+      Traefik terminates TLS, state that as an assumption, not a finding.
+- [ ] `Caddyfile`: is it a leftover/dev configuration? If it is on the production path,
+      review it as strictly as nginx.
 ## 4. Postgres (`docker/postgres/init/*.sql`)
-
-- [ ] Aplikacija se spaja kao korisnik s **minimalnim pravima** (nije superuser, nije vlasnik
-      sheme ako migracije nisu potrebne pri radu), odvojen od administrativnog.
-- [ ] Lozinke u init skriptama nisu ugrađene u repozitorij; nema `trust` autentikacije iz
-      svih adresa; `pg_hba` ne dopušta vanjske veze.
-- [ ] Nema `CREATE EXTENSION` ni `GRANT ALL` bez razloga.
-
+ 
+- [ ] The application connects as a user with **minimal privileges** (not superuser, not the
+      schema owner if migrations are not needed at runtime), separate from the
+      administrative one.
+- [ ] Passwords in init scripts are not committed to the repository; no `trust`
+      authentication from all addresses; `pg_hba` does not allow external connections.
+- [ ] No `CREATE EXTENSION` or `GRANT ALL` without a reason.
 ## 5. GitHub Actions (`.github/workflows/images.yml`)
-
-Ovo je opskrbni lanac slika koje hostovi pokreću s root-ekvivalentnim pristupom.
-
-- [ ] `permissions:` najmanje potrebno (`contents: read`, `packages: write`, `id-token: write`
-      samo za job koji potpisuje); nema zadanih širokih dozvola.
-- [ ] **Akcije pinirane na puni commit SHA**, ne na tag (`@v4`) za akcije koje diraju tajne ili
-      potpisivanje; provjeri tko ih održava.
-- [ ] Nema `pull_request_target` s checkoutom koda iz PR-a; okidač je samo tag `v*` i/ili
-      ručni, ne svaki push/PR iz forka.
-- [ ] **Script injection:** nema `${{ github.event.* }}` / `${{ github.head_ref }}` /
-      imena grane ili poruke commita umetnutih izravno u `run:` (prenesi preko `env:`).
-- [ ] Potpisivanje cosignom: *keyless* identitet vezan uz workflow i ref; ispis digesta
-      točan; slike se grade iz tagiranog commita; build ne povlači nepinirane ovisnosti bez
-      provjere. Opiši kako domaćin **provjerava** potpis (dokumentirano ako `cosign verify`
-      nije dio generirane naredbe, to je slabost: potpis koji nitko ne provjerava ne štiti).
-- [ ] Tajne se ne ispisuju (`set -x`, `echo`); nema `secrets: inherit` bez razloga.
-
-## 6. Repozitorij i povijest
-
-- [ ] `.gitignore` pokriva `.env`, `*.db`, `*.sqlite`, ključeve, `venv`, `node_modules`.
+ 
+This is the supply chain for images that hosts run with root-equivalent access.
+ 
+- [ ] `permissions:` least required (`contents: read`, `packages: write`, `id-token: write`
+      only for the signing job); no broad default permissions.
+- [ ] **Actions pinned to a full commit SHA**, not a tag (`@v4`), for actions that touch
+      secrets or signing; check who maintains them.
+- [ ] No `pull_request_target` with a checkout of PR code; the trigger is only a `v*` tag
+      and/or manual, not every push/PR from a fork.
+- [ ] **Script injection:** no `${{ github.event.* }}` / `${{ github.head_ref }}` / branch
+      names or commit messages inserted directly into `run:` (pass them via `env:`).
+- [ ] cosign signing: *keyless* identity bound to the workflow and ref; the digest output is
+      correct; images are built from the tagged commit; the build does not pull unpinned
+      dependencies without verification. Describe how the host **verifies** the signature
+      (documented; if `cosign verify` is not part of the generated command, that is a
+      weakness: a signature nobody verifies protects nothing).
+- [ ] Secrets are not printed (`set -x`, `echo`); no `secrets: inherit` without a reason.
+## 6. Repository and history
+ 
+- [ ] `.gitignore` covers `.env`, `*.db`, `*.sqlite`, keys, `venv`, `node_modules`.
       `git ls-files | grep -Ei '\.env$|\.db$|\.sqlite|\.pem$|\.key$|id_rsa|secret|credential'`:
-      što je **pod gitom**? (`dev.db` je ranije bio.) `.env` i `example.env` obje postoje:
-      provjeri da `example.env` nema stvarne vrijednosti.
-- [ ] **Povijest:** `git log --all --diff-filter=A --name-only | grep -Ei '\.env|\.db|key|secret'`
-      i pretraga uzoraka tajni (`git log -p --all -S'SECRET' -S'PASSWORD' -S'TOKEN'` na
-      razumnom opsegu). Tajna koja je ikad bila u povijesti smatra se kompromitiranom čak i
-      ako je kasnije obrisana; to treba prijaviti uz preporuku rotacije. Ne ispisuj vrijednosti.
-- [ ] Pretraga uzoraka u radnom stablu: ključevi (`AKIA`, `ghp_`, `sk-`, `-----BEGIN`),
-      lozinke u kodu, hardkodirani tokeni, `localhost` zaobilaženja autentikacije,
-      `TODO`/`FIXME`/`HACK` uz riječi `auth`, `security`, `bypass`, `skip`.
-- [ ] `TESTS.md`, `docs/`, `README.md` ne sadrže stvarne tajne/domene/IP adrese vlasnika.
-- [ ] `SECURITY.md` ima put za prijavu ranjivosti (ima) i točne tvrdnje.
-
-## 7. Ovisnosti
-
-- [ ] `requirements*.txt` i `package-lock.json`: pinirano? Lockfile usklađen s `package.json`?
-- [ ] Ako su dostupni alati (`pip-audit`, `npm audit --omit=dev`), pokreni ih **samo uz
-      korisnikovu potvrdu** (šalju popis paketa prema registryju). Ako nisu pokrenuti,
-      napiši to u pokrivenosti: nemoj tvrditi da su ovisnosti "bez poznatih ranjivosti".
-- [ ] Nepotrebne/napuštene ovisnosti, ovisnosti iz URL-a/gita, `postinstall` skripte,
-      typosquat imena. Dev ovisnosti ne ulaze u produkcijsku sliku.
+      what is **tracked by git**? (`dev.db` was at one point.) Both `.env` and `example.env`
+      exist: check that `example.env` contains no real values.
+- [ ] **History:** `git log --all --diff-filter=A --name-only | grep -Ei '\.env|\.db|key|secret'`
+      and a search for secret patterns (`git log -p --all -S'SECRET' -S'PASSWORD' -S'TOKEN'`
+      over a reasonable range). A secret that was ever in the history is considered
+      compromised even if it was later deleted; report it with a recommendation to rotate.
+      Do not print values.
+- [ ] Pattern search in the working tree: keys (`AKIA`, `ghp_`, `sk-`, `-----BEGIN`),
+      passwords in code, hardcoded tokens, `localhost` authentication bypasses,
+      `TODO`/`FIXME`/`HACK` next to the words `auth`, `security`, `bypass`, `skip`.
+- [ ] `TESTS.md`, `docs/`, `README.md` contain no real secrets/domains/IP addresses of the
+      owner.
+- [ ] `SECURITY.md` has a vulnerability reporting path (it does) and accurate claims.
+## 7. Dependencies
+ 
+- [ ] `requirements*.txt` and `package-lock.json`: pinned? Is the lockfile in sync with
+      `package.json`?
+- [ ] If the tools are available (`pip-audit`, `npm audit --omit=dev`), run them **only with
+      the user's confirmation** (they send the package list to the registry). If they were
+      not run, say so in the coverage section: do not claim the dependencies have "no known
+      vulnerabilities".
+- [ ] Unnecessary/abandoned dependencies, dependencies from a URL/git, `postinstall` scripts,
+      typosquat names. Dev dependencies do not end up in the production image.
+ 
