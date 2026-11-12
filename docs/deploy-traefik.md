@@ -11,6 +11,9 @@ either file; your settings go into `.env`. For another reverse proxy, see
 [Deploying on a server](deployment.md#other-reverse-proxies). Already running Infradeck behind Traefik? Go to
 [Upgrade an existing install](#upgrade-an-existing-install).
 
+Upgrading an existing install with this guide has been tested on a real server. A fresh install has not yet been
+followed end to end; if a step doesn't work as written, please open an issue.
+
 ## Before you start
 
 - **Docker with Compose v2** on the server. Check with `docker compose version`.
@@ -219,9 +222,11 @@ docker compose up -d --build
 If that version still had the Traefik labels in `docker-compose.server.yml`, set
 `COMPOSE_FILE=docker-compose.server.yml` in `.env` first.
 
-If the older backend doesn't start on the upgraded database, restore the backup:
+If the older backend doesn't start on the upgraded database, restore the backup.
 
-<!-- TODO: verify this restore on a test install -->
+> **Not tested yet.** This restore hasn't been tried end to end. Keep the dump file until the restored dashboard
+> works, and if you can, try the restore on a copy first.
+
 ```bash
 docker compose stop backend agent-worker collector
 docker compose exec -T postgres pg_restore -U infradeck -d infradeck --clean --if-exists < infradeck-before-upgrade.dump
