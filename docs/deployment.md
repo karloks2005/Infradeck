@@ -224,7 +224,6 @@ Every image is signed by the release workflow with cosign, without a key: the si
 workflow's identity on GitHub. With [cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
 installed, check an image before you run it:
 
-<!-- TODO: verify against the first published release -->
 ```bash
 cosign verify ghcr.io/karloks2005/infradeck/backend:<version> \
   --certificate-identity "https://github.com/karloks2005/Infradeck/.github/workflows/images.yml@refs/tags/v<version>" \
