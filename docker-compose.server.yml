@@ -66,7 +66,7 @@ services:
       retries: 5
 
   backend:
-    image: ghcr.io/karloks2005/infradeck/backend:0.10.0
+    image: ghcr.io/karloks2005/infradeck/backend:1.0.0
     container_name: infradeck-backend
     restart: unless-stopped
     # Runs as an unprivileged user (see the Dockerfile) with no capabilities and a read-only filesystem.
@@ -134,7 +134,7 @@ services:
   # stuck model never holds up the API. Stopping it only delays diagnoses; everything else keeps working.
   # It needs the database, Redis and the internet (the model provider), and nothing else. See docs/containers.md.
   agent-worker:
-    image: ghcr.io/karloks2005/infradeck/backend:0.10.0
+    image: ghcr.io/karloks2005/infradeck/backend:1.0.0
     container_name: infradeck-agent-worker
     restart: unless-stopped
     command: ["python", "-m", "src.agent.worker"]
@@ -162,7 +162,7 @@ services:
 
   # Monitors the machine running this stack. Other servers use collector-compose.yml.
   collector:
-    image: ghcr.io/karloks2005/infradeck/collector:0.10.0
+    image: ghcr.io/karloks2005/infradeck/collector:1.0.0
     container_name: infradeck-collector
     restart: unless-stopped
     networks: [collector]
@@ -234,7 +234,7 @@ services:
   # It answers six kinds of read request and nothing else. It has no network at all: the collector
   # reaches it through a Unix socket in a volume only the two of them share. See SECURITY.md.
   docker-proxy:
-    image: ghcr.io/karloks2005/infradeck/docker-proxy:0.10.0
+    image: ghcr.io/karloks2005/infradeck/docker-proxy:1.0.0
     container_name: infradeck-docker-proxy
     restart: unless-stopped
     user: "0:0"
@@ -253,7 +253,7 @@ services:
   # filesystem, and sees the host only through the read-only wtmp file. See SECURITY.md.
   system-helper:
     profiles: ["system-events"]
-    image: ghcr.io/karloks2005/infradeck/system-helper:0.10.0
+    image: ghcr.io/karloks2005/infradeck/system-helper:1.0.0
     container_name: infradeck-system-helper
     restart: unless-stopped
     user: "0:0"
@@ -275,7 +275,7 @@ services:
   # read-only filesystem, and publishes only protocol, port and process name. Read SECURITY.md first.
   port-owners:
     profiles: ["port-owners"]
-    image: ghcr.io/karloks2005/infradeck/system-helper:0.10.0
+    image: ghcr.io/karloks2005/infradeck/system-helper:1.0.0
     container_name: infradeck-port-owners
     restart: unless-stopped
     user: "0:0"
@@ -293,7 +293,7 @@ services:
       - system_events:/out
 
   frontend:
-    image: ghcr.io/karloks2005/infradeck/frontend:0.10.0
+    image: ghcr.io/karloks2005/infradeck/frontend:1.0.0
     container_name: infradeck-frontend
     restart: unless-stopped
     # Runs as the unprivileged nginx user (see the Dockerfile) with no capabilities and a read-only filesystem;
