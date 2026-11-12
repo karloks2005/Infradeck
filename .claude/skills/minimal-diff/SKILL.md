@@ -1,23 +1,23 @@
 ---
 name: minimal-diff
-description: Koristi kad treba izmijeniti postojeći kod, popraviti grešku ili dodati manju funkcionalnost u postojeću bazu. Ne koristi za pisanje novog koda od nule (za to je code-simplicity).
+description: Use when you need to modify existing code, fix a bug, or add a small feature to an existing codebase. Do not use for writing new code from scratch (use code-simplicity for that).
 ---
-
-# Minimalne izmjene postojećeg koda
-
-Mijenjaj samo ono što je potrebno za zadatak.
-
-## Pravila
-
-1. **Prvo pročitaj okolni kod** i prati njegov stil, nazive i obrasce, čak i ako bi ti drugačije izgledao.
-2. **Ne preuređuj susjedni kod.** Bez preimenovanja, premještanja, reformatiranja ili "čišćenja" koje nije dio zadatka.
-3. **Ne dodaji promjene koje nisu tražene**, uključujući popravke tuđih grešaka koje nisu u opsegu zadatka. Spomeni ih u odgovoru.
-4. **Drži diff malim.** Ako izmjena zahtijeva više od očekivanog, zaustavi se i objasni zašto prije nastavka.
-5. **Ne mijenjaj javna sučelja** (potpise funkcija, API odgovore, nazive polja) bez izričitog dopuštenja.
-6. **Test koji pratiš uz izmjenu ide u postojeću datoteku u odgovarajućoj mapi `tests/`** (vidi `TESTS.md`, "Where the tests live"). Novu datoteku napravi samo ako nijedna ne odgovara, u mapi područja, nikad izravno u `tests/`.
-
-## Provjera prije predaje
-
-- Je li svaka promijenjena linija potrebna za zadatak?
-- Je li stil u skladu s okolnim kodom?
-- Ako sam nešto primijetio izvan opsega, jesam li to spomenuo, a ne promijenio?
+ 
+# Minimal changes to existing code
+ 
+Change only what the task requires.
+ 
+## Rules
+ 
+1. **Read the surrounding code first** and follow its style, naming and patterns, even if you would have done it differently.
+2. **Do not rework neighbouring code.** No renaming, moving, reformatting or "cleanup" that is not part of the task.
+3. **Do not add changes nobody asked for**, including fixes for other bugs outside the task's scope. Mention them in your reply instead.
+4. **Keep the diff small.** If the change needs more than expected, stop and explain why before continuing.
+5. **Do not change public interfaces** (function signatures, API responses, field names) without explicit permission.
+6. **A test that accompanies the change goes into an existing file in the matching `tests/` folder** (see `TESTS.md`, "Where the tests live"). Create a new file only if none fits, inside the area's folder, never directly in `tests/`.
+## Check before handing over
+ 
+- Is every changed line needed for the task?
+- Does the style match the surrounding code?
+- If I noticed something outside the scope, did I mention it rather than change it?
+ 

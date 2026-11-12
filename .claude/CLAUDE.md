@@ -25,7 +25,8 @@ infradeck: a self-hosted dashboard for monitoring homelab machines. One machine 
 - For non-trivial changes, outline the plan briefly before writing code.
 - Change only what the task requires; don't refactor or reformat unrelated code.
 - Before saying a task is done, run the tests and lint for the areas you touched and fix failures.
-- Code, comments, commit messages, issues and PR descriptions in English. Reply to me in Croatian.
+- Code, comments, commit messages, issues and PR descriptions in English.
+- Update docs after finishing a task (if needed)
 
 # Ask before
 - Committing, pushing, creating branches or opening PRs

@@ -1,36 +1,34 @@
 ---
 name: code-simplicity
-description: Koristi kad treba napisati, dodati ili izmijeniti kod, a postoji rizik od prekomjerne složenosti: nepotrebnih apstrakcija, slojeva, konfiguracijskih opcija, dodatne "proširivosti", pretjerane obrade grešaka ili nezatraženih testova, logiranja i dokumentacije. Ne koristi za sigurnosne revizije (za to je security-audit).
+description: Use when writing, adding or modifying code where there is a risk of excess complexity: unnecessary abstractions, layers, configuration options, extra "extensibility", overdone error handling, or tests, logging and documentation nobody asked for. Do not use for security reviews (use security-audit for that).
 ---
-
-# Pojednostavljenje koda
-
-Cilj je najmanji kod koji ispravno rješava zadatak i lako se čita i mijenja. Kraći kod koji radi bolji je od dužeg koji je "robustniji", ali nepotrebno složen.
-
-## Pravila
-
-1. **Apstrakcije tek kad ih zadatak traži.** Ne uvodi apstraktne klase, sučelja, tvorničke funkcije, strategije ni slojeve za nešto što se koristi na jednom mjestu. Ponavljanje dvaju-triju redaka obično je bolje od prerane apstrakcije.
-2. **Bez nezatraženih parametara i opcija.** Ne dodaji konfiguraciju, zastavice ni parametre za scenarije koje nitko nije spomenuo.
-3. **Obrada grešaka samo za stvarne ulaze.** Validiraj podatke koji dolaze izvana (korisnik, datoteka, mreža, API). Ne brani se od stanja koja se u kontekstu zadatka ne mogu dogoditi.
-4. **Bez dodataka koji nisu tražени.** Ne dodaji logiranje, testove, dokumentaciju ni README izmjene osim ako su tražene. Komentar samo tamo gdje nešto nije očito iz koda.
-   Kad se testovi pišu (jer su traženi ili ih projekt zahtijeva), spremaju se u odgovarajuću mapu unutar `tests/` prema području koje štite (`accounts`, `collectors`, `monitoring`, `history`, `assistant`, `security`; popis je u `TESTS.md`, odjeljak "Where the tests live"), nikad izravno u `tests/`. Ako nijedna mapa ne odgovara, napravi novu i dodaj je u taj popis. Nazivi datoteka moraju biti jedinstveni kroz sve mape.
-5. **Ne mijenjaj ono što nije dio zadatka.** Ako vidiš prostor za poboljšanje u susjednom kodu, spomeni ga u odgovoru, ali ga ne diraj.
-6. **Složenija struktura zahtijeva objašnjenje.** Ako misliš da je potreban veći dizajn, prvo kratko objasni zašto i pitaj, pa tek onda piši.
-
-## Provjera prije predaje
-
-Prije nego predaš kod, pročitaj ga i pitaj se:
-- Mogu li ukloniti sloj, klasu ili funkciju a da ponašanje ostane isto?
-- Postoji li parametar, grana ili provjera koja ne odgovara nijednom stvarnom slučaju?
-- Je li naziv dovoljno jasan da komentar nije potreban?
-
-Ako je odgovor "da" na bilo koje od prva dva pitanja, skrati.
-
-## Primjer
-
-Zadatak: "Napiši funkciju koja vraća zbroj cijena u košarici."
-
-Preopširno:
+ 
+# Keeping code simple
+ 
+The goal is the smallest code that solves the task correctly and is easy to read and change. Shorter code that works is better than longer code that is "more robust" but needlessly complex.
+ 
+## Rules
+ 
+1. **Abstractions only when the task calls for them.** Do not introduce abstract classes, interfaces, factory functions, strategies or layers for something used in one place. Repeating two or three lines is usually better than a premature abstraction.
+2. **No parameters or options nobody asked for.** Do not add configuration, flags or parameters for scenarios no one has mentioned.
+3. **Error handling only for real inputs.** Validate data that comes from outside (user, file, network, API). Do not guard against states that cannot occur in the context of the task.
+4. **No extras nobody asked for.** Do not add logging, tests, documentation or README changes unless they were requested. Comment only where something is not obvious from the code.
+   When tests are written (because they were requested or the project requires them), they go into the matching folder inside `tests/` according to the area they protect (`accounts`, `collectors`, `monitoring`, `history`, `assistant`, `security`; the list is in `TESTS.md`, section "Where the tests live"), never directly in `tests/`. If no folder fits, create a new one and add it to that list. File names must be unique across all folders.
+5. **Do not change what is not part of the task.** If you see room for improvement in neighbouring code, mention it in your reply, but do not touch it.
+6. **A more complex structure needs an explanation.** If you think a bigger design is needed, first briefly explain why and ask, and only then write it.
+## Check before handing over
+ 
+Before you hand over the code, read it and ask yourself:
+- Can I remove a layer, class or function and keep the behaviour the same?
+- Is there a parameter, branch or check that does not match any real case?
+- Is the name clear enough that no comment is needed?
+If the answer is "yes" to either of the first two questions, cut it down.
+ 
+## Example
+ 
+Task: "Write a function that returns the total of the prices in the cart."
+ 
+Too much:
 ```python
 class PriceCalculator:
     def __init__(self, strategy=None, currency="EUR", rounding=2):
@@ -38,13 +36,14 @@ class PriceCalculator:
     def calculate(self, items):
         ...
 ```
-
-Dovoljno:
+ 
+Enough:
 ```python
 def total(items):
     return sum(item.price for item in items)
 ```
-
-## Izuzeci
-
-Složenost je opravdana kad zadatak to izričito traži, kad kod ide u veći sustav s jasno definiranim sučeljima, ili kad postojeći kod u projektu već koristi određeni obrazac. U tom slučaju prati postojeći obrazac, a ne uvodi novi. Ako nisi siguran, pitaj korisnika.
+ 
+## Exceptions
+ 
+Complexity is justified when the task explicitly asks for it, when the code goes into a larger system with clearly defined interfaces, or when existing code in the project already uses a particular pattern. In that case follow the existing pattern rather than introducing a new one. If you are not sure, ask the user.
+ 

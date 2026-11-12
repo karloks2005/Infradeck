@@ -1,110 +1,115 @@
-# Kontrolna lista: collector, docker proxy, system helper (`src/collector/**`), incident agent (`src/agent/**`)
-
-Čitaj `collector.py`, `docker_proxy.py`, `system_helper.py` te za agenta `src/agent/` (`tools/`,
-`investigate.py`, `diagnosis.py`, `chat.py`, `masking.py`, `safety.py`, `providers/`, `worker.py`,
-`usage.py`, oba prompta) u cijelosti. Docker proxy i system
-helper drže privilegije: najveća pažnja ide njima.
-
-## 1. Docker proxy (`docker_proxy.py`): drži root-ekvivalent
-
-- [ ] **Bijela lista je doslovna usporedba cijelog request targeta.** Nema dekodiranja,
-      normalizacije, `startswith`, regexa bez sidra (`re.match` bez `$`/`fullmatch`), ni
-      `in`. Pokušaji zaobilaženja: `?all=1&x=y`, `//containers/json`, `/containers/json/`,
-      `%2e`, `;`, `#`, `\`, razmak, tab, `\r\n`, velika/mala slova metode, `HEAD`/`OPTIONS`,
-      `GET` s tijelom, `Transfer-Encoding`/`Content-Length` proturječja, HTTP/1.0,
-      više zahtjeva na jednoj vezi (pipelining/smuggling), ID kontejnera koji nije hex
-      (`../`, `x/exec`).
-- [ ] ID u `/containers/<id>/json` i `/stats` strogo validiran (hex, duljina) *prije*
-      prosljeđivanja u Docker. Proxy ne gradi zahtjev prema Dockeru spajanjem neprovjerenog
-      stringa.
-- [ ] Proxy **ne prosljeđuje** zaglavlja ni metodu klijenta; zahtjev prema Dockeru gradi sam.
-- [ ] **Filtriranje odgovora:** vraća samo fiksnu listu polja; `Env`, `Labels`, `Mounts`,
-      `Config`, `HostConfig`, `Error` ne izlaze. Provjeri i za `/containers/json` i za
-      stats (stats ne sadrži tajne, ali provjeri). Nova polja = namjerna promjena + test.
-- [ ] Veličina odgovora/zahtjeva ograničena; timeouti; jedna sporo-čitajuća veza ne blokira
-      sve (DoS prema kolektoru); greške Dockera ne vraćaju sirovi tekst.
-- [ ] Unix socket: mode 0660, direktorij/volumen dijeljen **samo** s kolektorom; socket se
-      ne stvara u svijetu-zapisivom direktoriju; nema utrke pri `bind`/`chmod` (kratak
-      prozor s širim pravima; zadani `umask`).
-- [ ] Nema TCP listenera, nema mreže (`network_mode: none`, vidi infra listu).
-- [ ] Log 403 ne dopušta log injection (sanitiziran request target).
-
-## 2. System helper (`system_helper.py`): privilegiran, izlaz nepouzdan
-
-- [ ] Samo čita (dmesg *read-all*, wtmp), nikad ne piše/briše kernel log.
-- [ ] Parsiranje wtmp-a je binarno: provjeri veličinu zapisa, granice, nepotpun zapis,
-      ogroman broj zapisa; čita samo boot/shutdown zapise, ne korisnička imena ni adrese.
-- [ ] Linije kernel loga: fiksni obrasci, reducirano na printable, skraćeno, ograničen broj
-      događaja; nema `eval`/`shell`/format stringa s tim sadržajem; regexi bez katastrofalnog
-      backtrackinga na 100 kB retku.
-- [ ] Izlazna datoteka: atomarno pisanje (temp + rename), prava, samo u svom volumenu.
-- [ ] Ništa se ne izvršava iz sadržaja; nema `subprocess` s ulazom pod kontrolom napadača
-      (i ako postoji poziv, argumenti su lista, bez `shell=True`).
-
-## 3. Collector (`collector.py`, 974 retka): radi na hostu, čita host FS
-
-- [ ] **Čitanje datoteka s hosta:** fiksni popis putanja; `O_NOFOLLOW`; ograničena veličina
-      čitanja (1 MB firewall datoteke, helperov izlaz); provjera da je helper izlaz svjež i
-      iz tekućeg boota; nema putanja sastavljenih od podataka s hosta ili dashboarda
-      (`os.path.join` s apsolutnom putanjom tiho zamjenjuje bazu!). TOCTOU između `stat` i
-      `open`.
-- [ ] `/proc/1/net` i ostali parseri: nepotpuno čitanje → "unknown", nikad djelomičan
-      rezultat koji bi ports "zatvorio"; ogromne datoteke ne troše memoriju.
-- [ ] **Ono što stiže s dashboarda** (odgovor na register/poll) tretira se nepouzdano: nema
-      izvršavanja, nema putanja, nema ciljeva za sondiranje iz odgovora. Mete provjere
-      interneta samo iz okoline kolektora (`INFRADECK_CONNECTIVITY_TARGETS`, ≤5, hostname ili
-      IPv4), s tvrdim rokom.
-- [ ] Sondiranje: ne šalje podatke, samo TCP connect + DNS; ne može se usmjeriti na
-      proizvoljnu metu; ograničenje trajanja kako check-in ne bi visio.
-- [ ] **Pohrana vjerodajnica kolektora** (token servera): datoteka s modom 0600, ne u
-      slici, ne u logu, ne u argumentima procesa; kolektor ne ispisuje token pri pogrešci.
-- [ ] Transport: provjera TLS-a ako je HTTPS (ne `verify=False`); kad je običan HTTP unutar
-      VPN-a, to je dokumentirano. Nema preusmjeravanja koja bi odnijela `Authorization`
-      zaglavlje na drugi host. Timeouti na svim mrežnim pozivima.
-- [ ] Greška jednog uzorka ne ruši cijeli kolektor na način koji ga ušutkava bez traga
-      (napadač koji izaziva iznimku "gasi" nadzor?).
-- [ ] `subprocess`, `os.system`, `eval`, `exec`, `pickle`, `yaml.load`: svako pojavljivanje
-      pogledaj; argumenti kao lista; nema podataka s hosta u naredbi.
-- [ ] Ograničenja količine prijavljenih podataka (kontejneri, portovi, događaji) na strani
-      kolektora, ne samo backenda.
-
+# Checklist: collector, docker proxy, system helper (`src/collector/**`), incident agent (`src/agent/**`)
+ 
+Read `collector.py`, `docker_proxy.py`, `system_helper.py` and, for the agent, `src/agent/`
+(`tools/`, `investigate.py`, `diagnosis.py`, `chat.py`, `masking.py`, `safety.py`,
+`providers/`, `worker.py`, `usage.py`, both prompts) in full. The docker proxy and the system
+helper hold privileges: they get the most attention.
+ 
+## 1. Docker proxy (`docker_proxy.py`): holds root-equivalent access
+ 
+- [ ] **The allowlist is a literal comparison of the whole request target.** No decoding,
+      normalization, `startswith`, unanchored regex (`re.match` without `$`/`fullmatch`), or
+      `in`. Bypass attempts: `?all=1&x=y`, `//containers/json`, `/containers/json/`, `%2e`,
+      `;`, `#`, `\`, space, tab, `\r\n`, upper/lower case method, `HEAD`/`OPTIONS`, `GET`
+      with a body, conflicting `Transfer-Encoding`/`Content-Length`, HTTP/1.0, multiple
+      requests on one connection (pipelining/smuggling), a non-hex container ID (`../`,
+      `x/exec`).
+- [ ] The ID in `/containers/<id>/json` and `/stats` is strictly validated (hex, length)
+      *before* being forwarded to Docker. The proxy does not build the request to Docker by
+      concatenating an unchecked string.
+- [ ] The proxy **does not forward** the client's headers or method; it builds the request to
+      Docker itself.
+- [ ] **Response filtering:** returns only a fixed list of fields; `Env`, `Labels`, `Mounts`,
+      `Config`, `HostConfig`, `Error` never leave. Check both `/containers/json` and stats
+      (stats contain no secrets, but check). New fields = a deliberate change + a test.
+- [ ] Response/request size is limited; timeouts; one slow-reading connection does not block
+      everything (DoS against the collector); Docker errors do not return raw text.
+- [ ] Unix socket: mode 0660, directory/volume shared **only** with the collector; the socket
+      is not created in a world-writable directory; no race on `bind`/`chmod` (a short window
+      with wider permissions; default `umask`).
+- [ ] No TCP listener, no network (`network_mode: none`, see the infra checklist).
+- [ ] The 403 log does not allow log injection (sanitized request target).
+## 2. System helper (`system_helper.py`): privileged, output untrusted
+ 
+- [ ] Read-only (dmesg *read-all*, wtmp); never writes/clears the kernel log.
+- [ ] wtmp parsing is binary: check record size, bounds, a truncated record, a huge number of
+      records; it reads only boot/shutdown records, not usernames or addresses.
+- [ ] Kernel log lines: fixed patterns, reduced to printable characters, truncated, a capped
+      number of events; no `eval`/shell/format string with that content; regexes without
+      catastrophic backtracking on a 100 kB line.
+- [ ] Output file: atomic write (temp + rename), permissions, only in its own volume.
+- [ ] Nothing is executed from the content; no `subprocess` with attacker-controlled input
+      (and if there is a call, the arguments are a list, no `shell=True`).
+## 3. Collector (`collector.py`, 974 lines): runs on the host, reads the host FS
+ 
+- [ ] **Reading files from the host:** a fixed list of paths; `O_NOFOLLOW`; capped read size
+      (1 MB firewall file, the helper's output); a check that the helper output is fresh and
+      from the current boot; no paths built from host or dashboard data (`os.path.join` with
+      an absolute path silently replaces the base!). TOCTOU between `stat` and `open`.
+- [ ] `/proc/1/net` and other parsers: an incomplete read → "unknown", never a partial result
+      that would mark ports "closed"; huge files do not exhaust memory.
+- [ ] **What comes from the dashboard** (the register/poll response) is treated as untrusted:
+      no execution, no paths, no probe targets from the response. Internet connectivity
+      check targets come only from the collector's environment
+      (`INFRADECK_CONNECTIVITY_TARGETS`, ≤5, hostname or IPv4), with a hard deadline.
+- [ ] Probing: sends no data, only TCP connect + DNS; cannot be pointed at an arbitrary
+      target; time-limited so the check-in does not hang.
+- [ ] **Storage of the collector's credentials** (server token): a file with mode 0600, not in
+      the image, not in logs, not in process arguments; the collector does not print the
+      token on error.
+- [ ] Transport: TLS verification when using HTTPS (no `verify=False`); when it is plain HTTP
+      inside a VPN, that is documented. No redirects that would carry the `Authorization`
+      header to another host. Timeouts on every network call.
+- [ ] A failure in one sample does not crash the whole collector in a way that silences it
+      without a trace (can an attacker who triggers an exception "turn off" monitoring?).
+- [ ] `subprocess`, `os.system`, `eval`, `exec`, `pickle`, `yaml.load`: inspect every
+      occurrence; arguments as a list; no host data in the command.
+- [ ] Limits on the amount of reported data (containers, ports, events) on the collector
+      side, not only the backend.
 ## 4. Incident agent (`src/agent/`)
-
-Dokumentirano (`docs/assistant.md`, `docs/agent-investigation.md`, SECURITY.md): agent nema
-shell ni pristup hostu. Ima zatvoren popis read-only alata (`tools/__init__.py`: `server_info`,
-`host_metrics`, `list_containers`, `container_history`, `disk_usage`, `events`,
+ 
+Documented (`docs/assistant.md`, `docs/agent-investigation.md`, SECURITY.md): the agent has no
+shell and no host access. It has a closed list of read-only tools (`tools/__init__.py`:
+`server_info`, `host_metrics`, `list_containers`, `container_history`, `disk_usage`, `events`,
 `compare_to_baseline`, `find_incidents`, `fleet_snapshot`, `check_results`, `network_state`)
-koji čitaju samo bazu Infradecka. Petlja (`investigate.py`) ima budžet poziva, rok i mjesečni
-limit troška. Preporučene naredbe su samo tekst koji `safety.py` provjerava; ništa se ne izvršava.
-
-- [ ] **Alati su doista fiksni:** `run` odbija nepoznato ime, argumenti se provjeravaju prema
-      shemi prije čitanja; nema argumenta koji završava u naredbi, putanji, URL-u ili SQL-u
-      izvan ORM-a. Rezultat je ograničen (`bounds.py`, `MAX_RESULT_CHARS`) i ne sadrži ništa
-      što vide samo admini (IP adrese, korisnici, audit log), jer isti odgovor dobiva svatko.
-- [ ] **Maskiranje:** sve što ide pružatelju (rezultati alata, kontekst incidenta, poruke
-      korisnika u chatu, greške u `usage`/`worker`) prolazi `masking.py`. Traži put koji ga
-      zaobilazi (novi alat, novo polje, poruka greške pružatelja koja se sprema ili prikazuje).
-- [ ] **Prompt injection:** podaci koji ulaze u kontekst modela (imena kontejnera, događaji,
-      greške provjera, tekst korisnika) mogu sadržavati upute. Što najgore model može ako ih
-      posluša? (Potrošiti budžet, citirati krive činjenice, preporučiti štetnu naredbu.)
-      Provjeri da `check_answer` prihvaća samo ID-eve činjenica iz stvarnih rezultata, da
-      `safety.py` hvata destruktivne i skrivene znakove (bidi, zero-width) i da se naredba
-      koja briše podatke nikad ne preporučuje.
-- [ ] **Pružatelj i ključ:** ključ šifriran (`secrets_box`), nikad u odgovoru API-ja, logu ni
-      audit zapisu; adrese pružatelja fiksne u kodu (korisnik ne može postaviti `base_url`);
-      promjena pružatelja, ključa i uključivanje chata traže reauth (lozinka + 2FA).
-- [ ] **Posao u pozadini:** worker (`jobs.py`, `worker.py`) ima ukupni rok i ne može ostaviti
-      posao zauvijek u stanju "running"; red u Redisu ne prima nepouzdane podatke kao kod.
-- [ ] **Izlaz modela se ne tretira kao pouzdan:** prikazuje se kao tekst (frontend ne radi
-      `dangerouslySetInnerHTML`/neprovjeren markdown s HTML-om), ne ulazi u SQL/naredbe/URL-ove.
-- [ ] **Konverzacije su vezane uz korisnika** (IDOR: čitanje/brisanje tuđih konverzacija
-      po ID-u); limit duljine poruke i broja poruka; limit koraka petlje alata i vremena
-      (DoS i trošak API-ja); rate limit po korisniku.
-- [ ] API ključ prema LLM pružatelju: iz okoline, ne u logovima, ne u odgovorima, ne u
-      konverzacijama koje se pohranjuju ili šalju natrag.
-- [ ] Sistemski prompt ne sadrži tajne (pretpostavi da će ga model prije ili poslije
-      ispisati).
-- [ ] Pozivi prema Docker API-ju idu samo kroz proxy (`DOCKER_SOCKET_PATH`); backend ne montira
-      `docker.sock`. Provjeri compose i kod.
-- [ ] Agent nema izlaznih veza osim prema pružatelju; obavijesti šalje backend
-      (`notify.py`, vidi `checklist-backend.md` §6), a model ne bira odredište ni sadržaj.
+that read only the Infradeck database. The loop (`investigate.py`) has a call budget, a
+deadline and a monthly cost limit. Recommended commands are only text that `safety.py`
+checks; nothing is executed.
+ 
+- [ ] **The tools really are fixed:** `run` rejects an unknown name, arguments are validated
+      against the schema before reading; no argument ends up in a command, path, URL or SQL
+      outside the ORM. The result is capped (`bounds.py`, `MAX_RESULT_CHARS`) and contains
+      nothing that only admins see (IP addresses, users, audit log), because everyone gets
+      the same answer.
+- [ ] **Masking:** everything sent to the provider (tool results, incident context, user chat
+      messages, errors in `usage`/`worker`) goes through `masking.py`. Look for a path that
+      bypasses it (a new tool, a new field, a provider error message that is stored or
+      displayed).
+- [ ] **Prompt injection:** data entering the model's context (container names, events,
+      check errors, user text) can contain instructions. What is the worst the model can do
+      if it follows them? (Burn the budget, cite false facts, recommend a harmful command.)
+      Check that `check_answer` accepts only fact IDs from real results, that `safety.py`
+      catches destructive and hidden characters (bidi, zero-width), and that a command that
+      deletes data is never recommended.
+- [ ] **Provider and key:** the key is encrypted (`secrets_box`), never in an API response,
+      log or audit record; provider addresses are fixed in code (the user cannot set
+      `base_url`); changing the provider or key, and enabling chat, require reauth
+      (password + 2FA).
+- [ ] **Background jobs:** the worker (`jobs.py`, `worker.py`) has an overall deadline and
+      cannot leave a job in the "running" state forever; the Redis queue does not accept
+      untrusted data as code.
+- [ ] **Model output is not treated as trusted:** it is displayed as text (the frontend does
+      not use `dangerouslySetInnerHTML`/unchecked markdown with HTML), and it never goes into
+      SQL, commands or URLs.
+- [ ] **Conversations are bound to the user** (IDOR: reading/deleting another user's
+      conversations by ID); limits on message length and message count; limits on tool-loop
+      steps and time (DoS and API cost); per-user rate limit.
+- [ ] The API key for the LLM provider: from the environment, not in logs, not in responses,
+      not in conversations that are stored or sent back.
+- [ ] The system prompt contains no secrets (assume the model will print it sooner or later).
+- [ ] Calls to the Docker API go only through the proxy (`DOCKER_SOCKET_PATH`); the backend
+      does not mount `docker.sock`. Check compose and the code.
+- [ ] The agent has no outbound connections except to the provider; notifications are sent
+      by the backend (`notify.py`, see `checklist-backend.md` §6), and the model chooses
+      neither the destination nor the content.
+ 

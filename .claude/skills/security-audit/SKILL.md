@@ -1,167 +1,171 @@
 ---
 name: security-audit
-description: Detaljan sigurnosni pregled (security review / audit) cijelog koda ili dijela koda, uz dojavu pronađenih propusta s ozbiljnošću, lokacijom, scenarijem napada i popravkom. Use when the user asks for a security review, security audit, vulnerability hunt, pentest-style code review, "provjeri sigurnost", "sigurnosni pregled", "ima li propusta", or wants a component (backend, collector, docker proxy, nginx, compose, CI, frontend, assistant) reviewed for security. For a quick check of only the pending diff, the built-in security-review skill is enough.
+description: Thorough security review (security audit) of the whole codebase or part of it, reporting every vulnerability found with severity, location, attack scenario and fix. Use when the user asks for a security review, security audit, vulnerability hunt, pentest-style code review, "check the security" / "provjeri sigurnost", "security review" / "sigurnosni pregled", "are there any vulnerabilities" / "ima li propusta", or wants a component (backend, collector, docker proxy, nginx, compose, CI, frontend, assistant) reviewed for security. For a quick check of only the pending diff, the built-in security-review skill is enough.
 argument-hint: "[full | backend | collector | infra | frontend | assistant | <path> | diff]"
 ---
-
+ 
 # Security audit
-
-Cilj: pronaći **stvarne, iskoristive** sigurnosne propuste u ovom repozitoriju i dojaviti ih
-tako da ih vlasnik može odmah popraviti. Projekt je open-source, self-hosted alat koji ima
-pristup Docker socketu i hostu, pa vlasnik želi **strogu** procjenu: ne ublažavaj rizik
-radi udobnosti, ne zaokružuj "vjerojatno OK" na "OK".
-
-Ovaj skill **ne mijenja kod** i ne commitira. Samo pregledava i izvještava. Popravke radiš
-tek kad korisnik to izričito zatraži.
-
-## Argumenti
-
-`$ARGUMENTS` određuje opseg. Bez argumenta = `full`.
-
-| Argument | Opseg |
+ 
+Goal: find **real, exploitable** security vulnerabilities in this repository and report them
+so the owner can fix them right away. The project is an open-source, self-hosted tool with
+access to the Docker socket and the host, so the owner wants a **strict** assessment: do not
+downplay risk for convenience, and do not round "probably OK" up to "OK".
+ 
+This skill **does not change code** and does not commit. It only reviews and reports. Make
+fixes only when the user explicitly asks for them.
+ 
+## Arguments
+ 
+`$ARGUMENTS` sets the scope. No argument = `full`.
+ 
+| Argument | Scope |
 |---|---|
-| `full` | sve dolje, redom |
+| `full` | everything below, in order |
 | `backend` | `src/backend/**` |
 | `collector` | `src/collector/**` (collector, docker_proxy, system_helper) |
 | `infra` | `docker/**`, `*compose*.yml`, `example.env`, `.github/**`, `.gitignore`, `.dockerignore` |
 | `frontend` | `src/frontend/**` |
-| `assistant` | Incident agent: `src/agent/**` (providers, tools, investigate, diagnosis, chat, masking, safety, jobs, worker, usage), `SYSTEM_PROMPT.md`, `DIAGNOSIS_PROMPT.md`, konverzacije u backendu |
-| `<path>` | taj put (datoteka ili direktorij) plus ono što ga poziva |
-| `diff` | samo neprihvaćene promjene (`git diff` + `git diff --staged`) pročitane u kontekstu cijelih datoteka |
-
-Ako je argument dvosmislen, odaberi najbliži opseg i na početku izvještaja reci koji si odabrao.
-
-## Pravila rada (čitaj prije početka)
-
-1. **Čitaj datoteke cijele.** `grep` služi za pronalaženje kandidata, nikad za oslobađanje
-   koda od sumnje. Funkcija koja izgleda sigurno često ima rupu u pozivatelju ili u redoslijedu
-   provjera. `src/backend/main.py` ima ~1800 redaka; pročitaj ga u cijelosti, u dijelovima.
-2. **Ne ispisuj tajne.** `.env` postoji lokalno. Ako ga treba otvoriti, ispiši samo *imena*
-   varijabli i je li vrijednost prazna/zadana, nikad vrijednosti. Isto vrijedi za tokene,
-   ključeve i lozinke pronađene u kodu ili povijesti: u izvještaju navedi lokaciju i vrstu,
-   ne sadržaj (najviše prva 4 znaka).
-3. **Samo lokalno i neškodljivo.** Ne šalji zahtjeve prema stvarnim sustavima, ne pokreći
-   Docker kontejnere ni skeniranja. Za potvrdu propusta smiješ pokrenuti postojeće testove
-   (`pytest`) i napisati kratku skriptu u scratchpad direktoriju koja poziva funkcije
-   izravno s neprijateljskim ulazom. Ništa što pokreneš ne smije dirati stvarnu bazu ili
-   mrežu.
-4. **Provjeri tvrdnje iz dokumentacije.** `SECURITY.md` i `docs/` tvrde mnogo ("rate limited",
-   "single-use", "capped", "never follows symlinks"). Za svaku tvrdnju u svom opsegu nađi kod
-   koji to provodi i provjeri da vrijedi na *svim* putevima. Tvrdnja bez pokrića u kodu je
-   nalaz (dokumentirana kontrola ne postoji), a kontrola koja postoji samo na jednom putu
-   također.
-5. **Razmišljaj kao napadač, ne kao lintar.** Za svaki ulaz pitaj: tko ga može poslati, što je
-   najgore što može sadržavati, što sustav radi s tim i što je najgore što se zbog toga može
-   dogoditi. Profile napadača vidi u [references/threat-model.md](references/threat-model.md).
-6. **Prvo provjeri je li nešto već riješeno.** Prije nego prijaviš nalaz, nađi postojeću
-   kontrolu (middleware, dependency, nginx pravilo, test) i provjeri zaobilazi li se. Nalaz
-   koji ignorira postojeću zaštitu je šum i troši korisnikovo povjerenje.
-7. **Svaki nalaz verificiraj** (vidi niže) i razvrstaj kao `POTVRĐENO` ili `TREBA PROVJERU`.
-   Ne prijavljuj ono što nisi mogao provjeriti kao potvrđeno.
-
-## Postupak
-
-### 1. Priprema (uvijek)
-
-- Pročitaj [references/threat-model.md](references/threat-model.md) i `SECURITY.md`.
-- `git status` i `git log --oneline -15`: što se nedavno mijenjalo, nove površine napada
-  najčešće su u svježem kodu.
-- Za `backend`/`full`: izlistaj sve rute (`grep -nE "^@(app|router)\.(get|post|put|patch|delete)" src/backend/main.py`)
-  i složi **inventar ruta**: metoda, put, tko smije (anonimno / bilo koji korisnik / admin /
-  kolektor s tokenom), je li iza CSRF/Origin provjere, ima li rate limit, što čita/piše.
-  Ruta bez jasnog odgovora u bilo kojem stupcu je kandidat za nalaz.
-- Pročitaj popis ovisnosti (`requirements*.txt`, `src/frontend/package.json`) radi kasnije
-  provjere.
-
-### 2. Pregled po područjima
-
-Za svako područje u opsegu pročitaj odgovarajuću kontrolnu listu i prođi je **stavku po stavku**
-nad stvarnim kodom:
-
-| Područje | Kontrolna lista |
+| `assistant` | Incident agent: `src/agent/**` (providers, tools, investigate, diagnosis, chat, masking, safety, jobs, worker, usage), `SYSTEM_PROMPT.md`, `DIAGNOSIS_PROMPT.md`, conversations in the backend |
+| `<path>` | that path (file or directory) plus whatever calls it |
+| `diff` | only uncommitted changes (`git diff` + `git diff --staged`), read in the context of the full files |
+ 
+If the argument is ambiguous, pick the closest scope and state which one you chose at the
+top of the report.
+ 
+## Working rules (read before starting)
+ 
+1. **Read files in full.** `grep` is for finding candidates, never for clearing code of
+   suspicion. A function that looks safe often has a hole in its caller or in the order of
+   checks. `src/backend/main.py` is ~1800 lines; read all of it, in chunks.
+2. **Never print secrets.** `.env` exists locally. If you need to open it, print only the
+   variable *names* and whether each value is empty/default, never the values. The same goes
+   for tokens, keys and passwords found in code or history: in the report give the location
+   and type, not the content (at most the first 4 characters).
+3. **Local and harmless only.** Do not send requests to real systems, and do not start Docker
+   containers or run scans. To confirm a vulnerability you may run the existing tests
+   (`pytest`) and write a short script in the scratchpad directory that calls functions
+   directly with hostile input. Nothing you run may touch a real database or the network.
+4. **Verify claims made in the documentation.** `SECURITY.md` and `docs/` claim a lot ("rate
+   limited", "single-use", "capped", "never follows symlinks"). For every claim in your scope,
+   find the code that enforces it and check that it holds on *all* paths. A claim with no
+   backing in code is a finding (the documented control does not exist), and so is a control
+   that exists on only one path.
+5. **Think like an attacker, not a linter.** For every input ask: who can send it, what is the
+   worst it can contain, what does the system do with it, and what is the worst that can
+   happen as a result. See attacker profiles in
+   [references/threat-model.md](references/threat-model.md).
+6. **First check whether something is already handled.** Before reporting a finding, find the
+   existing control (middleware, dependency, nginx rule, test) and check whether it can be
+   bypassed. A finding that ignores an existing protection is noise and erodes the user's
+   trust.
+7. **Verify every finding** (see below) and classify it as `CONFIRMED` or `NEEDS VERIFICATION`.
+   Never report something you could not verify as confirmed.
+## Procedure
+ 
+### 1. Preparation (always)
+ 
+- Read [references/threat-model.md](references/threat-model.md) and `SECURITY.md`.
+- `git status` and `git log --oneline -15`: what changed recently; new attack surface is most
+  often in fresh code.
+- For `backend`/`full`: list all routes (`grep -nE "^@(app|router)\.(get|post|put|patch|delete)" src/backend/main.py`)
+  and build a **route inventory**: method, path, who may call it (anonymous / any user /
+  admin / collector with token), whether it is behind a CSRF/Origin check, whether it has a
+  rate limit, what it reads/writes. A route without a clear answer in any column is a
+  candidate finding.
+- Read the dependency lists (`requirements*.txt`, `src/frontend/package.json`) for later
+  review.
+### 2. Review by area
+ 
+For each area in scope, read the matching checklist and go through it **item by item**
+against the actual code:
+ 
+| Area | Checklist |
 |---|---|
-| Backend (API, auth, sesije, 2FA, baza, pravila, alarmi) | [references/checklist-backend.md](references/checklist-backend.md) |
-| Collector, docker proxy, system helper, LLM asistent | [references/checklist-collector-agent.md](references/checklist-collector-agent.md) |
-| Docker, compose, nginx, Postgres, CI, repozitorij, ovisnosti | [references/checklist-infra.md](references/checklist-infra.md) |
+| Backend (API, auth, sessions, 2FA, database, rules, alerts) | [references/checklist-backend.md](references/checklist-backend.md) |
+| Collector, docker proxy, system helper, LLM assistant | [references/checklist-collector-agent.md](references/checklist-collector-agent.md) |
+| Docker, compose, nginx, Postgres, CI, repository, dependencies | [references/checklist-infra.md](references/checklist-infra.md) |
 | Frontend | [references/checklist-frontend.md](references/checklist-frontend.md) |
-
-Kontrolne liste su podsjetnici, **ne granica**. Ako vidiš nešto sumnjivo što nije na listi,
-istraži i to.
-
-**Paralelizacija za `full`:** opseg je velik. Ako ti je dostupan alat `Agent`, pokreni četiri
-agenta paralelno (po jedno područje iz tablice), svakome daj samostalan prompt iz predloška
-niže, a zatim sam spoji, deduplikaj i **ponovno verificiraj** sve što su vratili prije
-izvještaja. Nalaz koji agent prijavi nije potvrđen dok ga ti nisi pročitao u kodu. Ako ne
-možeš koristiti agente, prođi područja redom sam.
-
-Predložak za agenta:
-
-> Radiš sigurnosni pregled (samo čitanje, ništa ne mijenjaj, ne commitaj, ne ispisuj vrijednosti
-> tajni) područja **<područje>** u repozitoriju <putanja>. Prvo pročitaj
-> `.claude/skills/security-audit/references/threat-model.md` i
-> `.claude/skills/security-audit/references/<checklist>.md`, zatim pročitaj **cijele** datoteke
-> tog područja i prođi kontrolnu listu stavku po stavku. Za svaki nalaz vrati: naslov,
-> datoteka:redak, što je pogrešno, konkretan scenarij napada (tko, što pošalje, što dobije),
-> koju postojeću zaštitu si provjerio i zašto ne pomaže, predloženi popravak i svoju sigurnost
-> (visoka/srednja/niska). Navedi i koje datoteke si pročitao, a koje nisi. Ne prijavljuj
-> teorijske probleme bez puta do iskorištenja.
-
-### 3. Verifikacija svakog nalaza
-
-Za svaki kandidat napiši (barem u glavi, a u izvještaju sažeto):
-
-1. **Izvor:** tko kontrolira ulaz i na kojem je povjerenju (anonimni, korisnik, admin,
-   kolektor, VPN peer, podatak s hosta)?
-2. **Put:** kojim funkcijama ulaz stiže do opasnog mjesta? Navedi datoteke i retke.
-3. **Zaštite na putu:** koje provjere, validacije, limiti, nginx pravila postoje? Zašto ne
-   pomažu (ili zašto pomažu, pa nalaza nema)?
-4. **Učinak:** što napadač dobiva (čitanje podataka, promjena stanja, preuzimanje računa,
-   izvršavanje koda, DoS, eskalacija na host)?
-5. **Dokaz:** gdje je moguće, potvrdi testom ili kratkom lokalnom skriptom. Ako ne možeš,
-   nalaz je `TREBA PROVJERU` s opisom što točno treba provjeriti.
-
-Odbaci kandidata ako: nema puta do iskorištenja bez prethodnog admin pristupa koji već daje
-isti učinak, ako je zaštićen nečim što si provjerio, ili ako je čista stilska preporuka.
-Takve stvari, ako vrijede, idu u dio "Očvršćivanje" kratkom stavkom, ne među nalaze.
-
-### 4. Ozbiljnost
-
-Ocjenjuj prema učinku **u ovom sustavu** (pristup hostu i Docker API-ju je najskuplja stvar
-koju treba braniti), uz prednost strožoj ocjeni kad si u dvojbi između dvije razine:
-
-| Razina | Značenje | Primjeri |
+ 
+The checklists are reminders, **not a boundary**. If you see something suspicious that is
+not on the list, investigate it too.
+ 
+**Parallelizing `full`:** the scope is large. If the `Agent` tool is available, launch four
+agents in parallel (one per area in the table), give each a self-contained prompt from the
+template below, then merge, deduplicate and **re-verify** everything they return yourself
+before reporting. A finding reported by an agent is not confirmed until you have read it in
+the code yourself. If you cannot use agents, go through the areas one by one yourself.
+ 
+Agent template:
+ 
+> You are doing a security review (read-only: change nothing, do not commit, do not print
+> secret values) of the **<area>** area in the repository at <path>. First read
+> `.claude/skills/security-audit/references/threat-model.md` and
+> `.claude/skills/security-audit/references/<checklist>.md`, then read the **full** files of
+> that area and go through the checklist item by item. For each finding return: title,
+> file:line, what is wrong, a concrete attack scenario (who, what they send, what they get),
+> which existing protection you checked and why it does not help, the proposed fix, and your
+> confidence (high/medium/low). Also list which files you read and which you did not. Do not
+> report theoretical issues without a path to exploitation.
+ 
+### 3. Verifying each finding
+ 
+For each candidate, work out (at least in your head, and briefly in the report):
+ 
+1. **Source:** who controls the input and at what trust level (anonymous, user, admin,
+   collector, VPN peer, data from the host)?
+2. **Path:** through which functions does the input reach the dangerous point? Give files and
+   lines.
+3. **Protections on the path:** which checks, validations, limits and nginx rules exist? Why
+   do they not help (or why do they help, in which case there is no finding)?
+4. **Impact:** what does the attacker gain (reading data, changing state, account takeover,
+   code execution, DoS, escalation to the host)?
+5. **Proof:** where possible, confirm with a test or a short local script. If you cannot, the
+   finding is `NEEDS VERIFICATION`, with a description of exactly what needs to be checked.
+Discard a candidate if: there is no path to exploitation without prior admin access that
+already grants the same impact, it is protected by something you have checked, or it is a
+purely stylistic recommendation. Such items, if valid, go into the "Hardening" section as a
+short bullet, not among the findings.
+ 
+### 4. Severity
+ 
+Rate by impact **in this system** (access to the host and the Docker API is the most
+expensive thing to defend), and prefer the stricter rating when torn between two levels:
+ 
+| Level | Meaning | Examples |
 |---|---|---|
-| **KRITIČNO** | Daljinsko, bez/gotovo bez autentikacije, vodi do preuzimanja dashboarda, izvršavanja koda ili izlaska na host | zaobilaženje autentikacije, preuzimanje prve admin registracije, RCE, pristup Docker socketu iz javne strane |
-| **VISOKO** | Autentificirani ili uvjetovani napad s velikim učinkom | eskalacija korisnik→admin, zaobilaženje 2FA, IDOR nad tuđim podacima, SQL injection, stored XSS u admin kontekstu, kompromitirani kolektor utječe na dashboard ili host |
-| **SREDNJE** | Stvarno iskoristivo, ograničen učinak ili traži poseban uvjet | CSRF na manje osjetljivoj akciji, rate limit koji se zaobilazi, curenje informacija, DoS jednim zahtjevom |
-| **NISKO** | Slabost bez jasnog puta do štete sam za sebe | nedostajući header, enumeracija korisnika, preslab zadani parametar |
-| **INFO** | Zapažanje ili očvršćivanje | kontrola koja radi, ali je krhka |
-
-### 5. Izvještaj
-
-Format i redoslijed: [references/report-format.md](references/report-format.md). Ukratko:
-sažetak (broj nalaza po razini, najvažniji jedan redak), **jedna tablica svih nalaza sortirana
-prema riziku od najvišeg prema najnižem** (KRITIČNO, VISOKO, SREDNJE, NISKO, INFO), detalji
-nalaza istim redom, tvrdnje iz dokumentacije koje kod ne podržava, očvršćivanje i pokrivenost
-(što je pregledano, što nije i zašto).
-
-**Tablica je obavezna.** Nalaze nikad ne prikazuj samo kao tekst niti grupirane po područjima.
-Rezultate paralelnih agenata spoji u jednu tablicu i sortiraj ih zajedno.
-
-Datoteke referenciraj kao markdown linkove (`[main.py:412](src/backend/main.py#L412)`), da su
-klikabilne u editoru.
-
-Izvještaj ispiši u razgovoru. **Ne spremaj ga u datoteku** (npr. `docs/`) dok to korisnik ne
-zatraži, jer može sadržavati neobjavljene ranjivosti.
-
-Na kraju ponudi sljedeći korak jednom rečenicom (npr. popraviti nalaze od najtežeg prema
-najlakšem, uz test za svaki) i **čekaj odgovor**.
-
-## Što ovaj skill nije
-
-- Nije dinamičko testiranje: ne skenira živi sustav, ne fuzzira, ne pokreće exploite.
-- Nije zamjena za `pip-audit` / `npm audit` ili skener slika; ako su dostupni i korisnik
-  odobri mrežu, pokreni ih, a ako nisu, to **eksplicitno navedi** u pokrivenosti kao
-  nepregledano (ovisnosti se ne ocjenjuju "iz glave" jer verzije nisu pouzdan izvor).
-- Ne potvrđuje da je sustav siguran. Izvještaj "nema nalaza" smije reći samo "u pregledanom
-  opsegu nisam našao iskoristive propuste", uz popis onoga što je pregledano.
+| **CRITICAL** | Remote, with no or almost no authentication, leads to dashboard takeover, code execution or escape to the host | authentication bypass, hijacking the first admin registration, RCE, access to the Docker socket from the public side |
+| **HIGH** | Authenticated or conditional attack with large impact | user→admin escalation, 2FA bypass, IDOR on other users' data, SQL injection, stored XSS in admin context, a compromised collector affecting the dashboard or host |
+| **MEDIUM** | Genuinely exploitable, limited impact or requires a special condition | CSRF on a less sensitive action, bypassable rate limit, information leak, single-request DoS |
+| **LOW** | Weakness with no clear path to harm on its own | missing header, user enumeration, weak default parameter |
+| **INFO** | Observation or hardening | a control that works but is fragile |
+ 
+### 5. Report
+ 
+Format and order: [references/report-format.md](references/report-format.md). In short:
+summary (number of findings per level, the most important one in a single line), **a single
+table of all findings sorted by risk from highest to lowest** (CRITICAL, HIGH, MEDIUM, LOW,
+INFO), finding details in the same order, documentation claims the code does not support,
+hardening, and coverage (what was reviewed, what was not, and why).
+ 
+**The table is mandatory.** Never present findings only as prose or grouped by area. Merge
+the results of parallel agents into one table and sort them together.
+ 
+Reference files as markdown links (`[main.py:412](src/backend/main.py#L412)`) so they are
+clickable in the editor.
+ 
+Print the report in the conversation. **Do not save it to a file** (e.g. `docs/`) unless the
+user asks, because it may contain undisclosed vulnerabilities.
+ 
+At the end, offer the next step in one sentence (e.g. fix the findings from most to least
+severe, with a test for each) and **wait for a reply**.
+ 
+## What this skill is not
+ 
+- It is not dynamic testing: it does not scan a live system, fuzz, or run exploits.
+- It is not a replacement for `pip-audit` / `npm audit` or an image scanner; if they are
+  available and the user approves network access, run them, and if not, **explicitly list**
+  dependencies as not reviewed in the coverage section (dependencies are not assessed "from
+  memory", because version numbers alone are not a reliable source).
+- It does not certify that the system is secure. A "no findings" report may only say "I found
+  no exploitable vulnerabilities in the reviewed scope", together with a list of what was
+  reviewed.

@@ -30,7 +30,7 @@ npm run dev -- --host 0.0.0.0
 ```
 
 Vite prints the URL (5173, or the next free port if the Compose stack already
-uses it). `./start_frontend.sh` does the same in one step.
+uses it).
 
 
 After changing frontend or collector code, rebuild the containers:
